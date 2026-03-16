@@ -161,10 +161,6 @@ public class HwDriverShimmerDeviceDetails {
 		    "verisense",
 		};
 
-		public static final String[] SHIMMER3R_COMPOSITE_DEVICE = new String[] { "SHIMMER COMPOSITE DEVICE","STM32 COMPOSITE DEVICE"};
-
-		public static final String[] SHIMMER3R_MSC_DEVICE = new String[] { "SHIMMER MSC","STM32 MSC DEVICE" };
-
 		public static final String[] SHIMMER3R_DFU_DEVICE_BUS_DESCRITION = new String[] { "DFU in HS Mode" };
 
 		public static final class SERVICE_DESCRIPTION {
@@ -202,7 +198,7 @@ public class HwDriverShimmerDeviceDetails {
 	        public static final String VIRTUAL_PORT = "COM0COM";
 	        
 	        public static final String[] SHIMMER_3R = new String[] {
-	        		"VID_0483&PID_52A4"
+	        		"VID_0483&PID_5710" // USBX drivers
 	        };
         }
 
