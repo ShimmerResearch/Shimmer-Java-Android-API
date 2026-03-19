@@ -30,7 +30,7 @@ public class SerialPortCommJssc extends AbstractSerialPortHal implements SerialP
 	public String mComPort = "";
 	private int mBaudToUse = SerialPort.BAUDRATE_115200;
 	private boolean setRtsOnConnect = true;
-	private boolean setDtrOnConnect = false;
+	private boolean setDtrOnConnect = true;
 
 	private transient ShimmerUartListener mShimmerUartListener;
 	private boolean mIsSerialPortReaderStarted = false;
