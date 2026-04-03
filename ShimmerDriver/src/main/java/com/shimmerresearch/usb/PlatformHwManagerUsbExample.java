@@ -26,7 +26,6 @@ public class PlatformHwManagerUsbExample {
 
     	} else if (os.contains("mac")) {
     	    System.out.println("Running on macOS");
-    	    System.out.println("Running on Windows");
     	    mUSBDebugListener = new UsbDebugListenerMacOS(new UsbDockChangeListener() {
                 @Override
                 public void onUsbDeviceConnected() {
