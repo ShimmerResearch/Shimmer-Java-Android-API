@@ -136,5 +136,7 @@ dependencies {
     
     // https://mvnrepository.com/artifact/org.bouncycastle/bcprov-jdk15on
 	implementation("org.bouncycastle:bcprov-jdk15on:1.61")
+ 	implementation 'net.java.dev.jna:jna:5.18.1'
+    implementation 'net.java.dev.jna:jna-platform:5.18.1'
 } 
 
