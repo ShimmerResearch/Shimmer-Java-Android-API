@@ -1,14 +1,13 @@
 package com.shimmerresearch.usb;
 
+import com.shimmerresearch.driverUtilities.UtilShimmer;
+
 public class PlatformHwManagerUsbExample {
 
     private UsbDebugListener mUSBDebugListener;
 
     public void startWindowsUsbListener() {
-    	
-    	String os = System.getProperty("os.name").toLowerCase();
-
-    	if (os.contains("win")) {
+    	if (UtilShimmer.isOsWindows()) {
     	    System.out.println("Running on Windows");
     	    mUSBDebugListener = new UsbDebugListenerWindows(new UsbDockChangeListener() {
                 @Override
@@ -24,7 +23,7 @@ public class PlatformHwManagerUsbExample {
                 }
             });
 
-    	} else if (os.contains("mac")) {
+    	} else if (UtilShimmer.isOsMac()) {
     	    System.out.println("Running on macOS");
     	    mUSBDebugListener = new UsbDebugListenerMacOS(new UsbDockChangeListener() {
                 @Override
@@ -41,7 +40,7 @@ public class PlatformHwManagerUsbExample {
             });
 
     	} else {
-    	    System.out.println("Other OS: " + os);
+    	    System.out.println("Other OS: " + System.getProperty("os.name"));
     	}
     	
     	
