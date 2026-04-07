@@ -1408,5 +1408,7 @@ public class UtilShimmer implements Serializable {
 		return System.getProperty("os.name").toLowerCase().contains("mac");
 	}
 
-
+	public static boolean isOsWindows() {
+		return System.getProperty("os.name").toLowerCase().contains("win");
+	}
 }
