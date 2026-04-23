@@ -14,20 +14,20 @@ public class EepromSensorSettingsDetails implements Serializable {
 	public int radioHwVer = 0;
 	public int baudRate = 0;
 	public BTRADIO_STATE mRadioState = BTRADIO_STATE.BT_CLASSIC_BLE_ENABLED; 
-	public boolean mUsbHighSpeed = true; 
+	public boolean mUsbFullSpeed = true; 
 
 	public enum EXP_BOARD_ARRAY_BYTE_INDEX {
 		RADIO_HW_VER,
 		BAUD_RATE,
 		SENSOR_OPTIONS1,
-		UNUSED_BYTE_INDEX_3,
-		UNUSED_BYTE_INDEX_4,
-		UNUSED_BYTE_INDEX_5,
-		UNUSED_BYTE_INDEX_6,
-		UNUSED_BYTE_INDEX_7,
-		UNUSED_BYTE_INDEX_8,
-		UNUSED_BYTE_INDEX_9,
-		UNUSED_BYTE_INDEX_10,
+		BT_CNT_DISCONNECT_WHILE_STREAMING_LSB, // Used for Shimmer3 RN4678 error tracking
+		BT_CNT_DISCONNECT_WHILE_STREAMING_MSB, // Used for Shimmer3 RN4678 error tracking
+		BT_CNT_UNSOLICITED_REBOOT_LSB, // Used for Shimmer3 RN4678 error tracking
+		BT_CNT_UNSOLICITED_REBOOT_MSB, // Used for Shimmer3 RN4678 error tracking
+		BT_CNT_RTS_LOCKUP_LSB, // Used for Shimmer3 RN4678 error tracking
+		BT_CNT_RTS_LOCKUP_MSB, // Used for Shimmer3 RN4678 error tracking
+		BT_CNT_DATA_RATE_TEST_BLOCKAGE_LSB, // Used for Shimmer3 RN4678 error tracking
+		BT_CNT_DATA_RATE_TEST_BLOCKAGE_MSB, // Used for Shimmer3 RN4678 error tracking
 		UNUSED_BYTE_INDEX_11,
 		UNUSED_BYTE_INDEX_12,
 		UNUSED_BYTE_INDEX_13,
@@ -67,8 +67,8 @@ public class EepromSensorSettingsDetails implements Serializable {
 	}
 	
 	public enum USB_SPEED {
-		HIGH_SPEED("High-Speed", 0x04),
-		FULL_SPEED("Full-Speed", 0x00);
+		FULL_SPEED("Full-Speed", 0x04),
+		HIGH_SPEED("High-Speed", 0x00);
 		
 	    private String text;
 		private int bits;
@@ -116,11 +116,12 @@ public class EepromSensorSettingsDetails implements Serializable {
 	        mRadioState = BTRADIO_STATE.NONE_ENABLED;
 	    }
 
-	    mUsbHighSpeed = (mEepromPageArray[EXP_BOARD_ARRAY_BYTE_INDEX.SENSOR_OPTIONS1.ordinal()] & 0x04) != 0;
+	    mUsbFullSpeed = (mEepromPageArray[EXP_BOARD_ARRAY_BYTE_INDEX.SENSOR_OPTIONS1.ordinal()] & USB_SPEED.FULL_SPEED.getBitValue()) != 0;
 	}
 
 	public String generateDebugString() {
-		return (mRadioState.toString() + ", USB Speed: " + (mUsbHighSpeed == true ? "High Speed" : "Full Speed"));
+		return (mRadioState.toString() + ", USB Speed: " 
+	+ (mUsbFullSpeed == true ? USB_SPEED.FULL_SPEED.toString() : USB_SPEED.HIGH_SPEED.toString()));
 	}
 
 	public void setBtRadioStateFromString(String option) {
@@ -136,10 +137,10 @@ public class EepromSensorSettingsDetails implements Serializable {
 	}
 
 	public void setUsbSpeedStateFromString(String option) {
-		if (option.equals(USB_SPEED.HIGH_SPEED.toString())) {
-			mUsbHighSpeed = true;
-		} else if (option.equals(USB_SPEED.FULL_SPEED.toString())) {
-			mUsbHighSpeed = false;
+		if (option.equals(USB_SPEED.FULL_SPEED.toString())) {
+			mUsbFullSpeed = true;
+		} else if (option.equals(USB_SPEED.HIGH_SPEED.toString())) {
+			mUsbFullSpeed = false;
 		}
 		
 		updateEepromPageArray();
@@ -153,7 +154,7 @@ public class EepromSensorSettingsDetails implements Serializable {
 		mEepromPageArray[EXP_BOARD_ARRAY_BYTE_INDEX.SENSOR_OPTIONS1.ordinal()] |= mRadioState.getBitValue(); // Set the new radio state bits
 
 		mEepromPageArray[EXP_BOARD_ARRAY_BYTE_INDEX.SENSOR_OPTIONS1.ordinal()] &= 0xFB; // Clear the existing USB speed bit (bit 2)
-		mEepromPageArray[EXP_BOARD_ARRAY_BYTE_INDEX.SENSOR_OPTIONS1.ordinal()] |= (mUsbHighSpeed ? USB_SPEED.HIGH_SPEED.getBitValue() : USB_SPEED.FULL_SPEED.getBitValue()); // Set the new USB speed bit
+		mEepromPageArray[EXP_BOARD_ARRAY_BYTE_INDEX.SENSOR_OPTIONS1.ordinal()] |= (mUsbFullSpeed ? USB_SPEED.FULL_SPEED.getBitValue() : USB_SPEED.HIGH_SPEED.getBitValue()); // Set the new USB speed bit
 	}
 
 }
