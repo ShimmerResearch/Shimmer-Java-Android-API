@@ -43,6 +43,7 @@ import com.shimmerresearch.driverUtilities.ChannelDetails;
 import com.shimmerresearch.driverUtilities.ExpansionBoardDetails;
 import com.shimmerresearch.driverUtilities.HwDriverShimmerDeviceDetails;
 import com.shimmerresearch.driverUtilities.ConfigOptionDetailsSensor;
+import com.shimmerresearch.driverUtilities.EepromSensorSettingsDetails;
 import com.shimmerresearch.driverUtilities.SensorDetails;
 import com.shimmerresearch.driverUtilities.SensorGroupingDetails;
 import com.shimmerresearch.driverUtilities.ShimmerBattStatusDetails;
@@ -132,6 +133,7 @@ public abstract class ShimmerDevice extends BasicProcessWithCallBack implements 
 	public ShimmerVerObject mShimmerVerObject = new ShimmerVerObject();
 	//TODO use entry in ShimmerVerObject instead?
 	public ExpansionBoardDetails mExpansionBoardDetails = new ExpansionBoardDetails();
+	public EepromSensorSettingsDetails mEepromSensorSettingsDetails = new EepromSensorSettingsDetails(); 
 	public ShimmerBattStatusDetails mShimmerBattStatusDetails = new ShimmerBattStatusDetails(); 
 	public ShimmerSDCardDetails mShimmerSDCardDetails = new ShimmerSDCardDetails(); 
 
@@ -208,36 +210,7 @@ public abstract class ShimmerDevice extends BasicProcessWithCallBack implements 
 	public transient CommsProtocolRadio mCommsProtocolRadio = null;
 	public BT_STATE mBluetoothRadioState = BT_STATE.DISCONNECTED;
 	public DOCK_STATE mDockState = DOCK_STATE.UNDOCKED;
-	public BTRADIO_STATE mRadioState = BTRADIO_STATE.UNKNOWN; 
 	private boolean mUpdateOnlyWhenStateChanges=false;
-	public static int EXP_BOARD_MEMORY_LOCATION_FOR_BTRADIO_STATE = 2018;
-	public enum BTRADIO_STATE{
-
-		BT_CLASSIC_BLE_ENABLED("BT Classic and BLE Enabled"),
-		BT_CLASSIC_ENABLED("BT Classic Enabled"),
-		BLE_ENABLED("BLE Enabled"),
-		NONE_ENABLED("None Enabled"),
-		UNKNOWN("Unknown");
-//		RECORDING("Recording");
-		
-	    private final String text;
-
-	    /**
-	     * @param text
-	     */
-	    private BTRADIO_STATE(final String text) {
-	        this.text = text;
-	    }
-
-	    /* (non-Javadoc)
-	     * @see java.lang.Enum#toString()
-	     */
-	    @Override
-	    public String toString() {
-	        return text;
-	    }
-	
-	}
 	
 	//TODO:
 	public enum DOCK_STATE{
@@ -2134,7 +2107,15 @@ public abstract class ShimmerDevice extends BasicProcessWithCallBack implements 
 		}
 		return false;
 	}
-	
+
+	public boolean isHWAndFWSupportedUsbControl() {
+		if(isShimmerGen3R() && getFirmwareIdentifier()==ShimmerVerDetails.FW_ID.LOGANDSTREAM
+					&& mShimmerVerObject.compareVersions(HW_ID.SHIMMER_3R, FW_ID.LOGANDSTREAM, 1, 0, 55)){
+			return true;
+		}
+		return false;
+	}
+
 	public boolean isLegacySdLog(){
 		if (getFirmwareIdentifier()==FW_ID.SDLOG && getFirmwareVersionMajor()==0 && getFirmwareVersionMinor()==5){
 			return true;
