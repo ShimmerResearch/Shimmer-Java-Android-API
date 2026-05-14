@@ -14,7 +14,7 @@ public class EepromSensorSettingsDetails implements Serializable {
 	public int radioHwVer = 0;
 	public int baudRate = 0;
 	public BTRADIO_STATE mRadioState = BTRADIO_STATE.BT_CLASSIC_BLE_ENABLED; 
-	public boolean mUsbFullSpeed = true; 
+	public boolean mUsbHighSpeed = true; 
 
 	public enum EXP_BOARD_ARRAY_BYTE_INDEX {
 		RADIO_HW_VER,
@@ -67,8 +67,8 @@ public class EepromSensorSettingsDetails implements Serializable {
 	}
 	
 	public enum USB_SPEED {
-		FULL_SPEED("Full-Speed", 0x04),
-		HIGH_SPEED("High-Speed", 0x00);
+		HIGH_SPEED("High-Speed (480 Mbps)", 0x04),
+		FULL_SPEED("Full-Speed (12 Mbps)", 0x00);
 		
 	    private String text;
 		private int bits;
@@ -116,12 +116,12 @@ public class EepromSensorSettingsDetails implements Serializable {
 	        mRadioState = BTRADIO_STATE.NONE_ENABLED;
 	    }
 
-	    mUsbFullSpeed = (mEepromPageArray[EXP_BOARD_ARRAY_BYTE_INDEX.SENSOR_OPTIONS1.ordinal()] & USB_SPEED.FULL_SPEED.getBitValue()) != 0;
+	    mUsbHighSpeed = (mEepromPageArray[EXP_BOARD_ARRAY_BYTE_INDEX.SENSOR_OPTIONS1.ordinal()] & USB_SPEED.HIGH_SPEED.getBitValue()) != 0;
 	}
 
 	public String generateDebugString() {
 		return (mRadioState.toString() + ", USB Speed: " 
-	+ (mUsbFullSpeed == true ? USB_SPEED.FULL_SPEED.toString() : USB_SPEED.HIGH_SPEED.toString()));
+	+ (mUsbHighSpeed == true ? USB_SPEED.HIGH_SPEED.toString() : USB_SPEED.FULL_SPEED.toString()));
 	}
 
 	public void setBtRadioStateFromString(String option) {
@@ -137,10 +137,10 @@ public class EepromSensorSettingsDetails implements Serializable {
 	}
 
 	public void setUsbSpeedStateFromString(String option) {
-		if (option.equals(USB_SPEED.FULL_SPEED.toString())) {
-			mUsbFullSpeed = true;
-		} else if (option.equals(USB_SPEED.HIGH_SPEED.toString())) {
-			mUsbFullSpeed = false;
+		if (option.equals(USB_SPEED.HIGH_SPEED.toString())) {
+			mUsbHighSpeed = true;
+		} else if (option.equals(USB_SPEED.FULL_SPEED.toString())) {
+			mUsbHighSpeed = false;
 		}
 		
 		updateEepromPageArray();
@@ -154,7 +154,7 @@ public class EepromSensorSettingsDetails implements Serializable {
 		mEepromPageArray[EXP_BOARD_ARRAY_BYTE_INDEX.SENSOR_OPTIONS1.ordinal()] |= mRadioState.getBitValue(); // Set the new radio state bits
 
 		mEepromPageArray[EXP_BOARD_ARRAY_BYTE_INDEX.SENSOR_OPTIONS1.ordinal()] &= 0xFB; // Clear the existing USB speed bit (bit 2)
-		mEepromPageArray[EXP_BOARD_ARRAY_BYTE_INDEX.SENSOR_OPTIONS1.ordinal()] |= (mUsbFullSpeed ? USB_SPEED.FULL_SPEED.getBitValue() : USB_SPEED.HIGH_SPEED.getBitValue()); // Set the new USB speed bit
+		mEepromPageArray[EXP_BOARD_ARRAY_BYTE_INDEX.SENSOR_OPTIONS1.ordinal()] |= (mUsbHighSpeed ? USB_SPEED.HIGH_SPEED.getBitValue() : USB_SPEED.FULL_SPEED.getBitValue()); // Set the new USB speed bit
 	}
 
 }
