@@ -121,7 +121,7 @@ public class EepromSensorSettingsDetails implements Serializable {
 
 	public String generateDebugString() {
 		return (mRadioState.toString() + ", USB Speed: " 
-	+ (mUsbHighSpeed == true ? USB_SPEED.HIGH_SPEED.toString() : USB_SPEED.FULL_SPEED.toString()));
+	+ (mUsbHighSpeed ? USB_SPEED.HIGH_SPEED.toString() : USB_SPEED.FULL_SPEED.toString()));
 	}
 
 	public void setBtRadioStateFromString(String option) {
