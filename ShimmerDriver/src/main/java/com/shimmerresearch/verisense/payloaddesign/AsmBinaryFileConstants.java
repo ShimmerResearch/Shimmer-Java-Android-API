@@ -39,6 +39,9 @@ public class AsmBinaryFileConstants {
 		public static final int PAYLOAD_CONFIG11 = 22;
 		public static final int PAYLOAD_CONFIG12 = 23;
 		public static final int PAYLOAD_CONFIG13 = 24;
+		// Second-generation (payload design v13) only: GEN_CFG_3 at abs byte 29 (rel 25)
+		// carries the mag/light/skin-temp/algo-hub enables + LED mode.
+		public static final int GEN_CFG_3 = 25;
 	}
 	
 	public class BYTE_COUNT {

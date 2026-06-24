@@ -65,6 +65,7 @@ import com.shimmerresearch.verisense.sensors.SensorBattVoltageVerisense;
 import com.shimmerresearch.verisense.sensors.SensorGSRVerisense;
 import com.shimmerresearch.verisense.sensors.SensorLIS2DW12;
 import com.shimmerresearch.verisense.sensors.SensorLSM6DS3;
+import com.shimmerresearch.verisense.sensors.SensorLSM6DSV;
 import com.shimmerresearch.verisense.sensors.SensorMAX86150;
 import com.shimmerresearch.verisense.sensors.SensorMAX86916;
 import com.shimmerresearch.verisense.sensors.SensorMAX86XXX;
@@ -236,6 +237,22 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 		public static final ShimmerVerObject CCF21_010_2 = new ShimmerVerObject(FW_ID.UNKNOWN, 1, 2, 87);
 		/** GSR support with ADC sampling rate byte added to header */
 		public static final ShimmerVerObject CCF21_010_3 = new ShimmerVerObject(FW_ID.UNKNOWN, 1, 2, 88);
+		/**
+		 * Second-generation hardware support (SR68-9/10, SR61-5/6). The firmware
+		 * refers to this as "payload design v9": it writes a 32-byte config header
+		 * (bytes 4..35, vs 25 bytes / bytes 4..28 previously; bytes 34..35 are the
+		 * calibration-blob CRC) and introduces the
+		 * LSM6DSV/ambient-light/algorithm-hub/skin-temperature data blocks.
+		 * <p>
+		 * In this driver's own (separate) payload-design numbering this is the next
+		 * step after V12 ({@link #CCF21_010_3}), exposed as
+		 * {@link VerisenseDevice#isPayloadDesignV13orAbove()}. The two "v9" numbers
+		 * are NOT the same axis - see that method's Javadoc.
+		 * <p>
+		 * Confirmed against a real SR68-9 device: it reports FW v2.00.004 (the doc's
+		 * "1.04.024" is stale). The 36-byte total header = 4 (index+length) + 32 config.
+		 */
+		public static final ShimmerVerObject CCF_GEN2 = new ShimmerVerObject(FW_ID.UNKNOWN, 2, 0, 4);
 	}
 
 	public static class FW_SPECIAL_VERSIONS {
@@ -558,6 +575,16 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 			ppgRecordingIntervalMinutes = (int) AbstractPayload.parseByteArrayAtIndex(configBytes, OP_CONFIG_BYTE_INDEX.PPG_REC_INT_MINS_LSB, CHANNEL_DATA_TYPE.UINT16);
 		}
 
+		if(commType==COMMUNICATION_TYPE.SD && isPayloadDesignV13orAbove()) {
+			// Second-generation: ACCEL2/GYRO enable bits (PAYLOAD_CONFIG0 bits 6/5) map to the
+			// LSM6DSV (not LSM6DS3); LIS2MDL mag enable is in GEN_CFG_3 (abs byte 29) bit 2.
+			enabledSensors = 0;
+			int gen2Cfg0 = configBytes[PAYLOAD_CONFIG_BYTE_INDEX.PAYLOAD_CONFIG0] & 0xFF;
+			if((gen2Cfg0 & (1<<6))!=0) { enabledSensors |= Configuration.Verisense.SensorBitmap.LSM6DSV_ACCEL; }
+			if((gen2Cfg0 & (1<<5))!=0) { enabledSensors |= Configuration.Verisense.SensorBitmap.LSM6DSV_GYRO; }
+			int gen2GenCfg3 = configBytes[PAYLOAD_CONFIG_BYTE_INDEX.GEN_CFG_3] & 0xFF;
+			if((gen2GenCfg3 & (1<<2))!=0) { enabledSensors |= Configuration.Verisense.SensorBitmap.LSM6DSV_MAG; }
+		}
 		setEnabledAndDerivedSensorsAndUpdateMaps(enabledSensors, mDerivedSensors, commType);
 		
 		for(AbstractSensor abstractSensor:mMapOfSensorClasses.values()) {
@@ -681,6 +708,44 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 	}
 
 	/**
+	 * Second-generation payload design (firmware "v9" / 30-byte config header).
+	 * @see PayloadContentsDetails#isPayloadDesignV13orAbove(ShimmerVerObject)
+	 */
+	public boolean isPayloadDesignV13orAbove() {
+		return PayloadContentsDetails.isPayloadDesignV13orAbove(getShimmerVerObject());
+	}
+
+	/**
+	 * Whether a given Verisense hardware revision is second-generation
+	 * (SR68-9/10, SR61-5/6). Mirrors the TypeScript SDK
+	 * (shimmer-web-sdk: hardwareModels.ts {@code isVerisenseSecondGenerationHardware})
+	 * and the firmware Model IC matrix
+	 * (verisense-firmware/docs/VERISENSE_MODEL_IC_MATRIX.md):
+	 * <ul>
+	 *   <li>SR61, minor &ge; 5</li>
+	 *   <li>SR68, minor &ge; 9</li>
+	 *   <li>any future major revision above SR68 (68)</li>
+	 * </ul>
+	 * Gen-2 is distinguished by hardware major/minor revision, NOT by a separate
+	 * {@code HW_ID_SR_CODES} value (SR68-9/10 is still the Pulse+ major id 68).
+	 *
+	 * @param hwMajor REV_HW_MAJOR from the payload header / production config
+	 * @param hwMinor REV_HW_MINOR from the payload header / production config
+	 */
+	public static boolean isSecondGenerationHardware(int hwMajor, int hwMinor) {
+		if(hwMajor > HW_ID.VERISENSE_PULSE_PLUS) {
+			return true;
+		}
+		if(hwMajor == HW_ID.VERISENSE_IMU && hwMinor >= 5) {
+			return true;
+		}
+		if(hwMajor == HW_ID.VERISENSE_PULSE_PLUS && hwMinor >= 9) {
+			return true;
+		}
+		return false;
+	}
+
+	/**
 	 * @return
 	 * @see PayloadContentsDetails.isCsvHeaderDesignAzMarkingPoint()
 	 */
@@ -704,6 +769,8 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 			return getSamplingRateForSensor(SENSORS.LIS2DW12);
 		} else if(isEitherLsm6ds3ChannelEnabled()) {
 			return getSamplingRateForSensor(SENSORS.LSM6DS3);
+		} else if(isAnyLsm6dsvChannelEnabled()) {
+			return getSamplingRateForSensor(SENSORS.LSM6DSV);
 		} else if(isHwPpgAndAnyMaxChEnabled()) {
 			return getSamplingRateForSensor(getPpgSensorClassKey());
 		} else if(isSensorEnabled(Configuration.Verisense.SENSOR_ID.VBATT)) {
@@ -942,6 +1009,36 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 				sb.append("16-bit");
 				sb.append("}");
 			}
+		} else if((sensorClassKey==AbstractSensor.SENSORS.LSM6DSV)
+				&& isAnyLsm6dsvChannelEnabled()) {
+			// Second-generation IMU (LSM6DSV accel/gyro + LIS2MDL mag). Gen-2 always uses the
+			// new (non-AZ-marking-point) CSV header design.
+			SensorLSM6DSV sensorLsm6dsv = getSensorLSM6DSV();
+
+			sb.append(generateCalcSamplingRateConfigStr(sensorClassKey, sensorLsm6dsv.getRateFreq(), calculatedSamplingRate));
+
+			sb.append("Accel ");
+			sb.append(SENSOR_CONFIG_STRINGS.RANGE);
+			sb.append(isSensorEnabled(Configuration.Verisense.SENSOR_ID.LSM6DSV_ACCEL) ? sensorLsm6dsv.getAccelRangeString() : "Off");
+
+			sb.append("; Gyro ");
+			sb.append(SENSOR_CONFIG_STRINGS.RANGE);
+			sb.append(isSensorEnabled(Configuration.Verisense.SENSOR_ID.LSM6DSV_GYRO) ? sensorLsm6dsv.getGyroRangeString() : "Off");
+
+			sb.append("; Mag ");
+			sb.append(SENSOR_CONFIG_STRINGS.RATE);
+			if(isSensorEnabled(Configuration.Verisense.SENSOR_ID.LSM6DSV_MAG)) {
+				sb.append(sensorLsm6dsv.getMagRateFreq());
+				sb.append(" ");
+				sb.append(CHANNEL_UNITS.FREQUENCY);
+			} else {
+				sb.append("Off");
+			}
+
+			sb.append("; ");
+			sb.append(SENSOR_CONFIG_STRINGS.RESOLUTION);
+			sb.append("16-bit");
+			sb.append("}");
 		} else if(LIST_OF_PPG_SENSORS.contains(sensorClassKey) && isHwPpgAndAnyMaxChEnabled()) {
 			AbstractSensor abstractSensor = getAbstractSensorPpg();
 			if(abstractSensor!=null) {
@@ -1152,6 +1249,12 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 	public boolean isEitherLsm6ds3ChannelEnabled() {
 		return isSensorEnabled(Verisense.SENSOR_ID.LSM6DS3_ACCEL) || isSensorEnabled(Verisense.SENSOR_ID.LSM6DS3_GYRO);
 	}
+
+	public boolean isAnyLsm6dsvChannelEnabled() {
+		return isSensorEnabled(Verisense.SENSOR_ID.LSM6DSV_ACCEL)
+				|| isSensorEnabled(Verisense.SENSOR_ID.LSM6DSV_GYRO)
+				|| isSensorEnabled(Verisense.SENSOR_ID.LSM6DSV_MAG);
+	}
 	
 	public boolean doesHwSupportMax86xxx() {
 		return doesHwSupportMax86xxx(getHardwareVersion());
@@ -1232,7 +1335,10 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 			addSensorClass(SENSORS.Battery, new SensorBattVoltageVerisense(this));
 		}
 
-		if(doesHwSupportLsm6ds3()) {
+		if(isPayloadDesignV13orAbove()) {
+			// Second-generation IMU (LSM6DSV accel/gyro + LIS2MDL mag via sensor hub)
+			addSensorClass(SENSORS.LSM6DSV, new SensorLSM6DSV(this));
+		} else if(doesHwSupportLsm6ds3()) {
 			addSensorClass(SENSORS.LSM6DS3, new SensorLSM6DS3(this));
 		}
 		
@@ -1441,6 +1547,9 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 				break;
 			case GYRO_ACCEL2:
 				listOfSensorIds.add(SENSORS.LSM6DS3);
+				break;
+			case LSM6DSV:
+				listOfSensorIds.add(SENSORS.LSM6DSV);
 				break;
 			case PPG:
 				SENSORS sensorClassKey = getPpgSensorClassKey();
@@ -1755,7 +1864,16 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 					rwcEndTimeTicks, isPayloadDesignV11orAbove());
 
 			SENSORS firstSensorClasskey = dataBlockDetails.listOfSensorClassKeys.get(0);
-			int qtySensorDataBytesInDatablock = calculateFifoBlockSize(firstSensorClasskey);
+			int qtySensorDataBytesInDatablock;
+			int lsm6dsvNumEntries = 0;
+			if(datablockSensorId == DATABLOCK_SENSOR_ID.LSM6DSV) {
+				// Variable-length tagged FIFO: [2-byte NUM_SAMPLES][N x 7-byte entries].
+				int numSamplesIndex = dataBlockStartByteIndexInPayload + BYTE_COUNT.PAYLOAD_CONTENTS_GEN8_SENSOR_ID + BYTE_COUNT.PAYLOAD_CONTENTS_RTC_BYTES_TICKS;
+				lsm6dsvNumEntries = (byteBuffer[numSamplesIndex] & 0xFF) | ((byteBuffer[numSamplesIndex+1] & 0xFF) << 8);
+				qtySensorDataBytesInDatablock = 2 + lsm6dsvNumEntries * 7;
+			} else {
+				qtySensorDataBytesInDatablock = calculateFifoBlockSize(firstSensorClasskey);
+			}
 			int dataPacketSize = 0;
 			for(SENSORS sensorClassKey:dataBlockDetails.getListOfSensorClassKeys()) {
 				dataPacketSize += getExpectedDataPacketSize(sensorClassKey);
@@ -1764,6 +1882,12 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 			double samplingRate = getSamplingRateForSensor(firstSensorClasskey);
 			
 			dataBlockDetails.setMetadata(qtySensorDataBytesInDatablock, dataPacketSize, samplingRate);
+			if(datablockSensorId == DATABLOCK_SENSOR_ID.LSM6DSV) {
+				// sampleCount drives per-sample timing + ojc array sizing; use the aligned
+				// accel (or gyro) stream count, not the raw tagged-entry count.
+				int numSamplesIndex = dataBlockStartByteIndexInPayload + BYTE_COUNT.PAYLOAD_CONTENTS_GEN8_SENSOR_ID + BYTE_COUNT.PAYLOAD_CONTENTS_RTC_BYTES_TICKS;
+				dataBlockDetails.setSampleCount(countLsm6dsvAlignedSamples(byteBuffer, numSamplesIndex + 2, lsm6dsvNumEntries));
+			}
 		} else {
 			IOException e = new IOException("Error parsing Data Block. SensorID=" + UtilShimmer.intToHexStringFormatted(sensorId, 1, false) + " not supported. "
 					+ "File byte index " + UtilShimmer.intToHexStringFormatted(dataBlockStartByteIndexInFile, 4, true)
@@ -1802,20 +1926,147 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 	}
 
 	public void parseDataBlockData(DataBlockDetails dataBlockDetails, byte[] byteBuffer, int currentByteIndex, COMMUNICATION_TYPE commType) {
+		if(dataBlockDetails.datablockSensorId == DATABLOCK_SENSOR_ID.LSM6DSV) {
+			parseDataBlockDataLsm6dsv(dataBlockDetails, byteBuffer, currentByteIndex, commType);
+			return;
+		}
+
 		double timeMsCurrentSample = dataBlockDetails.getStartTimeRwcMs();
-		
+
 		for(int y=0;y<dataBlockDetails.getSampleCount();y++) {
 			byte[] byteBuf = new byte[dataBlockDetails.dataPacketSize];
 			System.arraycopy(byteBuffer, currentByteIndex, byteBuf, 0, byteBuf.length);
-			
+
 			ObjectCluster ojcCurrent = buildMsgForSensorList(byteBuf, commType, dataBlockDetails.listOfSensorClassKeys, timeMsCurrentSample);
 			dataHandler(ojcCurrent);
 			dataBlockDetails.setOjcArrayAtIndex(y, ojcCurrent);
-			
+
 			timeMsCurrentSample += (dataBlockDetails.getTimestampDiffInS() * 1000);
 
 			currentByteIndex += dataBlockDetails.dataPacketSize;
 		}
+	}
+
+	/** LSM6DSV tag values within the FIFO TAG_CNT byte (bits 7:3). */
+	private static final int LSM6DSV_TAG_GYRO = 0x01;
+	private static final int LSM6DSV_TAG_ACCEL = 0x02;
+	private static final int LSM6DSV_TAG_MAG = 0x0E;
+
+	/**
+	 * Count the aligned (directly-sampled) accel or gyro samples in an LSM6DSV
+	 * tagged-FIFO block - used to drive per-sample timing. Accel and gyro share the
+	 * same ODR and are interleaved 1:1; timestamp (tag 0x04) and other entries are
+	 * ignored.
+	 */
+	private int countLsm6dsvAlignedSamples(byte[] byteBuffer, int entriesStart, int numEntries) {
+		boolean accelEn = isSensorEnabled(Configuration.Verisense.SENSOR_ID.LSM6DSV_ACCEL);
+		int refTag = accelEn ? LSM6DSV_TAG_ACCEL : LSM6DSV_TAG_GYRO;
+		int count = 0;
+		for(int k=0;k<numEntries;k++) {
+			int tag = ((byteBuffer[entriesStart + k*7] & 0xFF) >> 3) & 0x1F;
+			if(tag==refTag) { count++; }
+		}
+		return count;
+	}
+
+	/**
+	 * Dedicated parser for the LSM6DSV variable-length tagged FIFO. The block is
+	 * {@code [2-byte NUM_SAMPLES][N x 7-byte entries]} where each entry is
+	 * {@code [TAG_CNT][X][Y][Z]} (3 x int16 LE) and the 5-bit tag (TAG_CNT bits 7:3)
+	 * distinguishes accel (0x02), gyro (0x01) and mag (0x0E) streams; timestamp
+	 * entries (0x04) are skipped.
+	 * <p>
+	 * Accel and gyro share the LSM6DSV ODR and are interleaved 1:1, so they are
+	 * emitted as aligned samples through {@link #buildMsgForSensorList}. (Mag is read
+	 * via the sensor hub at a different rate; full per-stream mag timestamping is TODO
+	 * - mag bytes are currently left zero so accel/gyro stay byte-aligned.)
+	 */
+	private void parseDataBlockDataLsm6dsv(DataBlockDetails dataBlockDetails, byte[] byteBuffer, int currentByteIndex, COMMUNICATION_TYPE commType) {
+		int numEntries = (byteBuffer[currentByteIndex] & 0xFF) | ((byteBuffer[currentByteIndex+1] & 0xFF) << 8);
+		int entriesStart = currentByteIndex + 2;
+
+		List<byte[]> accelSamples = new ArrayList<byte[]>();
+		List<byte[]> gyroSamples = new ArrayList<byte[]>();
+		List<byte[]> magSamples = new ArrayList<byte[]>();
+		for(int k=0;k<numEntries;k++) {
+			int eo = entriesStart + k*7;
+			int tag = ((byteBuffer[eo] & 0xFF) >> 3) & 0x1F;
+			if(tag==LSM6DSV_TAG_ACCEL || tag==LSM6DSV_TAG_GYRO || tag==LSM6DSV_TAG_MAG) {
+				byte[] xyz = new byte[6];
+				System.arraycopy(byteBuffer, eo+1, xyz, 0, 6);
+				if(tag==LSM6DSV_TAG_ACCEL) { accelSamples.add(xyz); }
+				else if(tag==LSM6DSV_TAG_GYRO) { gyroSamples.add(xyz); }
+				else { magSamples.add(xyz); }
+			}
+			// tag 0x04 (timestamp) intentionally skipped
+		}
+
+		boolean accelEn = isSensorEnabled(Configuration.Verisense.SENSOR_ID.LSM6DSV_ACCEL);
+		boolean gyroEn = isSensorEnabled(Configuration.Verisense.SENSOR_ID.LSM6DSV_GYRO);
+		boolean magEn = isSensorEnabled(Configuration.Verisense.SENSOR_ID.LSM6DSV_MAG);
+
+		int alignedCount = accelEn ? accelSamples.size() : (gyroEn ? gyroSamples.size() : 0);
+		int magCount = magEn ? magSamples.size() : 0;
+		dataBlockDetails.setupOjcArray(alignedCount + magCount);
+
+		// SensorDetails for per-stream enable toggling. Accel + gyro are synchronous (same
+		// ODR, 1:1 interleaved) so they share one OJC per timestamp. Mag is read via the
+		// LSM6DSV sensor hub at its own (lower) cadence, so it is emitted as its own OJC
+		// stream - the CSV writer keeps streams separate by per-OJC channel filtering, but
+		// we must NOT let the accel/gyro OJCs carry mag (toggle mag off for pass 1) nor the
+		// mag OJCs carry accel/gyro (toggle them off for pass 2).
+		AbstractSensor sensorClass = getSensorClass(SENSORS.LSM6DSV);
+		SensorDetails accelDet = (sensorClass!=null)? sensorClass.mSensorMap.get(Configuration.Verisense.SENSOR_ID.LSM6DSV_ACCEL) : null;
+		SensorDetails gyroDet = (sensorClass!=null)? sensorClass.mSensorMap.get(Configuration.Verisense.SENSOR_ID.LSM6DSV_GYRO) : null;
+		SensorDetails magDet = (sensorClass!=null)? sensorClass.mSensorMap.get(Configuration.Verisense.SENSOR_ID.LSM6DSV_MAG) : null;
+		boolean accelOrig = accelDet!=null && accelDet.isEnabled();
+		boolean gyroOrig = gyroDet!=null && gyroDet.isEnabled();
+		boolean magOrig = magDet!=null && magDet.isEnabled();
+
+		int ojcIndex = 0;
+		double startTimeMs = dataBlockDetails.getStartTimeRwcMs();
+		double alignedDiffMs = dataBlockDetails.getTimestampDiffInS() * 1000;
+
+		// Pass 1: aligned accel/gyro (mag disabled so these OJCs carry no mag channels)
+		if(magDet!=null) { magDet.setIsEnabled(false); }
+		int alignedPacketSize = getExpectedDataPacketSize(SENSORS.LSM6DSV);
+		double timeMsCurrentSample = startTimeMs;
+		for(int i=0;i<alignedCount;i++) {
+			byte[] byteBuf = new byte[alignedPacketSize];
+			int offset = 0;
+			if(accelEn && i<accelSamples.size()) { System.arraycopy(accelSamples.get(i), 0, byteBuf, offset, 6); }
+			if(accelEn) { offset += 6; }
+			if(gyroEn && i<gyroSamples.size()) { System.arraycopy(gyroSamples.get(i), 0, byteBuf, offset, 6); }
+
+			ObjectCluster ojcCurrent = buildMsgForSensorList(byteBuf, commType, dataBlockDetails.listOfSensorClassKeys, timeMsCurrentSample);
+			dataHandler(ojcCurrent);
+			dataBlockDetails.setOjcArrayAtIndex(ojcIndex++, ojcCurrent);
+			timeMsCurrentSample += alignedDiffMs;
+		}
+
+		// Pass 2: mag stream (only mag enabled), spread evenly across the same block duration
+		if(magCount>0) {
+			if(accelDet!=null) { accelDet.setIsEnabled(false); }
+			if(gyroDet!=null) { gyroDet.setIsEnabled(false); }
+			if(magDet!=null) { magDet.setIsEnabled(true); }
+			int magPacketSize = getExpectedDataPacketSize(SENSORS.LSM6DSV);
+			double blockDurationMs = alignedDiffMs * alignedCount;
+			double magDiffMs = (blockDurationMs>0)? blockDurationMs/magCount : 0;
+			double magTimeMs = startTimeMs;
+			for(int i=0;i<magCount;i++) {
+				byte[] byteBuf = new byte[magPacketSize];
+				System.arraycopy(magSamples.get(i), 0, byteBuf, 0, 6);
+				ObjectCluster ojcCurrent = buildMsgForSensorList(byteBuf, commType, dataBlockDetails.listOfSensorClassKeys, magTimeMs);
+				dataHandler(ojcCurrent);
+				dataBlockDetails.setOjcArrayAtIndex(ojcIndex++, ojcCurrent);
+				magTimeMs += magDiffMs;
+			}
+		}
+
+		// restore original per-stream enabled states
+		if(accelDet!=null) { accelDet.setIsEnabled(accelOrig); }
+		if(gyroDet!=null) { gyroDet.setIsEnabled(gyroOrig); }
+		if(magDet!=null) { magDet.setIsEnabled(magOrig); }
 	}
 
 	@Override
@@ -1971,6 +2222,14 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 		AbstractSensor abstractSensor = getSensorClass(SENSORS.LSM6DS3);
 		if(abstractSensor!=null && abstractSensor instanceof SensorLSM6DS3) {
 			return (SensorLSM6DS3) abstractSensor;
+		}
+		return null;
+	}
+
+	public SensorLSM6DSV getSensorLSM6DSV() {
+		AbstractSensor abstractSensor = getSensorClass(SENSORS.LSM6DSV);
+		if(abstractSensor!=null && abstractSensor instanceof SensorLSM6DSV) {
+			return (SensorLSM6DSV) abstractSensor;
 		}
 		return null;
 	}

@@ -2639,6 +2639,14 @@ public class Configuration {
 			public static final int MAX86150_ECG			= 1 << (3 + (8*1));
 			public static final int MAX86916_PPG_BLUE		= 1 << (2 + (8*1));
 			public static final int VBATT					= 1 << (1 + (8*1));
+
+			// Second-generation hardware (SR68-9/10, SR61-5/6): LSM6DSV accel/gyro +
+			// LIS2MDL mag. Distinct host-internal bits; accel/gyro enables are derived
+			// from the payload header ACCEL2/GYRO bits and mag from GEN_CFG_3 (see
+			// VerisenseDevice.configBytesParse second-generation branch).
+			public static final int LSM6DSV_ACCEL			= 1 << (4 + (8*0));
+			public static final int LSM6DSV_GYRO			= 1 << (3 + (8*0));
+			public static final int LSM6DSV_MAG				= 1 << (2 + (8*0));
 		}
 		
 		public class DerivedSensorsBitMask {
@@ -2667,6 +2675,10 @@ public class Configuration {
 			public static final int MAX86916_PPG_BLUE 		= 2012;
 			public static final int VBATT			 		= 2013;
 			public static final int GSR				 		= 2014;
+			// Second-generation hardware (SR68-9/10, SR61-5/6)
+			public static final int LSM6DSV_ACCEL			= 2015;
+			public static final int LSM6DSV_GYRO			= 2016;
+			public static final int LSM6DSV_MAG				= 2017;
 		}
 		
 		public enum LABEL_SENSOR_TILE{
@@ -2711,6 +2723,12 @@ public class Configuration {
 			
 			public static final List<ShimmerVerObject> listOfCompatibleVersionInfoGsr = Arrays.asList(
 					svoVerisenseGsrPlus, svoVerisensePulsePlus);
+
+			// Second-generation IMU: LSM6DSV (accel/gyro) + LIS2MDL (mag), SR68-9/10.
+			// TODO refine to HW minor >= 9 once compat supports minor gating; matching all
+			// Pulse+ is acceptable for now as gen-1 Pulse+ carries no LSM6DSV.
+			public static final List<ShimmerVerObject> listOfCompatibleVersionInfoLSM6DSV = Arrays.asList(
+					svoVerisensePulsePlus);
 		}
 
 	}

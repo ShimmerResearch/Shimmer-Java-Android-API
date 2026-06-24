@@ -24,14 +24,24 @@ public class DataBlockDetails implements Serializable {
 	
 	private static final long serialVersionUID = -3695586952435188960L;
 	
-	/** This is the ENUM of the DataBlock ID as set in FW */
+	/** This is the ENUM of the DataBlock ID as set in FW. The ordinal of each
+	 * entry MUST match the firmware {@code SENSOR_IDS} enum
+	 * (verisense-firmware: Includes/ASM_common_source/SensorDataManagement/recordBuffers.h)
+	 * because the parser maps the data-block sensor-id byte straight to
+	 * {@code DATABLOCK_SENSOR_ID.values()[sensorId]}. */
 	public enum DATABLOCK_SENSOR_ID {
-		NONE,
-		ADC,
-		ACCEL_1,
-		GYRO_ACCEL2,
-		PPG,
-		BIOZ
+		NONE,			// 0
+		ADC,			// 1
+		ACCEL_1,		// 2  - LIS2DW12
+		GYRO_ACCEL2,	// 3  - LSM6DS3
+		PPG,			// 4  - MAX86150/MAX86916 (gen1) or MAX86176 via the MAX32674 hub (gen2)
+		BIOZ,			// 5  - MAX30001/2 (reserved, not currently emitted)
+		// --- Second-generation hardware (SR68-9/10, SR61-5/6) ---
+		LSM6DSV,		// 6  - LSM6DSV accel/gyro + LIS2MDL mag (via the LSM6DSV sensor hub)
+		LIGHT,			// 7  - VD6283TX45 ambient light
+		ALGO_HUB,		// 8  - MAX32674 algorithm hub (HR/SpO2/activity/skin-contact)
+		SKIN_TEMP,		// 9  - MLX90632 skin temperature
+		FLICKER			// 10 - VD6283TX45 flicker (RESERVED, not yet emitted by firmware)
 	}
 
 	public DATABLOCK_SENSOR_ID datablockSensorId;

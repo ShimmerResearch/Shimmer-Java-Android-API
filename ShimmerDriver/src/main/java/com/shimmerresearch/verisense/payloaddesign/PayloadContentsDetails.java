@@ -203,6 +203,13 @@ public abstract class PayloadContentsDetails implements Serializable {
 		if(isPayloadDesignV12orAbove(svo)) {
 			extendedPayloadConfigSize += 1;
 		}
+		if(isPayloadDesignV13orAbove(svo)) {
+			// Second-generation (FW v2.00.004+): config header grows from 25 to 32 bytes
+			// (abs bytes 4..35). +7 = LSM6DSV already occupies the gen-1 gyro/accel2 slots;
+			// the extra 7 are GEN_CFG_3 (29), light gain/exposure (30,31), skin-temp (32),
+			// algo report (33), and the 2-byte calibration CRC (34,35).
+			extendedPayloadConfigSize += 7;
+		}
 		return extendedPayloadConfigSize;
 	}
 
@@ -253,6 +260,19 @@ public abstract class PayloadContentsDetails implements Serializable {
 
 	public static boolean isPayloadDesignV12orAbove(ShimmerVerObject svo) {
 		return VerisenseDevice.compareFwVersions(svo, VerisenseDevice.FW_CHANGES.CCF21_010_3);
+	}
+
+	/**
+	 * Second-generation hardware payload design (SR68-9/10, SR61-5/6). The
+	 * firmware calls this its "payload design v9" (30-byte config header, bytes
+	 * 4..33). It is NOT the same as {@link #isPayloadDesignV9orAbove(ShimmerVerObject)}
+	 * above, which is this driver's own internal sequence (FW v1.02.074). Gen-2
+	 * firmware (v1.04.024+) is the next step after V12 in this driver's numbering.
+	 *
+	 * @see VerisenseDevice.FW_CHANGES#CCF_GEN2
+	 */
+	public static boolean isPayloadDesignV13orAbove(ShimmerVerObject svo) {
+		return VerisenseDevice.compareFwVersions(svo, VerisenseDevice.FW_CHANGES.CCF_GEN2);
 	}
 
 	/**
