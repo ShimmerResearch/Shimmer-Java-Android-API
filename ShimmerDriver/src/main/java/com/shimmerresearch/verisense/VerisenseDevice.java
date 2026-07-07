@@ -711,7 +711,8 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 	}
 
 	/**
-	 * Second-generation payload design (firmware "v9" / 30-byte config header).
+	 * Second-generation payload design (firmware "v9" / 32-byte config header,
+	 * bytes 4..35, of which bytes 34..35 are the calibration-blob CRC).
 	 * @see PayloadContentsDetails#isPayloadDesignV13orAbove(ShimmerVerObject)
 	 */
 	public boolean isPayloadDesignV13orAbove() {
@@ -1956,14 +1957,24 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 	private static final int LSM6DSV_TAG_MAG = 0x0E;
 
 	/**
-	 * Count the aligned (directly-sampled) accel or gyro samples in an LSM6DSV
-	 * tagged-FIFO block - used to drive per-sample timing. Accel and gyro share the
-	 * same ODR and are interleaved 1:1; timestamp (tag 0x04) and other entries are
-	 * ignored.
+	 * Count the reference-stream samples in an LSM6DSV tagged-FIFO block - used to
+	 * drive per-sample timing. Accel and gyro share the same ODR and are interleaved
+	 * 1:1 so either can act as the reference; if neither is enabled (a mag-only
+	 * enable configuration - not currently producible by the firmware as the sensor
+	 * hub needs accel/gyro running, but expressible in the header) the mag stream is
+	 * counted instead. Timestamp (tag 0x04) and other entries are ignored.
 	 */
 	private int countLsm6dsvAlignedSamples(byte[] byteBuffer, int entriesStart, int numEntries) {
-		boolean accelEn = isSensorEnabled(Configuration.Verisense.SENSOR_ID.LSM6DSV_ACCEL);
-		int refTag = accelEn ? LSM6DSV_TAG_ACCEL : LSM6DSV_TAG_GYRO;
+		int refTag;
+		if(isSensorEnabled(Configuration.Verisense.SENSOR_ID.LSM6DSV_ACCEL)) {
+			refTag = LSM6DSV_TAG_ACCEL;
+		} else if(isSensorEnabled(Configuration.Verisense.SENSOR_ID.LSM6DSV_GYRO)) {
+			refTag = LSM6DSV_TAG_GYRO;
+		} else if(isSensorEnabled(Configuration.Verisense.SENSOR_ID.LSM6DSV_MAG)) {
+			refTag = LSM6DSV_TAG_MAG;
+		} else {
+			return 0;
+		}
 		int count = 0;
 		for(int k=0;k<numEntries;k++) {
 			int tag = ((byteBuffer[entriesStart + k*7] & 0xFF) >> 3) & 0x1F;
@@ -2030,46 +2041,62 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 		double startTimeMs = dataBlockDetails.getStartTimeRwcMs();
 		double alignedDiffMs = dataBlockDetails.getTimestampDiffInS() * 1000;
 
-		// Pass 1: aligned accel/gyro (mag disabled so these OJCs carry no mag channels)
-		if(magDet!=null) { magDet.setIsEnabled(false); }
-		int alignedPacketSize = getExpectedDataPacketSize(SENSORS.LSM6DSV);
-		double timeMsCurrentSample = startTimeMs;
-		for(int i=0;i<alignedCount;i++) {
-			byte[] byteBuf = new byte[alignedPacketSize];
-			int offset = 0;
-			if(accelEn && i<accelSamples.size()) { System.arraycopy(accelSamples.get(i), 0, byteBuf, offset, 6); }
-			if(accelEn) { offset += 6; }
-			if(gyroEn && i<gyroSamples.size()) { System.arraycopy(gyroSamples.get(i), 0, byteBuf, offset, 6); }
+		// Guarantee the per-stream enabled states are restored even if parsing throws
+		// mid-pass - otherwise the device would be left with corrupted enable state for
+		// the remainder of the file.
+		try {
+			// Pass 1: aligned accel/gyro (mag disabled so these OJCs carry no mag channels)
+			if(alignedCount>0) {
+				if(magDet!=null) { magDet.setIsEnabled(false); }
+				int alignedPacketSize = getExpectedDataPacketSize(SENSORS.LSM6DSV);
+				double timeMsCurrentSample = startTimeMs;
+				for(int i=0;i<alignedCount;i++) {
+					byte[] byteBuf = new byte[alignedPacketSize];
+					int offset = 0;
+					if(accelEn && i<accelSamples.size()) { System.arraycopy(accelSamples.get(i), 0, byteBuf, offset, 6); }
+					if(accelEn) { offset += 6; }
+					if(gyroEn && i<gyroSamples.size()) { System.arraycopy(gyroSamples.get(i), 0, byteBuf, offset, 6); }
 
-			ObjectCluster ojcCurrent = buildMsgForSensorList(byteBuf, commType, dataBlockDetails.listOfSensorClassKeys, timeMsCurrentSample);
-			dataHandler(ojcCurrent);
-			dataBlockDetails.setOjcArrayAtIndex(ojcIndex++, ojcCurrent);
-			timeMsCurrentSample += alignedDiffMs;
-		}
-
-		// Pass 2: mag stream (only mag enabled), spread evenly across the same block duration
-		if(magCount>0) {
-			if(accelDet!=null) { accelDet.setIsEnabled(false); }
-			if(gyroDet!=null) { gyroDet.setIsEnabled(false); }
-			if(magDet!=null) { magDet.setIsEnabled(true); }
-			int magPacketSize = getExpectedDataPacketSize(SENSORS.LSM6DSV);
-			double blockDurationMs = alignedDiffMs * alignedCount;
-			double magDiffMs = (blockDurationMs>0)? blockDurationMs/magCount : 0;
-			double magTimeMs = startTimeMs;
-			for(int i=0;i<magCount;i++) {
-				byte[] byteBuf = new byte[magPacketSize];
-				System.arraycopy(magSamples.get(i), 0, byteBuf, 0, 6);
-				ObjectCluster ojcCurrent = buildMsgForSensorList(byteBuf, commType, dataBlockDetails.listOfSensorClassKeys, magTimeMs);
-				dataHandler(ojcCurrent);
-				dataBlockDetails.setOjcArrayAtIndex(ojcIndex++, ojcCurrent);
-				magTimeMs += magDiffMs;
+					ObjectCluster ojcCurrent = buildMsgForSensorList(byteBuf, commType, dataBlockDetails.listOfSensorClassKeys, timeMsCurrentSample);
+					dataHandler(ojcCurrent);
+					dataBlockDetails.setOjcArrayAtIndex(ojcIndex++, ojcCurrent);
+					timeMsCurrentSample += alignedDiffMs;
+				}
 			}
-		}
 
-		// restore original per-stream enabled states
-		if(accelDet!=null) { accelDet.setIsEnabled(accelOrig); }
-		if(gyroDet!=null) { gyroDet.setIsEnabled(gyroOrig); }
-		if(magDet!=null) { magDet.setIsEnabled(magOrig); }
+			// Pass 2: mag stream (only mag enabled), spread evenly across the block duration
+			if(magCount>0) {
+				if(accelDet!=null) { accelDet.setIsEnabled(false); }
+				if(gyroDet!=null) { gyroDet.setIsEnabled(false); }
+				if(magDet!=null) { magDet.setIsEnabled(true); }
+				int magPacketSize = getExpectedDataPacketSize(SENSORS.LSM6DSV);
+				double blockDurationMs = alignedDiffMs * alignedCount;
+				if(!(blockDurationMs>0)) { // covers 0 and NaN (no aligned stream -> 0 * Infinity)
+					// Mag-only enable configuration (no aligned accel/gyro stream to derive the
+					// block duration from): fall back to the configured mag output rate. Not
+					// currently producible by the firmware (the sensor hub requires accel/gyro
+					// to be running) but handled defensively.
+					SensorLSM6DSV sensorLsm6dsv = getSensorLSM6DSV();
+					double magRateHz = (sensorLsm6dsv!=null)? sensorLsm6dsv.getMagRateFreq() : 0;
+					blockDurationMs = (magRateHz>0)? (magCount * (1000.0/magRateHz)) : 0;
+				}
+				double magDiffMs = (blockDurationMs>0)? blockDurationMs/magCount : 0;
+				double magTimeMs = startTimeMs;
+				for(int i=0;i<magCount;i++) {
+					byte[] byteBuf = new byte[magPacketSize];
+					System.arraycopy(magSamples.get(i), 0, byteBuf, 0, 6);
+					ObjectCluster ojcCurrent = buildMsgForSensorList(byteBuf, commType, dataBlockDetails.listOfSensorClassKeys, magTimeMs);
+					dataHandler(ojcCurrent);
+					dataBlockDetails.setOjcArrayAtIndex(ojcIndex++, ojcCurrent);
+					magTimeMs += magDiffMs;
+				}
+			}
+		} finally {
+			// restore original per-stream enabled states
+			if(accelDet!=null) { accelDet.setIsEnabled(accelOrig); }
+			if(gyroDet!=null) { gyroDet.setIsEnabled(gyroOrig); }
+			if(magDet!=null) { magDet.setIsEnabled(magOrig); }
+		}
 	}
 
 	@Override

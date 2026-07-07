@@ -264,10 +264,12 @@ public abstract class PayloadContentsDetails implements Serializable {
 
 	/**
 	 * Second-generation hardware payload design (SR68-9/10, SR61-5/6). The
-	 * firmware calls this its "payload design v9" (30-byte config header, bytes
-	 * 4..33). It is NOT the same as {@link #isPayloadDesignV9orAbove(ShimmerVerObject)}
-	 * above, which is this driver's own internal sequence (FW v1.02.074). Gen-2
-	 * firmware (v1.04.024+) is the next step after V12 in this driver's numbering.
+	 * firmware calls this its "payload design v9" (32-byte config header, bytes
+	 * 4..35, of which bytes 34..35 are the calibration-blob CRC). It is NOT the
+	 * same as {@link #isPayloadDesignV9orAbove(ShimmerVerObject)} above, which is
+	 * this driver's own internal sequence (FW v1.02.074). Gen-2 firmware
+	 * (v2.00.004+, confirmed on a real SR68-9) is the next step after V12 in this
+	 * driver's numbering.
 	 *
 	 * @see VerisenseDevice.FW_CHANGES#CCF_GEN2
 	 */
