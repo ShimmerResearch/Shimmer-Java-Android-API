@@ -351,7 +351,12 @@ public abstract class PayloadContentsDetails implements Serializable {
 	protected int parseBatteryVoltageBytes(int currentByteIndex) {
 		byte[] batteryVoltageArray = new byte[BYTE_COUNT.PAYLOAD_CONTENTS_BATTERY_VOLTAGE];
 		System.arraycopy(byteBuffer, currentByteIndex, batteryVoltageArray, 0, BYTE_COUNT.PAYLOAD_CONTENTS_BATTERY_VOLTAGE);
-		long batteryVoltageCal = UtilParseData.parseData(batteryVoltageArray, CHANNEL_DATA_TYPE.UINT12, CHANNEL_DATA_ENDIAN.LSB);
+		// Second-generation firmware writes the full battery voltage in mV which can
+		// exceed 12-bits (e.g. 4133 mV) - masking to UINT12 would wrap it (-> 37 mV).
+		// Keep the legacy UINT12 mask for gen-1 to preserve existing behaviour.
+		CHANNEL_DATA_TYPE battChannelDataType = isPayloadDesignV13orAbove(verisenseDevice.getShimmerVerObject())
+				? CHANNEL_DATA_TYPE.UINT16 : CHANNEL_DATA_TYPE.UINT12;
+		long batteryVoltageCal = UtilParseData.parseData(batteryVoltageArray, battChannelDataType, CHANNEL_DATA_ENDIAN.LSB);
 		setBatteryVoltage(batteryVoltageCal);
 		currentByteIndex += batteryVoltageArray.length;
 		return currentByteIndex;

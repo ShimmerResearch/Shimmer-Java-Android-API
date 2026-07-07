@@ -578,7 +578,10 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 		if(commType==COMMUNICATION_TYPE.SD && isPayloadDesignV13orAbove()) {
 			// Second-generation: ACCEL2/GYRO enable bits (PAYLOAD_CONFIG0 bits 6/5) map to the
 			// LSM6DSV (not LSM6DS3); LIS2MDL mag enable is in GEN_CFG_3 (abs byte 29) bit 2.
-			enabledSensors = 0;
+			// The PAYLOAD_CONFIG2-derived enables (GSR/VBATT/PPG, bits 8-15, computed above)
+			// are unchanged from gen-1 and must be preserved - only remap the gen-1
+			// PAYLOAD_CONFIG0 accel1/accel2/gyro bits (0xE0).
+			enabledSensors &= ~0xE0L;
 			int gen2Cfg0 = configBytes[PAYLOAD_CONFIG_BYTE_INDEX.PAYLOAD_CONFIG0] & 0xFF;
 			if((gen2Cfg0 & (1<<6))!=0) { enabledSensors |= Configuration.Verisense.SensorBitmap.LSM6DSV_ACCEL; }
 			if((gen2Cfg0 & (1<<5))!=0) { enabledSensors |= Configuration.Verisense.SensorBitmap.LSM6DSV_GYRO; }

@@ -258,6 +258,11 @@ public class SensorBattVoltageVerisense extends SensorBattVoltage {
 
 					// Multiply by 1.988 because the battery voltage is divided by 2 before entering the BMD-340 And the value is not quite equal to 2 due to the components used in the circuit
 					calData *= BATTERY_VOLTAGE_DIVIDER_RATIO;
+				} else if(VerisenseDevice.isSecondGenerationHardware(
+						mShimmerDevice.getShimmerVerObject().getHardwareVersion(), mShimmerDevice.getExpansionBoardRev())) {
+					// Second-generation hardware (SR61-5/6, SR68-9/10) battery-sense divider.
+					// Matches the firmware's own conversion in hal_asm_battery.c (measureBatteryVoltage).
+					calData *= BATTERY_VOLTAGE_DIVIDER_RATIO_GEN2;
 				}
 				objectCluster.addCalData(channelDetails, calData, objectCluster.getIndexKeeper()-1);
 
