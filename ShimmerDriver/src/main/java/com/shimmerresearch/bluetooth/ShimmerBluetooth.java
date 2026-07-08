@@ -3341,7 +3341,11 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 				}
 			}
 		} else if (getHardwareVersion() == HW_ID.SHIMMER_3R) {
-			writeInstruction(GET_PRESSURE_CALIBRATION_COEFFICIENTS_COMMAND);
+			// BMP581 self-compensates and has no coefficients; its firmware NACKs
+			// GET_PRESSURE_CALIBRATION_COEFFICIENTS_COMMAND, so don't send it.
+			if (!isSupportedBmp581()) {
+				writeInstruction(GET_PRESSURE_CALIBRATION_COEFFICIENTS_COMMAND);
+			}
 		}
 	}
 
