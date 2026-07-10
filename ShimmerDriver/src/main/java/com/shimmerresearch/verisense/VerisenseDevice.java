@@ -1295,7 +1295,11 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 	public boolean doesHwSupportGsr() {
 		int hwId = getHardwareVersion();
 		int hwRev = getExpansionBoardRev();
-		return (hwId==HW_ID.VERISENSE_GSR_PLUS || (hwId==HW_ID.VERISENSE_PULSE_PLUS && hwRev >=5));
+		// Mirrors the firmware's ShimBrd_isGsrSupportedForHwVersion (shimmer_boards.c):
+		// SR62 (any), SR68 minor >= 5, SR61 minor >= 5 (second-generation IMU carries GSR).
+		return (hwId==HW_ID.VERISENSE_GSR_PLUS
+				|| (hwId==HW_ID.VERISENSE_PULSE_PLUS && hwRev >=5)
+				|| (hwId==HW_ID.VERISENSE_IMU && hwRev >=5));
 	}
 
 	public CalibDetailsKinematic getCurrentCalibDetails(int sensorId) {

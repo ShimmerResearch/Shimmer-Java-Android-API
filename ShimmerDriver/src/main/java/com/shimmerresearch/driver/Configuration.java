@@ -2721,14 +2721,17 @@ public class Configuration {
 			public static final List<ShimmerVerObject> listOfCompatibleVersionInfoVbatt = Arrays.asList(
 					svoVerisenseDevBrd, svoVerisenseImu, svoVerisensePpg0, svoVerisensePpg1, svoVerisenseGsrPlus, svoVerisensePulsePlus);
 			
+			// SR61 (Verisense IMU) carries GSR from minor rev 5 (second-generation); the
+			// runtime minor-rev gating is in VerisenseDevice.doesHwSupportGsr() which
+			// mirrors the firmware's ShimBrd_isGsrSupportedForHwVersion.
 			public static final List<ShimmerVerObject> listOfCompatibleVersionInfoGsr = Arrays.asList(
-					svoVerisenseGsrPlus, svoVerisensePulsePlus);
+					svoVerisenseGsrPlus, svoVerisensePulsePlus, svoVerisenseImu);
 
-			// Second-generation IMU: LSM6DSV (accel/gyro) + LIS2MDL (mag), SR68-9/10.
-			// TODO refine to HW minor >= 9 once compat supports minor gating; matching all
-			// Pulse+ is acceptable for now as gen-1 Pulse+ carries no LSM6DSV.
+			// Second-generation IMU: LSM6DSV (accel/gyro) + LIS2MDL (mag), SR68-9/10 and
+			// SR61-5/6. TODO refine to HW minor gating once compat supports it; the
+			// runtime isPayloadDesignV13orAbove() gate protects gen-1 units meanwhile.
 			public static final List<ShimmerVerObject> listOfCompatibleVersionInfoLSM6DSV = Arrays.asList(
-					svoVerisensePulsePlus);
+					svoVerisensePulsePlus, svoVerisenseImu);
 		}
 
 	}
