@@ -241,12 +241,15 @@ public class SensorLSM6DSV extends AbstractSensor {
 	public static final double[][] SENS_ACCEL_8G  = {{417.6759,0,0},{0,417.6759,0},{0,0,417.6759}};
 	public static final double[][] SENS_ACCEL_16G = {{208.8379,0,0},{0,208.8379,0},{0,0,208.8379}};
 
-	// Gyro sensitivity (LSB per dps) = 32768/FS_dps
-	public static final double[][] SENS_GYRO_125DPS  = {{262.144,0,0},{0,262.144,0},{0,0,262.144}};
-	public static final double[][] SENS_GYRO_250DPS  = {{131.072,0,0},{0,131.072,0},{0,0,131.072}};
-	public static final double[][] SENS_GYRO_500DPS  = {{65.536,0,0},{0,65.536,0},{0,0,65.536}};
-	public static final double[][] SENS_GYRO_1000DPS = {{32.768,0,0},{0,32.768,0},{0,0,32.768}};
-	public static final double[][] SENS_GYRO_2000DPS = {{16.384,0,0},{0,16.384,0},{0,0,16.384}};
+	// Gyro sensitivity (LSB per dps) from the ST datasheet angular-rate sensitivity
+	// (4.375 mdps/LSB at +-125 dps, doubling per range) - the same spec/values as the
+	// gen-1 LSM6DS3. NOTE: the gyro does NOT span the full 16-bit range at its nominal
+	// full scale (unlike the accel), so a 32768/FS derivation is ~12.8% off.
+	public static final double[][] SENS_GYRO_125DPS  = {{228.571428571,0,0},{0,228.571428571,0},{0,0,228.571428571}};
+	public static final double[][] SENS_GYRO_250DPS  = {{114.285714286,0,0},{0,114.285714286,0},{0,0,114.285714286}};
+	public static final double[][] SENS_GYRO_500DPS  = {{57.142857143,0,0},{0,57.142857143,0},{0,0,57.142857143}};
+	public static final double[][] SENS_GYRO_1000DPS = {{28.571428571,0,0},{0,28.571428571,0},{0,0,28.571428571}};
+	public static final double[][] SENS_GYRO_2000DPS = {{14.285714286,0,0},{0,14.285714286,0},{0,0,14.285714286}};
 
 	// Mag sensitivity (LSB per uT) = 1/0.15
 	public static final double[][] SENS_MAG = {{6.666667,0,0},{0,6.666667,0},{0,0,6.666667}};

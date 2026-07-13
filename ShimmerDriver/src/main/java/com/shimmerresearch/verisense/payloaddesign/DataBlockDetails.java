@@ -53,6 +53,15 @@ public class DataBlockDetails implements Serializable {
 	private VerisenseTimeDetails timeDetailsUcClock = new VerisenseTimeDetails();
 	
 	public int qtySensorDataBytesInDatablock;
+	/**
+	 * The raw on-disk sensor-data byte length as parsed from the payload. Unlike
+	 * {@link #qtySensorDataBytesInDatablock} this is never recomputed by the
+	 * midday/midnight CSV-split logic ({@link #setSampleCountAndUpdateDataBlockSize(int)})
+	 * - essential for variable-length blocks (e.g. the LSM6DSV tagged FIFO, whose raw
+	 * length includes timestamp-tag and magnetometer entries that don't map 1:1 to
+	 * aligned samples). Always use this for advancing byte offsets through the payload.
+	 */
+	private int qtySensorDataBytesInDatablockRaw;
 	public int dataPacketSize;
 	private double samplingRate;
 	
@@ -102,9 +111,14 @@ public class DataBlockDetails implements Serializable {
 	
 	public void setMetadata(int dataBlockSizeSensorData, int dataPacketSize, double samplingRate) {
 		this.qtySensorDataBytesInDatablock = dataBlockSizeSensorData;
+		this.qtySensorDataBytesInDatablockRaw = dataBlockSizeSensorData;
 		this.dataPacketSize = dataPacketSize;
 		setSamplingRate(samplingRate);
 		calculateSampleCount();
+	}
+
+	public int getQtySensorDataBytesInDatablockRaw() {
+		return qtySensorDataBytesInDatablockRaw;
 	}
 	
 	public void setRwcEndTimeMinutesAndCalculateTimings(long rtcEndTimeMinutes) {

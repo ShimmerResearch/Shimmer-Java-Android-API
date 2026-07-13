@@ -805,6 +805,8 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 			return SENSORS.LIS2DW12;
 		} else if(isSensorEnabled(Configuration.Verisense.SENSOR_ID.LSM6DS3_ACCEL)) {
 			return SENSORS.LSM6DS3;
+		} else if(isSensorEnabled(Configuration.Verisense.SENSOR_ID.LSM6DSV_ACCEL)) {
+			return SENSORS.LSM6DSV;
 		}
 		return null;
 	}
@@ -1032,9 +1034,20 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 			sb.append("; Mag ");
 			sb.append(SENSOR_CONFIG_STRINGS.RATE);
 			if(isSensorEnabled(Configuration.Verisense.SENSOR_ID.LSM6DSV_MAG)) {
+				// Labelled "Configured" because the sensor hub reads the LIS2MDL once per
+				// accel/gyro sample, so the EFFECTIVE mag rate is capped at the IMU ODR.
+				sb.append(SENSOR_CONFIG_STRINGS.SAMPLING_RATE_CONFIGURED);
 				sb.append(sensorLsm6dsv.getMagRateFreq());
 				sb.append(" ");
 				sb.append(CHANNEL_UNITS.FREQUENCY);
+				double imuOdrHz = sensorLsm6dsv.getRateFreq();
+				if(imuOdrHz>0 && sensorLsm6dsv.getMagRateFreq()>imuOdrHz) {
+					sb.append(" (capped to ");
+					sb.append(imuOdrHz);
+					sb.append(" ");
+					sb.append(CHANNEL_UNITS.FREQUENCY);
+					sb.append(" by the IMU rate)");
+				}
 			} else {
 				sb.append("Off");
 			}
@@ -1237,14 +1250,15 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 	//TODO set derived algorithm enabled bit like as done for PPG rather then checking
 	public boolean isAnAccelEnabled() {
 		if(isSensorEnabled(Configuration.Verisense.SENSOR_ID.LIS2DW12_ACCEL)
-				|| isSensorEnabled(Configuration.Verisense.SENSOR_ID.LSM6DS3_ACCEL)) {
+				|| isSensorEnabled(Configuration.Verisense.SENSOR_ID.LSM6DS3_ACCEL)
+				|| isSensorEnabled(Configuration.Verisense.SENSOR_ID.LSM6DSV_ACCEL)) {
 			return true;
 		}
 		return false;
 	}
 
 	public static boolean isSensorKeyAnAccel(SENSORS sensorClassKey) {
-		if(sensorClassKey==SENSORS.LIS2DW12 || sensorClassKey==SENSORS.LSM6DS3) {
+		if(sensorClassKey==SENSORS.LIS2DW12 || sensorClassKey==SENSORS.LSM6DS3 || sensorClassKey==SENSORS.LSM6DSV) {
 			return true;
 		}
 		return false;
@@ -1623,6 +1637,11 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 			default:
 				break;
 		}
+		if(dataBlockSize==Integer.MIN_VALUE) {
+			// Fail loudly rather than returning a sentinel that silently corrupts the
+			// data-block byte index further down the parse.
+			throw new IllegalStateException("calculateFifoBlockSize: no FIFO block size defined for sensor class " + sensorClassKey);
+		}
 		return dataBlockSize;
 	}
 
@@ -1861,8 +1880,13 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 		
 		DataBlockDetails dataBlockDetails = null;
 		DATABLOCK_SENSOR_ID[] payloadSensorIdValues = DATABLOCK_SENSOR_ID.values();
-		// -1 because PPG_MAX86150 has been temporarily added to PAYLOAD_SENSOR_ID 
-		if(sensorId>0 && sensorId<payloadSensorIdValues.length-1) {
+		// Only IDs with a parse implementation are accepted. The enum intentionally
+		// declares the remaining second-generation block IDs (LIGHT, ALGO_HUB,
+		// SKIN_TEMP, FLICKER) ahead of their parser support - accepting them here
+		// without a getSensorKeysForDatablockId()/calculateFifoBlockSize() handler
+		// would corrupt the parse, so they are rejected with the informative
+		// exception below until their decoders are implemented.
+		if(sensorId>0 && sensorId<=DATABLOCK_SENSOR_ID.LSM6DSV.ordinal()) {
 			DATABLOCK_SENSOR_ID datablockSensorId = payloadSensorIdValues[sensorId];
 			
 			List<SENSORS> listOfSensorClassKeys = getOrCreateListOfSensorClassKeysForDataBlockId(datablockSensorId);

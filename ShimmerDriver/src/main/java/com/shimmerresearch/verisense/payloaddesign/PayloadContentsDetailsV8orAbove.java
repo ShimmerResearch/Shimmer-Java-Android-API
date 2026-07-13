@@ -57,7 +57,10 @@ public class PayloadContentsDetailsV8orAbove extends PayloadContentsDetails {
 			setOfPayloadSensorIds.add(dataBlockDetails.datablockSensorId);
 
 			// Update byte offset as it's passed by value into "parseDataBlockMetaData"
-			int dataBlockTotalSize = BYTE_COUNT.PAYLOAD_CONTENTS_GEN8_SENSOR_ID + BYTE_COUNT.PAYLOAD_CONTENTS_RTC_BYTES_TICKS + dataBlockDetails.qtySensorDataBytesInDatablock;  
+			// Use the RAW block size for byte-offset arithmetic - qtySensorDataBytesInDatablock
+			// can be recomputed by the midday/midnight split logic (wrongly for
+			// variable-length blocks such as the LSM6DSV tagged FIFO).
+			int dataBlockTotalSize = BYTE_COUNT.PAYLOAD_CONTENTS_GEN8_SENSOR_ID + BYTE_COUNT.PAYLOAD_CONTENTS_RTC_BYTES_TICKS + dataBlockDetails.getQtySensorDataBytesInDatablockRaw();
 			currentByteIndexInPayload += dataBlockTotalSize;
 
 			if(isParserAtEndOfBuffer(byteBuffer.length, currentByteIndexInPayload)) {
@@ -407,7 +410,8 @@ public class PayloadContentsDetailsV8orAbove extends PayloadContentsDetails {
 				if(dataBlockDetails.listOfSensorClassKeys.contains(sensorClassKey)) {
 					verisenseDevice.parseDataBlockData(dataBlockDetails, byteBuffer, currentByteIndex, COMMUNICATION_TYPE.SD);
 				}
-				currentByteIndex += dataBlockDetails.qtySensorDataBytesInDatablock;
+				// RAW size: immune to midday/midnight split recomputation (see above)
+				currentByteIndex += dataBlockDetails.getQtySensorDataBytesInDatablockRaw();
 				
 				dataBlockIndex++;
 				
