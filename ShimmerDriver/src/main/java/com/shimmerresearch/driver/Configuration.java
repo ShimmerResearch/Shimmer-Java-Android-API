@@ -2651,7 +2651,14 @@ public class Configuration {
 		
 		public class DerivedSensorsBitMask {
 			public final static int NON_WEAR_DETECTION_LIS2DW12	= (1 << 0);
-			public final static int NON_WEAR_DETECTION_LSM6DS3	= (1 << 1);
+			/** Covers the LSM6DS IMU family: LSM6DS3 (first-generation) and LSM6DSV
+			 * (second-generation SR68-9/10, SR61-5/6). The two never coexist on one
+			 * board so a single bit is unambiguous. */
+			public final static int NON_WEAR_DETECTION_LSM6DSX	= (1 << 1);
+			/** @deprecated renamed to {@link #NON_WEAR_DETECTION_LSM6DSX} when non-wear
+			 * detection was extended to the LSM6DSV (DEV-875). */
+			@Deprecated
+			public final static int NON_WEAR_DETECTION_LSM6DS3	= NON_WEAR_DETECTION_LSM6DSX;
 			public final static int PPG_TO_HR_RED_LED		= (1 << 2);
 			public final static int PPG_TO_HR_IR_LED		= (1 << 3);
 			public final static int PPG_TO_HR_GREEN_LED		= (1 << 4);
