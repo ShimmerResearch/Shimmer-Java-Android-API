@@ -410,8 +410,25 @@ public class PayloadContentsDetailsV8orAbove extends PayloadContentsDetails {
 				if(dataBlockDetails.listOfSensorClassKeys.contains(sensorClassKey)) {
 					verisenseDevice.parseDataBlockData(dataBlockDetails, byteBuffer, currentByteIndex, COMMUNICATION_TYPE.SD);
 				}
-				// RAW size: immune to midday/midnight split recomputation (see above)
-				currentByteIndex += dataBlockDetails.getQtySensorDataBytesInDatablockRaw();
+				// Advance by the on-disk bytes THIS list entry occupies. A midday/midnight-split
+				// block appears as two consecutive entries whose recomputed sizes
+				// (dataPacketSize*sampleCount) sum to the on-disk block size, so each part must
+				// advance by its own share - advancing by the raw size for each part would count
+				// the block twice and misalign every block after it. Unsplit blocks advance by
+				// the raw size, which for the variable-length LSM6DSV tagged FIFO is the only
+				// valid measure (its raw length includes tag/mag/timestamp entries that a
+				// dataPacketSize*sampleCount recomputation cannot reproduce).
+				if(dataBlockDetails.isFirstPartOfSplitDataBlock() || dataBlockDetails.isSecondPartOfSplitDataBlock()) {
+					if(dataBlockDetails.datablockSensorId==DATABLOCK_SENSOR_ID.LSM6DSV) {
+						// A split FIFO block cannot be byte-walked from sample counts; supporting
+						// it needs a FIFO-entry-aware split. Fail loudly rather than misparse
+						// every subsequent block (no such recording exists yet - see DEV-793).
+						throw new IllegalStateException("Midday/midnight-split LSM6DSV FIFO data blocks are not supported by the byte-offset walk");
+					}
+					currentByteIndex += dataBlockDetails.qtySensorDataBytesInDatablock;
+				} else {
+					currentByteIndex += dataBlockDetails.getQtySensorDataBytesInDatablockRaw();
+				}
 				
 				dataBlockIndex++;
 				
