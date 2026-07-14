@@ -2655,8 +2655,10 @@ public class Configuration {
 			 * (second-generation SR68-9/10, SR61-5/6). The two never coexist on one
 			 * board so a single bit is unambiguous. */
 			public final static int NON_WEAR_DETECTION_LSM6DSX	= (1 << 1);
-			/** @deprecated renamed to {@link #NON_WEAR_DETECTION_LSM6DSX} when non-wear
-			 * detection was extended to the LSM6DSV (DEV-875). */
+			/**
+			 * @deprecated Renamed to {@link #NON_WEAR_DETECTION_LSM6DSX} when non-wear
+			 * detection was extended to the LSM6DSV (DEV-875).
+			 */
 			@Deprecated
 			public final static int NON_WEAR_DETECTION_LSM6DS3	= NON_WEAR_DETECTION_LSM6DSX;
 			public final static int PPG_TO_HR_RED_LED		= (1 << 2);
