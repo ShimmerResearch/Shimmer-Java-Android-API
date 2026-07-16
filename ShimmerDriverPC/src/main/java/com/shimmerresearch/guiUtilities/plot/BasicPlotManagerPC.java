@@ -1645,7 +1645,56 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 		}
 		trace.addPoint(xData, yData);
 	}
-	
+
+	/** DEV-896: Max points added per single chart-monitor acquisition in {@link #addPointsToTrace}.
+	 * Bounds how long the batch can hold the chart lock so a large burst can't monopolise the EDT. */
+	private static final int POINT_BATCH_MAX = 256;
+
+	/**
+	 * DEV-896: Batch variant of {@link #addPointToTrace(ITrace2D, double, double)}. Adds many
+	 * points to a single trace while acquiring the chart monitor once per (bounded) chunk rather
+	 * than once per point. {@code ATrace2D.addPoint()} synchronizes on the chart
+	 * ({@code trace.getRenderer()}) - the same monitor {@code Chart2D.paintComponent()} holds - so
+	 * adding N points individually took the monitor N times and starved the Swing EDT. Java monitors
+	 * are reentrant, so {@code addPoint()}'s internal {@code synchronized(chart)} is free while we
+	 * hold the outer lock. Behaviour per point is identical to {@link #addPointToTrace}.
+	 */
+	public void addPointsToTrace(ITrace2D trace, double[] xData, double[] yData){
+		if(xData == null || yData == null){
+			return;
+		}
+		addPointsToTrace(trace, xData, yData, 0, Math.min(xData.length, yData.length));
+	}
+
+	/**
+	 * DEV-896: See {@link #addPointsToTrace(ITrace2D, double[], double[])}. Adds points
+	 * {@code [fromIndex, toIndex)} from the given arrays.
+	 */
+	public void addPointsToTrace(ITrace2D trace, double[] xData, double[] yData, int fromIndex, int toIndex){
+		if(trace == null || xData == null || yData == null){
+			return;
+		}
+		int end = Math.min(toIndex, Math.min(xData.length, yData.length));
+		int i = Math.max(0, fromIndex);
+		//trace.getRenderer() returns the Chart2D the trace was added to (null until then); it is the
+		//exact monitor ATrace2D.addPoint() locks, so holding it makes the per-point locks reentrant.
+		Chart2D chart = trace.getRenderer();
+		while(i < end){
+			int chunkEnd = Math.min(i + POINT_BATCH_MAX, end);
+			if(chart != null){
+				synchronized(chart){
+					for(; i < chunkEnd; i++){
+						addPointToTrace(trace, xData[i], yData[i]);
+					}
+				}
+			} else {
+				for(; i < chunkEnd; i++){
+					addPointToTrace(trace, xData[i], yData[i]);
+				}
+			}
+		}
+	}
+
 	public CircularFifoBuffer getCirculurBufferedTraceData(String traceName){
 		CircularFifoBuffer circularFifoBuffer = mMapOfCirculurBufferedTraceDataPoints.get(traceName);
 		if(circularFifoBuffer != null){ 
@@ -1869,10 +1918,9 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 						if(results.length==2 && results[0].length>startBin){
 							
 							trace.removeAllPoints();
-							
-							for(int x=startBin;x<results[0].length;x++){
-								addPointToTrace(trace, results[0][x], results[1][x]);
-							}
+
+							//DEV-896: batch the FFT bins into one chart-monitor acquisition per chunk
+							addPointsToTrace(trace, results[0], results[1], startBin, results[0].length);
 						}
 					}
 					
@@ -1951,8 +1999,17 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 			synchronized(mListofPropertiestoPlot){
 				Iterator <String[]> entries = mListofPropertiestoPlot.iterator();
 				int indexOfTrace = 0;
-				boolean isDummyPointAddedToFillTrace = false; 
-				
+				boolean isDummyPointAddedToFillTrace = false;
+
+				//DEV-896: Acquire the chart monitor once for this whole multi-trace update instead
+				//of once per trace inside ATrace2D.addPoint(). addPoint() synchronizes on the chart
+				//(trace.getRenderer()) - the same monitor Chart2D.paintComponent() holds - so grabbing
+				//it once per sample was starving the Swing EDT. Java monitors are reentrant, so the
+				//per-point synchronized(chart) inside addPoint() is free while we hold this outer lock.
+				//The batch is bounded by the number of plotted traces, so the lock hold stays short.
+				//Falls back to the already-held mListofPropertiestoPlot monitor if no chart is set yet.
+				Object chartMonitor = (mChart != null) ? (Object)mChart : (Object)mListofPropertiestoPlot;
+				synchronized(chartMonitor){
 				while (entries.hasNext()) {
 					String[] props = entries.next();
 					
@@ -2067,6 +2124,7 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 					}
 					indexOfTrace++;
 				}
+				} //DEV-896: release the chart monitor once the whole multi-trace update is done
 				if(isDummyPointAddedToFillTrace) {
 					isFirstPointOnFillTrace = false;
 				}
