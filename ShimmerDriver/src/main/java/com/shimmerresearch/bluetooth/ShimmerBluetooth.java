@@ -581,19 +581,26 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 		int count=0;
 		public void run() {
 			while (!stop) {
-				if(!mABQPacketByeArray.isEmpty()){
+				RawBytePacketWithPCTimeStamp rbp = null;
+				try {
+					// Blocks (with a timeout) instead of busy-spinning on isEmpty() while idle.
+					// The timeout ensures the stop flag is still checked periodically.
+					rbp = mABQPacketByeArray.poll(100, TimeUnit.MILLISECONDS);
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+				}
+				if(rbp!=null){
 					count++;
 					if(count%1000==0){
 						consolePrintLn("Queue Size: " + mABQPacketByeArray.size());
 						printLogDataForDebugging("Queue Size: " + mABQPacketByeArray.size() + "\n");
 					}
-					RawBytePacketWithPCTimeStamp rbp = mABQPacketByeArray.remove();
 //					buildAndSendMsg(rbp.mDataArray, FW_TYPE_BT, false, rbp.mSystemTimeStamp);
 					buildAndSendMsg(rbp.mDataArray, COMMUNICATION_TYPE.BLUETOOTH, false, rbp.mSystemTimeStamp);
 				}
-			} 
-		} 
-	} 
+			}
+		}
+	}
 	
 	//region --------- BLUETOOH STACK --------- 
 	
@@ -603,9 +610,11 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 		
 		public void run() {
 			while(!stop) {
+				boolean didWork = false;
 				//In-Shimmer Test here
 				if(InShimmerTest) {
 					if (bytesAvailableToBeRead()) {
+					didWork = true;
 					byte[] data = readBytes(availableBytes());
 					if (data!=null) {
 						if (data.length>0) {
@@ -619,29 +628,43 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 				else {
 					if (mDummyRead) {
 						performDummyRead();
+						didWork = true;
 					}
-	
+
 					// Process Instruction on stack. is an instruction running? if not proceed
 					if(!isInstructionStackLock()){
-						processNextInstruction();
+						if(processNextInstruction()){
+							didWork = true;
+						}
 					}
-	
+
 					if(mIsStreaming){
 						processWhileStreaming();
+						didWork = true;
 					}
 					else if(bytesAvailableToBeRead()){
+						didWork = true;
 						if(mWaitForAck) {
 							processNotStreamingWaitForAck();
-						} 
+						}
 						else if(mWaitForResponse) {
 							processNotStreamingWaitForResp();
-						} 
-						
+						}
+
 						processBytesAvailableAndInstreamSupported();
-	
+
 					}
 				}
-				
+
+				if(!didWork){
+					// Nothing useful happened this iteration (idle, not streaming, no pending
+					// instructions/bytes) - avoid busy-spinning and pegging a CPU core.
+					try {
+						Thread.sleep(2);
+					} catch (InterruptedException e) {
+						Thread.currentThread().interrupt();
+					}
+				}
 			}
 		}
 		
@@ -674,10 +697,11 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 			mDummyReadStarted = false;
 		}
 		
-		private void processNextInstruction() {
+		/** @return true if an instruction was found and processed (i.e. useful work was done) */
+		private boolean processNextInstruction() {
 			// check instruction stack, are there any other instructions left to be executed?
 			//checkAndRemoveFirstInstructionIfNull();
-			
+
 			byte[] insBytes = getInstruction();
 			if (insBytes!=null){
 					mCurrentCommand=insBytes[0];
@@ -754,14 +778,16 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 					
 					
 					mTransactionCompleted=false;
+				return true;
 			} else {
 				if (!mIsStreaming && !bytesAvailableToBeRead()){
 					threadSleep(50);
 				}
+				return false;
 			}
 		}
-		
-		/** Process ACK from a GET or SET command while not streaming */ 
+
+		/** Process ACK from a GET or SET command while not streaming */
 		private void processNotStreamingWaitForAck() {
 			//JC TEST:: IMPORTANT TO REMOVE // This is to simulate packet loss 
 			/*

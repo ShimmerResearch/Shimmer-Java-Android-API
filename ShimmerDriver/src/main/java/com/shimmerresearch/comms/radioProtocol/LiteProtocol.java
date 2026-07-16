@@ -255,6 +255,13 @@ public class LiteProtocol extends AbstractCommsProtocol{
 	private void stopIoThread() {
 		if(mIOThread!=null){
 			mIOThread.stop=true;
+			// Bounded wait for the thread to actually exit its loop before dropping the
+			// reference, without risking blocking indefinitely.
+			try {
+				mIOThread.join(2000);
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+			}
 			mIOThread = null;
 		}
 	}
@@ -266,36 +273,52 @@ public class LiteProtocol extends AbstractCommsProtocol{
 		
 		public synchronized void run() {
 			while (!stop) {
+				boolean didWork = false;
 				try {
 					// Process Instruction on stack. is an instruction running? if not proceed
 					if(!isInstructionStackLock()){
-						processNextInstruction();
+						if(processNextInstruction()){
+							didWork = true;
+						}
 					}
-				
+
 					if(isStreaming()){
 						processWhileStreaming();
+						didWork = true;
 					}
 					else if(bytesAvailableToBeRead()){
+						didWork = true;
 						if(mWaitForAck) {
 							processNotStreamingWaitForAck();
-						} 
+						}
 						else if(mWaitForResponse) {
 							processNotStreamingWaitForResp();
-						} 
-						
+						}
+
 						processBytesAvailableAndInstreamSupported();
 					}
 				} catch (ShimmerException dE) {
 //					stop=true;
-					
+
 					killConnection(dE);
 //					e.printStackTrace();
 					//TODO send event up the ladder
 				}
-			} 
-		} 
-		
-		private void processNextInstruction() throws ShimmerException {
+
+				if(!didWork){
+					// Nothing useful happened this iteration (idle, not streaming, no pending
+					// instructions/bytes) - avoid busy-spinning and pegging a CPU core.
+					try {
+						Thread.sleep(2);
+					} catch (InterruptedException e) {
+						Thread.currentThread().interrupt();
+					}
+				}
+			}
+		}
+
+		/** @return true if an instruction was found and processed (i.e. useful work was done) */
+		private boolean processNextInstruction() throws ShimmerException {
 			// check instruction stack, are there any other instructions left to be executed?
 			if(!getListofInstructions().isEmpty()) {
 				if(getListofInstructions().get(0)==null) {
@@ -387,16 +410,18 @@ public class LiteProtocol extends AbstractCommsProtocol{
 							}
 						}*/
 					}
-					
-					
+
+
 					mTransactionCompleted=false;
+					return true;
 				}
-			} 
+			}
 			else {
 				if (!isStreaming() && !bytesAvailableToBeRead()){
 					threadSleep(50);
 				}
 			}
+			return false;
 		}
 
 		private void processWhileStreaming() throws ShimmerException {
