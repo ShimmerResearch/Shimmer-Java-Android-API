@@ -10773,10 +10773,19 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 			return false;
 		}
 
+		// SR48 (GSR+): BMP581 spans two bands - 7.2..7.x AND 8.2 and above.
+		// 7.0/7.1 and 8.0/8.1 are BMP390, so a single lexicographic ">=" can't
+		// express it (8.0/8.1 fall between the two BMP581 bands).
+		boolean sr48Bmp581 =
+				(ebd.getExpansionBoardId()==HW_ID_SR_CODES.EXP_BRD_GSR_UNIFIED
+						&& ebd.getExpansionBoardRev()==7
+						&& ebd.getExpansionBoardRevSpecial()>=2)                  // SR48 7.2..7.x
+				|| ebd.isSrNumberGte(HW_ID_SR_CODES.EXP_BRD_GSR_UNIFIED, 8, 2);   // SR48 8.2 and above
+
 		boolean boardEligible =
 				   ebd.isSrNumberGte(HW_ID_SR_CODES.SHIMMER3,              11, 2)  // SR31 >= 11.2
 				|| ebd.isSrNumberGte(HW_ID_SR_CODES.EXP_BRD_EXG_UNIFIED,   8, 2)  // SR47 >= 8.2
-				|| ebd.isSrNumberGte(HW_ID_SR_CODES.EXP_BRD_GSR_UNIFIED,   7, 2)  // SR48 >= 7.2 (covers 8.2)
+				|| sr48Bmp581                                                     // SR48 7.2..7.x and 8.2+
 				|| ebd.isSrNumberGte(HW_ID_SR_CODES.EXP_BRD_BR_AMP_UNIFIED, 4, 2); // SR49 >= 4.2
 
 		// Format guard: BMP581 (pre-compensated) output only exists from the
