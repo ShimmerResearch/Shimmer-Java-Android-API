@@ -40,9 +40,10 @@ import info.monitorenter.gui.chart.traces.Trace2DLtd;
  *       optimising it is unnecessary and would risk the displayed Y auto-scale.</li>
  *   <li>{@code setMaxSize(int)} is {@code final} in {@code Trace2DLtd} so it cannot be
  *       overridden, but no reset hook is needed: {@link #isBufferSortedAscendingByX()} reads
- *       the live {@code m_buffer.size()} each call, so growing the buffer transparently
- *       disables the fast path until it refills and shrinking (which only discards the
- *       oldest, smallest-X elements) keeps the buffer sorted.</li>
+ *       the live {@code m_buffer.size()} each call. Growing leaves the element count and
+ *       ordering unchanged (a sorted buffer stays sorted, so the fast path validly stays
+ *       available); shrinking only discards the oldest, smallest-X elements, which also
+ *       keeps the buffer sorted.</li>
  * </ul>
  *
  * <p>Externally this class behaves identically to {@code Trace2DLtd} (same bounds, same
@@ -52,15 +53,21 @@ import info.monitorenter.gui.chart.traces.Trace2DLtd;
  */
 public class Trace2DLtdMonotonicX extends Trace2DLtd {
 
-	/** X value of the most recently inserted point, used to detect non-decreasing X. */
-	private double mLastX = Double.NaN;
+	/**
+	 * X value of the most recently inserted point, used to detect non-decreasing X.
+	 * Volatile: normal updates happen under the chart+trace locks (inside addPoint), but the
+	 * conservative resets in {@link #firePointChanged} may run outside them; volatile prevents
+	 * a torn 64-bit write from ever spuriously enabling the fast path. All unlocked writes are
+	 * resets, which can only (safely) disable it.
+	 */
+	private volatile double mLastX = Double.NaN;
 
 	/**
 	 * Number of consecutive insertions (ending at the most recent one) whose X was
 	 * non-decreasing. When this is {@code >= m_buffer.size()} the entire current buffer
 	 * content was produced by a non-decreasing run and is therefore sorted ascending by X.
 	 */
-	private long mAscendingRunLength = 0L;
+	private volatile long mAscendingRunLength = 0L;
 
 	public Trace2DLtdMonotonicX() {
 		super();
@@ -94,7 +101,12 @@ public class Trace2DLtdMonotonicX extends Trace2DLtd {
 	@Override
 	protected boolean addPointInternal(ITracePoint2D p) {
 		double x = p.getX();
-		if (Double.isNaN(mLastX) || x >= mLastX) {
+		if (Double.isNaN(x)) {
+			// NaN X (jchart2d's discontinuation marker) breaks any ordering guarantee for as
+			// long as it stays in the buffer: contribute nothing to the ascending run, so the
+			// fast path can only resume once a full buffer of post-NaN points has evicted it.
+			mAscendingRunLength = 0L;
+		} else if (Double.isNaN(mLastX) || x >= mLastX) {
 			// Non-decreasing X: extend the ascending run (cap to avoid overflow; any value
 			// above the buffer size already means "fully sorted").
 			if (mAscendingRunLength < Long.MAX_VALUE) {
@@ -110,6 +122,22 @@ public class Trace2DLtdMonotonicX extends Trace2DLtd {
 		// Delegates to Trace2DLtd, which on eviction virtually dispatches to our overridden
 		// minXSearch()/maxXSearch() below (and to the unchanged Y searches).
 		return super.addPointInternal(p);
+	}
+
+	/**
+	 * In-place mutation of an existing point ({@code ITracePoint2D.setLocation}) fires a
+	 * {@code STATE_CHANGED} notification and can reorder the buffer arbitrarily, which the
+	 * insertion-time run tracking cannot see. Reset the run so the fast path stays off until
+	 * a full buffer of fresh monotonic insertions restores the guarantee. (Not used by the
+	 * Shimmer streaming paths, but keeps this class a safe drop-in for Trace2DLtd.)
+	 */
+	@Override
+	public void firePointChanged(final ITracePoint2D changed, final int state) {
+		if (state == ITracePoint2D.STATE_CHANGED) {
+			mAscendingRunLength = 0L;
+			mLastX = Double.NaN;
+		}
+		super.firePointChanged(changed, state);
 	}
 
 	@Override

@@ -2008,6 +2008,12 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 				//per-point synchronized(chart) inside addPoint() is free while we hold this outer lock.
 				//The batch is bounded by the number of plotted traces, so the lock hold stays short.
 				//Falls back to the already-held mListofPropertiestoPlot monitor if no chart is set yet.
+				//IMPORTANT (lock ordering): snapshot mListofTraces BEFORE taking the chart monitor.
+				//Other threads (e.g. clearAllDataBuffer, trace resizing) hold the mListofTraces monitor
+				//while calling chart-locking trace mutators (removeAllPoints/setMaxSize), i.e.
+				//mListofTraces -> chart. Touching mListofTraces while holding the chart monitor here
+				//would be the reverse order and a real deadlock cycle.
+				ITrace2D[] tracesSnapshot = mListofTraces.toArray(new ITrace2D[0]);
 				Object chartMonitor = (mChart != null) ? (Object)mChart : (Object)mListofPropertiestoPlot;
 				synchronized(chartMonitor){
 				while (entries.hasNext()) {
@@ -2068,10 +2074,10 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 							continue;
 						}
 
-						if (indexOfTrace>mListofTraces.size()){
+						if (indexOfTrace>tracesSnapshot.length){
 							throw new Exception("Trace does not exist: (" + traceName + ")");
 						}
-						ITrace2D currentTrace = mListofTraces.get(indexOfTrace); 
+						ITrace2D currentTrace = tracesSnapshot[indexOfTrace]; 
 						//utilShimmer.consolePrintErrLn(currentTrace.getMaxY());
 
 						mCurrentXValue = xData;
