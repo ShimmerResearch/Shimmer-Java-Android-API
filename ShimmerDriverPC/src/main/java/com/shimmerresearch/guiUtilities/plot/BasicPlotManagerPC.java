@@ -347,7 +347,7 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 	}
 
 	private ITrace2D createNormalTrace(int plotMaxSize) {
-		Trace2DLtd trace = new Trace2DLtd(plotMaxSize);
+		Trace2DLtd trace = new Trace2DLtdMonotonicX(plotMaxSize); //DEV-896: monotonic-X trace avoids O(n) minX rescans per sample
 		BasicStroke stroke = ((BasicStroke)trace.getStroke());
 		BasicStroke newStroke = new BasicStroke(DEFAULT_LINE_THICKNESS,stroke.getEndCap(),stroke.getLineJoin(),stroke.getMiterLimit(),stroke.getDashArray(),stroke.getDashPhase());
 		trace.setStroke(newStroke);
@@ -355,7 +355,7 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 	}
 
 	private ITrace2D createBarTrace(Chart2D chart, int plotMaxSize) {
-		ITrace2D trace = new Trace2DLtd(plotMaxSize);
+		ITrace2D trace = new Trace2DLtdMonotonicX(plotMaxSize); //DEV-896: monotonic-X trace avoids O(n) minX rescans per sample
 		trace.setTracePainter(new TracePainterVerticalBar(chart));
 		return trace;
 	}
@@ -369,7 +369,7 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 	 */
 	private ITrace2D addSignalToExistingChartInternal(String[] signal, int plotMaxSize, Color color) throws Exception{
 		if (!checkIfPropertyExist(signal)){
-			ITrace2D trace = new Trace2DLtd(plotMaxSize);
+			ITrace2D trace = new Trace2DLtdMonotonicX(plotMaxSize); //DEV-896: monotonic-X trace avoids O(n) minX rescans per sample
 			mChart.addTrace(trace);
 			
 			mListofTraces.add(trace);
