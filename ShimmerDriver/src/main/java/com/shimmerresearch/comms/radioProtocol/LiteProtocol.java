@@ -256,11 +256,15 @@ public class LiteProtocol extends AbstractCommsProtocol{
 		if(mIOThread!=null){
 			mIOThread.stop=true;
 			// Bounded wait for the thread to actually exit its loop before dropping the
-			// reference, without risking blocking indefinitely.
-			try {
-				mIOThread.join(2000);
-			} catch (InterruptedException e) {
-				Thread.currentThread().interrupt();
+			// reference. Guard against the self-join case: killConnection() can reach here
+			// synchronously from within IOThread.run()'s catch block (error-driven teardown),
+			// and a thread joining itself would just burn the full timeout.
+			if(Thread.currentThread() != mIOThread){
+				try {
+					mIOThread.join(2000);
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+				}
 			}
 			mIOThread = null;
 		}
@@ -271,8 +275,13 @@ public class LiteProtocol extends AbstractCommsProtocol{
 		byte[] byteBuffer = {0};
 		public boolean stop = false;
 		
-		public synchronized void run() {
-			while (!stop) {
+		/*
+		 * Deliberately NOT synchronized: Thread.join() locks this same Thread
+		 * instance, so a synchronized run() would block external stopIoThread()
+		 * callers on monitor entry (with no timeout) until the loop exits.
+		 */
+		public void run() {
+			while (!stop && !Thread.currentThread().isInterrupted()) {
 				boolean didWork = false;
 				try {
 					// Process Instruction on stack. is an instruction running? if not proceed

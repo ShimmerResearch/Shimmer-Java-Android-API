@@ -580,7 +580,7 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 		public boolean stop = false;
 		int count=0;
 		public void run() {
-			while (!stop) {
+			while (!stop && !Thread.currentThread().isInterrupted()) {
 				RawBytePacketWithPCTimeStamp rbp = null;
 				try {
 					// Blocks (with a timeout) instead of busy-spinning on isEmpty() while idle.
@@ -609,7 +609,7 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 		public boolean stop = false;
 		
 		public void run() {
-			while(!stop) {
+			while(!stop && !Thread.currentThread().isInterrupted()) {
 				boolean didWork = false;
 				//In-Shimmer Test here
 				if(InShimmerTest) {

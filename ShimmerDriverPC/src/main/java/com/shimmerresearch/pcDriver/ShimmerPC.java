@@ -610,10 +610,15 @@ public class ShimmerPC extends ShimmerBluetooth implements Serializable{
 				
 				// Closing serial port before before thread is finished stopping throws an error so waiting here.
 				// Bounded join instead of an empty-body busy-wait, so this can't block indefinitely.
-				try {
-					mIOThread.join(2000);
-				} catch (InterruptedException e) {
-					Thread.currentThread().interrupt();
+				// Skip the join when closeConnection() is reached from the IOThread itself
+				// (connectionLost() fires on it when the serial port errors mid-read/write) -
+				// a self-join can never succeed and would just burn the full timeout.
+				if(Thread.currentThread() != mIOThread){
+					try {
+						mIOThread.join(2000);
+					} catch (InterruptedException e) {
+						Thread.currentThread().interrupt();
+					}
 				}
 
 				mIOThread = null;
