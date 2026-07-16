@@ -10779,9 +10779,15 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 				|| ebd.isSrNumberGte(HW_ID_SR_CODES.EXP_BRD_GSR_UNIFIED,   7, 2)  // SR48 >= 7.2 (covers 8.2)
 				|| ebd.isSrNumberGte(HW_ID_SR_CODES.EXP_BRD_BR_AMP_UNIFIED, 4, 2); // SR49 >= 4.2
 
-		// Format guard: BMP581 (pre-compensated) output only exists from
-		// LogAndStream_Shimmer3R v1.01.006 onwards.
-		boolean fwEligible = svo.compareVersions(FW_ID.LOGANDSTREAM, 1, 1, 6);
+		// Format guard: BMP581 (pre-compensated) output only exists from the
+		// LogAndStream_Shimmer3R firmware that reports as v1.01.005. NB: that
+		// build is mislabelled - it already emits the pre-compensated format
+		// (the version string is due to be corrected to v1.01.006 in a later
+		// release), so gate on 1.01.005 to cover it.
+		// TODO temporary workaround: once the firmware version string is fixed
+		// to report v1.01.006, bump this threshold back to (1, 1, 6) and revert
+		// the note above so genuinely-old v1.01.005 builds are excluded again.
+		boolean fwEligible = svo.compareVersions(FW_ID.LOGANDSTREAM, 1, 1, 5);
 
 		return boardEligible && fwEligible;
 	}
