@@ -2660,6 +2660,9 @@ public class Configuration {
 			public final static int GYRO_ON_THE_FLY_CAL		= (1 << 7);
 			public final static int ORIENTATION_6DOF_QUAT 	= (1 << 8);
 			public final static int ORIENTATION_6DOF_EULER 	= (1 << 9);
+			/** Second-generation IMU (SR61-5/6, SR68-9/10). Bit assignment must stay
+			 * unique against any consumer that persists these derived-sensor bits. */
+			public final static int NON_WEAR_DETECTION_LSM6DSV	= (1 << 10);
 		}
 
 		public class SENSOR_ID {
