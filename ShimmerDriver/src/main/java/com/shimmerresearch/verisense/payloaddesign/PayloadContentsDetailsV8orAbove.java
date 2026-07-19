@@ -420,12 +420,18 @@ public class PayloadContentsDetailsV8orAbove extends PayloadContentsDetails {
 				// dataPacketSize*sampleCount recomputation cannot reproduce).
 				if(dataBlockDetails.isFirstPartOfSplitDataBlock() || dataBlockDetails.isSecondPartOfSplitDataBlock()) {
 					if(dataBlockDetails.datablockSensorId==DATABLOCK_SENSOR_ID.LSM6DSV) {
-						// A split FIFO block cannot be byte-walked from sample counts; supporting
-						// it needs a FIFO-entry-aware split. Fail loudly rather than misparse
-						// every subsequent block (no such recording exists yet - see DEV-793).
-						throw new IllegalStateException("Midday/midnight-split LSM6DSV FIFO data blocks are not supported by the byte-offset walk");
+						// A split tagged-FIFO block cannot be byte-walked from recomputed
+						// sample counts (the raw layout interleaves tag/mag/timestamp
+						// entries). Instead BOTH halves are handed the same raw block bytes
+						// and the LSM6DSV entry parser selects each half's aligned-sample
+						// range - so the first half advances by nothing and the second half
+						// advances by the raw on-disk size, keeping subsequent blocks aligned.
+						if(dataBlockDetails.isSecondPartOfSplitDataBlock()) {
+							currentByteIndex += dataBlockDetails.getQtySensorDataBytesInDatablockRaw();
+						}
+					} else {
+						currentByteIndex += dataBlockDetails.qtySensorDataBytesInDatablock;
 					}
-					currentByteIndex += dataBlockDetails.qtySensorDataBytesInDatablock;
 				} else {
 					currentByteIndex += dataBlockDetails.getQtySensorDataBytesInDatablockRaw();
 				}

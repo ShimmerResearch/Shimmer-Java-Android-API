@@ -2027,9 +2027,20 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 		int numEntries = (byteBuffer[currentByteIndex] & 0xFF) | ((byteBuffer[currentByteIndex+1] & 0xFF) << 8);
 		int entriesStart = currentByteIndex + 2;
 
+		boolean accelEn = isSensorEnabled(Configuration.Verisense.SENSOR_ID.LSM6DSV_ACCEL);
+		boolean gyroEn = isSensorEnabled(Configuration.Verisense.SENSOR_ID.LSM6DSV_GYRO);
+		boolean magEn = isSensorEnabled(Configuration.Verisense.SENSOR_ID.LSM6DSV_MAG);
+
+		// The aligned (accel/gyro) reference stream drives per-sample timing and, for
+		// midday/midnight-split blocks, defines each half's share of the FIFO. Each mag
+		// entry records how many reference entries preceded it in the FIFO so it can be
+		// assigned to the correct half by arrival order.
+		int refTag = accelEn ? LSM6DSV_TAG_ACCEL : LSM6DSV_TAG_GYRO;
 		List<byte[]> accelSamples = new ArrayList<byte[]>();
 		List<byte[]> gyroSamples = new ArrayList<byte[]>();
 		List<byte[]> magSamples = new ArrayList<byte[]>();
+		List<Integer> magAlignedPos = new ArrayList<Integer>();
+		int alignedSeen = 0;
 		for(int k=0;k<numEntries;k++) {
 			int eo = entriesStart + k*7;
 			int tag = ((byteBuffer[eo] & 0xFF) >> 3) & 0x1F;
@@ -2038,17 +2049,42 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 				System.arraycopy(byteBuffer, eo+1, xyz, 0, 6);
 				if(tag==LSM6DSV_TAG_ACCEL) { accelSamples.add(xyz); }
 				else if(tag==LSM6DSV_TAG_GYRO) { gyroSamples.add(xyz); }
-				else { magSamples.add(xyz); }
+				else {
+					magSamples.add(xyz);
+					magAlignedPos.add(alignedSeen);
+				}
+				if(tag==refTag) { alignedSeen++; }
 			}
 			// tag 0x04 (timestamp) intentionally skipped
 		}
 
-		boolean accelEn = isSensorEnabled(Configuration.Verisense.SENSOR_ID.LSM6DSV_ACCEL);
-		boolean gyroEn = isSensorEnabled(Configuration.Verisense.SENSOR_ID.LSM6DSV_GYRO);
-		boolean magEn = isSensorEnabled(Configuration.Verisense.SENSOR_ID.LSM6DSV_MAG);
+		int alignedCountFull = accelEn ? accelSamples.size() : (gyroEn ? gyroSamples.size() : 0);
 
-		int alignedCount = accelEn ? accelSamples.size() : (gyroEn ? gyroSamples.size() : 0);
-		int magCount = magEn ? magSamples.size() : 0;
+		// Midday/midnight-split support: both halves of a split block are handed the SAME
+		// raw block bytes (see the byte-offset walk in PayloadContentsDetailsV8orAbove);
+		// each half parses only its own aligned-sample range. The metadata-time split set
+		// each part's sampleCount in the aligned-sample domain.
+		int alignedFrom = 0;
+		int alignedTo = alignedCountFull;
+		if(dataBlockDetails.isFirstPartOfSplitDataBlock()) {
+			alignedTo = Math.min(dataBlockDetails.getSampleCount(), alignedCountFull);
+		} else if(dataBlockDetails.isSecondPartOfSplitDataBlock()) {
+			alignedFrom = Math.max(0, alignedCountFull - dataBlockDetails.getSampleCount());
+		}
+		int alignedCount = alignedTo - alignedFrom;
+
+		// Mag entries are assigned to a split half by FIFO arrival order relative to the
+		// aligned boundary: an entry that arrived before the first aligned sample of the
+		// second half belongs to the first half.
+		List<byte[]> magSamplesPart = new ArrayList<byte[]>();
+		if(magEn) {
+			for(int i=0;i<magSamples.size();i++) {
+				int pos = magAlignedPos.get(i);
+				boolean inPart = dataBlockDetails.isSecondPartOfSplitDataBlock() ? (pos > alignedFrom) : (pos <= alignedTo);
+				if(inPart) { magSamplesPart.add(magSamples.get(i)); }
+			}
+		}
+		int magCount = magSamplesPart.size();
 		dataBlockDetails.setupOjcArray(alignedCount + magCount);
 
 		// SensorDetails for per-stream enable toggling. Accel + gyro are synchronous (same
@@ -2078,7 +2114,7 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 				if(magDet!=null) { magDet.setIsEnabled(false); }
 				int alignedPacketSize = getExpectedDataPacketSize(SENSORS.LSM6DSV);
 				double timeMsCurrentSample = startTimeMs;
-				for(int i=0;i<alignedCount;i++) {
+				for(int i=alignedFrom;i<alignedTo;i++) {
 					byte[] byteBuf = new byte[alignedPacketSize];
 					int offset = 0;
 					if(accelEn && i<accelSamples.size()) { System.arraycopy(accelSamples.get(i), 0, byteBuf, offset, 6); }
@@ -2092,7 +2128,7 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 				}
 			}
 
-			// Pass 2: mag stream (only mag enabled), spread evenly across the block duration
+			// Pass 2: mag stream (only mag enabled), spread evenly across this part's duration
 			if(magCount>0) {
 				if(accelDet!=null) { accelDet.setIsEnabled(false); }
 				if(gyroDet!=null) { gyroDet.setIsEnabled(false); }
@@ -2112,7 +2148,7 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 				double magTimeMs = startTimeMs;
 				for(int i=0;i<magCount;i++) {
 					byte[] byteBuf = new byte[magPacketSize];
-					System.arraycopy(magSamples.get(i), 0, byteBuf, 0, 6);
+					System.arraycopy(magSamplesPart.get(i), 0, byteBuf, 0, 6);
 					ObjectCluster ojcCurrent = buildMsgForSensorList(byteBuf, commType, dataBlockDetails.listOfSensorClassKeys, magTimeMs);
 					dataHandler(ojcCurrent);
 					dataBlockDetails.setOjcArrayAtIndex(ojcIndex++, ojcCurrent);
