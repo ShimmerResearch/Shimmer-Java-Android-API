@@ -20,6 +20,11 @@ public class UsbDebugListenerMacOS extends UsbDebugListener {
     private int removedIterator = 0;
     private boolean suppressInitialDeviceScan = true;
 
+    // Held as fields so the JNA callbacks are not garbage-collected while the notifications
+    // are armed (a collected callback would crash the native run loop).
+    private IOKit.IOServiceMatchingCallback addCallback;
+    private IOKit.IOServiceMatchingCallback removeCallback;
+
     public UsbDebugListenerMacOS(UsbDockChangeListener listener) {
         this.listener = listener;
     }
@@ -35,8 +40,11 @@ public class UsbDebugListenerMacOS extends UsbDebugListener {
         listenerThread = new Thread(() -> {
             try {
                 runNotificationLoop();
-            } catch (Exception e) {
-                e.printStackTrace();
+            } catch (Throwable t) {
+                // Catch Throwable (not just Exception) so native-load failures such as
+                // UnsatisfiedLinkError/ExceptionInInitializerError degrade gracefully to
+                // polling instead of killing the thread with an unhandled error.
+                t.printStackTrace();
             } finally {
                 running = false;
                 cleanup();
@@ -73,8 +81,15 @@ public class UsbDebugListenerMacOS extends UsbDebugListener {
             throw new RuntimeException("CFRunLoopGetCurrent returned null");
         }
 
-        int mainPort = IOKit.INSTANCE.IOMainPort(0, new IntByReference());
-        System.out.println("[DEBUG] IOMainPort result = " + mainPort);
+        // IOMainPort returns a kern_return_t and writes the mach port into the out-parameter.
+        // The port (not the return code) must be passed to IONotificationPortCreate.
+        IntByReference mainPortRef = new IntByReference();
+        int mainPortResult = IOKit.INSTANCE.IOMainPort(0, mainPortRef);
+        System.out.println("[DEBUG] IOMainPort result = " + mainPortResult);
+        if (mainPortResult != 0) {
+            throw new RuntimeException("IOMainPort failed: " + mainPortResult);
+        }
+        int mainPort = mainPortRef.getValue();
 
         notificationPort = IOKit.INSTANCE.IONotificationPortCreate(mainPort);
         if (notificationPort == null) {
@@ -106,12 +121,12 @@ public class UsbDebugListenerMacOS extends UsbDebugListener {
             throw new RuntimeException("IOServiceMatching(IOUSBDevice) failed for remove");
         }
 
-        IOKit.IOServiceMatchingCallback addCallback = (refCon, iterator) -> {
+        addCallback = (refCon, iterator) -> {
             System.out.println("[DEBUG] Device arrival callback triggered");
             drainIterator(iterator, true, false);
         };
 
-        IOKit.IOServiceMatchingCallback removeCallback = (refCon, iterator) -> {
+        removeCallback = (refCon, iterator) -> {
             System.out.println("[DEBUG] Device removal callback triggered");
             drainIterator(iterator, false, false);
         };
