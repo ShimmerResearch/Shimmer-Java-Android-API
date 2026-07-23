@@ -104,7 +104,7 @@ public class SensorBMP581 extends SensorBMPX80 {
 
 	//--------- Configuration options start --------------
 	// BMP581 gains two extra oversampling steps (x64, x128) vs the BMP390 (0..5).
-	public static final String[] ListofPressureResolutionBMP581 = {"Lowest Power","Low","Standard","High","High Res","x32","x64","Highest Res"};
+	public static final String[] ListofPressureResolutionBMP581 = {"Lowest Power","Low","Standard","High","High Res","Very High Res","Ultra High Res","Highest Res"};
 	public static final Integer[] ListofPressureResolutionConfigValuesBMP581 = {0,1,2,3,4,5,6,7};
 	public static final String[] ListofPressureRateBMP581 = SensorBMP390.ListofPressureRateBMP390;
 	public static final Integer[] ListofPressureRateConfigValuesBMP581 = SensorBMP390.ListofPressureRateConfigValuesBMP390;
