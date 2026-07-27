@@ -2,6 +2,7 @@ package com.shimmerresearch.verisense.payloaddesign;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.ListIterator;
 import java.util.Map.Entry;
@@ -91,6 +92,12 @@ public class PayloadContentsDetailsV8orAbove extends PayloadContentsDetails {
 		}
 		
 		// --------- End of parsing ------------------
+
+		// The ambient-light sample rate isn't stored in the payload header (only
+		// gain/exposure are) and the achieved rate differs from both the configured
+		// rate and 1/exposure (per-measurement dead time), so refine it from the
+		// data itself before the block timings are back-filled below.
+		refineLightSamplingRateFromBlockTicks();
 
 		// Up to, and including, payload design v10, the real-world clock time that was
 		// stored in the payload footer was the real-world time at the end of the
@@ -304,6 +311,59 @@ public class PayloadContentsDetailsV8orAbove extends PayloadContentsDetails {
 			footerLength = BYTE_COUNT.PAYLOAD_CONTENTS_FOOTER_GEN8_ONLY;
 		}
 		return (bufferLength-currentByteIndex)<(footerLength+BYTE_COUNT.PAYLOAD_CRC);
+	}
+
+	/**
+	 * Derive the achieved ambient-light sample period from the spacing of
+	 * consecutive light-block end ticks and apply it to the light blocks' sampling
+	 * rate before their timings are back-filled. The light sample rate cannot be
+	 * read from the stored payload header (see SensorVD6283.getRateFreq), and each
+	 * light block holds a fixed number of samples, so
+	 * {@code inter-block ticks / samples-per-block} is the exact per-sample period.
+	 * With fewer than two light blocks in the payload the exposure-limited
+	 * estimate the blocks were created with is left in place.
+	 */
+	private void refineLightSamplingRateFromBlockTicks() {
+		List<DataBlockDetails> lightBlocks = new ArrayList<DataBlockDetails>();
+		for(DataBlockDetails dataBlockDetails:listOfDataBlocksInOrder) {
+			if(dataBlockDetails.datablockSensorId==DATABLOCK_SENSOR_ID.LIGHT) {
+				lightBlocks.add(dataBlockDetails);
+			}
+		}
+		if(lightBlocks.size()<2) {
+			return;
+		}
+
+		// v11+ payloads store microcontroller-clock ticks per block, earlier designs
+		// store real-world-clock ticks; either works as only deltas are used.
+		boolean useUcClockTicks = verisenseDevice.isPayloadDesignV11orAbove();
+		List<Double> perSamplePeriodsS = new ArrayList<Double>();
+		for(int i=1;i<lightBlocks.size();i++) {
+			VerisenseTimeDetails prev = useUcClockTicks? lightBlocks.get(i-1).getTimeDetailsUcClock():lightBlocks.get(i-1).getTimeDetailsRwc();
+			VerisenseTimeDetails curr = useUcClockTicks? lightBlocks.get(i).getTimeDetailsUcClock():lightBlocks.get(i).getTimeDetailsRwc();
+			// 3-byte tick counter at 32768 Hz; handle wrap (every ~512 s, far above the
+			// ~1 s light-block cadence).
+			long deltaTicks = (curr.getEndTimeTicks() - prev.getEndTimeTicks()) & 0xFFFFFF;
+			int sampleCount = lightBlocks.get(i).getSampleCount();
+			if(deltaTicks>0 && sampleCount>0) {
+				perSamplePeriodsS.add((deltaTicks/32768.0)/sampleCount);
+			}
+		}
+		if(perSamplePeriodsS.isEmpty()) {
+			return;
+		}
+		// Median so a dropped block (a 2x gap) can't skew the period.
+		Collections.sort(perSamplePeriodsS);
+		double medianPeriodS = perSamplePeriodsS.get(perSamplePeriodsS.size()/2);
+		if(!(medianPeriodS>0)) {
+			return;
+		}
+
+		double achievedRateHz = 1.0/medianPeriodS;
+		for(DataBlockDetails dataBlockDetails:lightBlocks) {
+			dataBlockDetails.setSamplingRate(achievedRateHz);
+			dataBlockDetails.calculateTimestampDiffInS();
+		}
 	}
 
 	private void backfillDataBlockRwcTimestamps() {

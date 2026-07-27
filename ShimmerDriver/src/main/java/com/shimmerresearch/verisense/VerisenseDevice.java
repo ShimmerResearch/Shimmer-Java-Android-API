@@ -66,6 +66,7 @@ import com.shimmerresearch.verisense.sensors.SensorGSRVerisense;
 import com.shimmerresearch.verisense.sensors.SensorLIS2DW12;
 import com.shimmerresearch.verisense.sensors.SensorLSM6DS3;
 import com.shimmerresearch.verisense.sensors.SensorLSM6DSV;
+import com.shimmerresearch.verisense.sensors.SensorVD6283;
 import com.shimmerresearch.verisense.sensors.SensorMAX86150;
 import com.shimmerresearch.verisense.sensors.SensorMAX86916;
 import com.shimmerresearch.verisense.sensors.SensorMAX86XXX;
@@ -587,6 +588,7 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 			if((gen2Cfg0 & (1<<5))!=0) { enabledSensors |= Configuration.Verisense.SensorBitmap.LSM6DSV_GYRO; }
 			int gen2GenCfg3 = configBytes[PAYLOAD_CONFIG_BYTE_INDEX.GEN_CFG_3] & 0xFF;
 			if((gen2GenCfg3 & (1<<2))!=0) { enabledSensors |= Configuration.Verisense.SensorBitmap.LSM6DSV_MAG; }
+			if((gen2GenCfg3 & (1<<3))!=0) { enabledSensors |= Configuration.Verisense.SensorBitmap.VD6283; }
 		}
 		setEnabledAndDerivedSensorsAndUpdateMaps(enabledSensors, mDerivedSensors, commType);
 		
@@ -1056,6 +1058,32 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 			sb.append(SENSOR_CONFIG_STRINGS.RESOLUTION);
 			sb.append("16-bit");
 			sb.append("}");
+		} else if(sensorClassKey==AbstractSensor.SENSORS.VD6283
+				&& isSensorEnabled(Configuration.Verisense.SENSOR_ID.VD6283)) {
+			// Second-generation ambient light. The configured sample rate isn't stored
+			// in the payload header, so only the calculated (achieved) rate is reported.
+			SensorVD6283 sensorVd6283 = getSensorVD6283();
+
+			sb.append(sensorClassKey.toString());
+			sb.append(" {Sampling Rate [");
+			sb.append(SENSOR_CONFIG_STRINGS.SAMPLING_RATE_CALCULATED);
+			if(!Double.isNaN(calculatedSamplingRate)) {
+				sb.append(UtilVerisenseDriver.formatDoubleToNdecimalPlaces(calculatedSamplingRate, 3));
+				sb.append(" ");
+				sb.append(CHANNEL_UNITS.FREQUENCY);
+			} else {
+				sb.append(UtilVerisenseDriver.UNAVAILABLE);
+			}
+			sb.append("]; Gain = ");
+			sb.append(UtilVerisenseDriver.formatDoubleToNdecimalPlaces(sensorVd6283.getGain(), 2));
+			sb.append("x; Exposure = ");
+			sb.append(UtilVerisenseDriver.formatDoubleToNdecimalPlaces(sensorVd6283.getExposureUs()/1000.0, 1));
+			sb.append(" ms; Slot1 = ");
+			sb.append(sensorVd6283.isDarkChannelEnabled() ? "Dark" : "Visible");
+			sb.append("; ");
+			sb.append(SENSOR_CONFIG_STRINGS.RESOLUTION);
+			sb.append("24-bit");
+			sb.append("}");
 		} else if(LIST_OF_PPG_SENSORS.contains(sensorClassKey) && isHwPpgAndAnyMaxChEnabled()) {
 			AbstractSensor abstractSensor = getAbstractSensorPpg();
 			if(abstractSensor!=null) {
@@ -1360,6 +1388,8 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 		if(isPayloadDesignV13orAbove()) {
 			// Second-generation IMU (LSM6DSV accel/gyro + LIS2MDL mag via sensor hub)
 			addSensorClass(SENSORS.LSM6DSV, new SensorLSM6DSV(this));
+			// Second-generation ambient light
+			addSensorClass(SENSORS.VD6283, new SensorVD6283(this));
 		} else if(doesHwSupportLsm6ds3()) {
 			addSensorClass(SENSORS.LSM6DS3, new SensorLSM6DS3(this));
 		}
@@ -1573,6 +1603,9 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 			case LSM6DSV:
 				listOfSensorIds.add(SENSORS.LSM6DSV);
 				break;
+			case LIGHT:
+				listOfSensorIds.add(SENSORS.VD6283);
+				break;
 			case PPG:
 				SENSORS sensorClassKey = getPpgSensorClassKey();
 				if(sensorClassKey!=null) {
@@ -1593,6 +1626,11 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 		switch(sensorClassKey) {
 			case LIS2DW12:
 				dataBlockSize = SensorLIS2DW12.FIFO_SIZE_IN_CHIP;
+				break;
+			case VD6283:
+				// Fixed-size block: the firmware only emits FULL blocks of
+				// NUM_LIGHT_SAMPLES_PER_BLOCK samples (partials are discarded on stop).
+				dataBlockSize = SensorVD6283.BLOCK_DATA_BYTES;
 				break;
 			case LSM6DS3:
 				AbstractSensor abstractSensor = getSensorClass(SENSORS.LSM6DS3);
@@ -1886,7 +1924,7 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 		// without a getSensorKeysForDatablockId()/calculateFifoBlockSize() handler
 		// would corrupt the parse, so they are rejected with the informative
 		// exception below until their decoders are implemented.
-		if(sensorId>0 && sensorId<=DATABLOCK_SENSOR_ID.LSM6DSV.ordinal()) {
+		if(sensorId>0 && sensorId<=DATABLOCK_SENSOR_ID.LIGHT.ordinal()) {
 			DATABLOCK_SENSOR_ID datablockSensorId = payloadSensorIdValues[sensorId];
 			
 			List<SENSORS> listOfSensorClassKeys = getOrCreateListOfSensorClassKeysForDataBlockId(datablockSensorId);
@@ -2324,6 +2362,14 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 		AbstractSensor abstractSensor = getSensorClass(SENSORS.LSM6DSV);
 		if(abstractSensor!=null && abstractSensor instanceof SensorLSM6DSV) {
 			return (SensorLSM6DSV) abstractSensor;
+		}
+		return null;
+	}
+
+	public SensorVD6283 getSensorVD6283() {
+		AbstractSensor abstractSensor = getSensorClass(SENSORS.VD6283);
+		if(abstractSensor!=null && abstractSensor instanceof SensorVD6283) {
+			return (SensorVD6283) abstractSensor;
 		}
 		return null;
 	}

@@ -42,6 +42,11 @@ public class AsmBinaryFileConstants {
 		// Second-generation (payload design v13) only: GEN_CFG_3 at abs byte 29 (rel 25)
 		// carries the mag/light/skin-temp/algo-hub enables + LED mode.
 		public static final int GEN_CFG_3 = 25;
+		/** Second-generation only: ambient-light gain index in bits 2:0 and the
+		 * dark-channel enable in bit 7 (abs byte 30). */
+		public static final int LIGHT_GAIN_AND_DARK = 26;
+		/** Second-generation only: ambient-light exposure index (abs byte 31). */
+		public static final int LIGHT_EXPOSURE = 27;
 	}
 	
 	public class BYTE_COUNT {
