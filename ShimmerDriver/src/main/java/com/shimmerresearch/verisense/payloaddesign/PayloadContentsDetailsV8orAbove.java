@@ -93,11 +93,13 @@ public class PayloadContentsDetailsV8orAbove extends PayloadContentsDetails {
 		
 		// --------- End of parsing ------------------
 
-		// The ambient-light sample rate isn't stored in the payload header (only
-		// gain/exposure are) and the achieved rate differs from both the configured
-		// rate and 1/exposure (per-measurement dead time), so refine it from the
-		// data itself before the block timings are back-filled below.
-		refineLightSamplingRateFromBlockTicks();
+		// The slow sensors' achieved sample rates differ from what the payload
+		// header can tell us (the light rate isn't stored at all and the chip adds
+		// per-measurement dead time; the skin-temp output cadence is refresh-code
+		// derived but similarly approximate), so refine them from the data itself
+		// before the block timings are back-filled below.
+		refineSlowSensorSamplingRateFromBlockTicks(DATABLOCK_SENSOR_ID.LIGHT);
+		refineSlowSensorSamplingRateFromBlockTicks(DATABLOCK_SENSOR_ID.SKIN_TEMP);
 
 		// Up to, and including, payload design v10, the real-world clock time that was
 		// stored in the payload footer was the real-world time at the end of the
@@ -314,19 +316,20 @@ public class PayloadContentsDetailsV8orAbove extends PayloadContentsDetails {
 	}
 
 	/**
-	 * Derive the achieved ambient-light sample period from the spacing of
-	 * consecutive light-block end ticks and apply it to the light blocks' sampling
-	 * rate before their timings are back-filled. The light sample rate cannot be
-	 * read from the stored payload header (see SensorVD6283.getRateFreq), and each
-	 * light block holds a fixed number of samples, so
+	 * Derive a slow sensor's (ambient light / skin temp) achieved sample period
+	 * from the spacing of consecutive same-sensor block end ticks and apply it to
+	 * those blocks' sampling rate before their timings are back-filled. The
+	 * header-derived rates are only estimates (the light rate isn't stored at all
+	 * - see SensorVD6283.getRateFreq - and the skin-temp cadence is refresh-code
+	 * derived), and each block holds a fixed number of samples, so
 	 * {@code inter-block ticks / samples-per-block} is the exact per-sample period.
-	 * With fewer than two light blocks in the payload the exposure-limited
-	 * estimate the blocks were created with is left in place.
+	 * With fewer than two blocks in the payload the header-derived estimate the
+	 * blocks were created with is left in place.
 	 */
-	private void refineLightSamplingRateFromBlockTicks() {
+	private void refineSlowSensorSamplingRateFromBlockTicks(DATABLOCK_SENSOR_ID slowSensorId) {
 		List<DataBlockDetails> lightBlocks = new ArrayList<DataBlockDetails>();
 		for(DataBlockDetails dataBlockDetails:listOfDataBlocksInOrder) {
-			if(dataBlockDetails.datablockSensorId==DATABLOCK_SENSOR_ID.LIGHT) {
+			if(dataBlockDetails.datablockSensorId==slowSensorId) {
 				lightBlocks.add(dataBlockDetails);
 			}
 		}

@@ -66,6 +66,7 @@ import com.shimmerresearch.verisense.sensors.SensorGSRVerisense;
 import com.shimmerresearch.verisense.sensors.SensorLIS2DW12;
 import com.shimmerresearch.verisense.sensors.SensorLSM6DS3;
 import com.shimmerresearch.verisense.sensors.SensorLSM6DSV;
+import com.shimmerresearch.verisense.sensors.SensorMLX90632;
 import com.shimmerresearch.verisense.sensors.SensorVD6283;
 import com.shimmerresearch.verisense.sensors.SensorMAX86150;
 import com.shimmerresearch.verisense.sensors.SensorMAX86916;
@@ -589,6 +590,7 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 			int gen2GenCfg3 = configBytes[PAYLOAD_CONFIG_BYTE_INDEX.GEN_CFG_3] & 0xFF;
 			if((gen2GenCfg3 & (1<<2))!=0) { enabledSensors |= Configuration.Verisense.SensorBitmap.LSM6DSV_MAG; }
 			if((gen2GenCfg3 & (1<<3))!=0) { enabledSensors |= Configuration.Verisense.SensorBitmap.VD6283; }
+			if((gen2GenCfg3 & (1<<4))!=0) { enabledSensors |= Configuration.Verisense.SensorBitmap.MLX90632; }
 		}
 		setEnabledAndDerivedSensorsAndUpdateMaps(enabledSensors, mDerivedSensors, commType);
 		
@@ -1084,6 +1086,23 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 			sb.append(SENSOR_CONFIG_STRINGS.RESOLUTION);
 			sb.append("24-bit");
 			sb.append("}");
+		} else if(sensorClassKey==AbstractSensor.SENSORS.MLX90632
+				&& isSensorEnabled(Configuration.Verisense.SENSOR_ID.MLX90632)) {
+			// Second-generation skin temperature.
+			SensorMLX90632 sensorMlx90632 = getSensorMLX90632();
+
+			sb.append(generateCalcSamplingRateConfigStr(sensorClassKey, sensorMlx90632.getRateFreq(), calculatedSamplingRate));
+
+			sb.append("Refresh = ");
+			sb.append(UtilVerisenseDriver.formatDoubleToNdecimalPlaces(sensorMlx90632.getRefreshHz(), 1));
+			sb.append(" ");
+			sb.append(CHANNEL_UNITS.FREQUENCY);
+			sb.append("; Mode = ");
+			sb.append(sensorMlx90632.getMeasTypeString());
+			sb.append("; ");
+			sb.append(SENSOR_CONFIG_STRINGS.RESOLUTION);
+			sb.append("16-bit");
+			sb.append("}");
 		} else if(LIST_OF_PPG_SENSORS.contains(sensorClassKey) && isHwPpgAndAnyMaxChEnabled()) {
 			AbstractSensor abstractSensor = getAbstractSensorPpg();
 			if(abstractSensor!=null) {
@@ -1388,8 +1407,9 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 		if(isPayloadDesignV13orAbove()) {
 			// Second-generation IMU (LSM6DSV accel/gyro + LIS2MDL mag via sensor hub)
 			addSensorClass(SENSORS.LSM6DSV, new SensorLSM6DSV(this));
-			// Second-generation ambient light
+			// Second-generation ambient light + skin temperature
 			addSensorClass(SENSORS.VD6283, new SensorVD6283(this));
+			addSensorClass(SENSORS.MLX90632, new SensorMLX90632(this));
 		} else if(doesHwSupportLsm6ds3()) {
 			addSensorClass(SENSORS.LSM6DS3, new SensorLSM6DS3(this));
 		}
@@ -1606,6 +1626,9 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 			case LIGHT:
 				listOfSensorIds.add(SENSORS.VD6283);
 				break;
+			case SKIN_TEMP:
+				listOfSensorIds.add(SENSORS.MLX90632);
+				break;
 			case PPG:
 				SENSORS sensorClassKey = getPpgSensorClassKey();
 				if(sensorClassKey!=null) {
@@ -1631,6 +1654,10 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 				// Fixed-size block: the firmware only emits FULL blocks of
 				// NUM_LIGHT_SAMPLES_PER_BLOCK samples (partials are discarded on stop).
 				dataBlockSize = SensorVD6283.BLOCK_DATA_BYTES;
+				break;
+			case MLX90632:
+				// Fixed-size block: full blocks of NUM_TEMP_SAMPLES_PER_BLOCK samples only.
+				dataBlockSize = SensorMLX90632.BLOCK_DATA_BYTES;
 				break;
 			case LSM6DS3:
 				AbstractSensor abstractSensor = getSensorClass(SENSORS.LSM6DS3);
@@ -1924,7 +1951,9 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 		// without a getSensorKeysForDatablockId()/calculateFifoBlockSize() handler
 		// would corrupt the parse, so they are rejected with the informative
 		// exception below until their decoders are implemented.
-		if(sensorId>0 && sensorId<=DATABLOCK_SENSOR_ID.LIGHT.ordinal()) {
+		// Parse-supported block ids: everything up to LIGHT (7), plus SKIN_TEMP (9).
+		// ALGO_HUB (8) and FLICKER (10) still fail loudly below until their decoders land.
+		if(sensorId>0 && (sensorId<=DATABLOCK_SENSOR_ID.LIGHT.ordinal() || sensorId==DATABLOCK_SENSOR_ID.SKIN_TEMP.ordinal())) {
 			DATABLOCK_SENSOR_ID datablockSensorId = payloadSensorIdValues[sensorId];
 			
 			List<SENSORS> listOfSensorClassKeys = getOrCreateListOfSensorClassKeysForDataBlockId(datablockSensorId);
@@ -2370,6 +2399,14 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 		AbstractSensor abstractSensor = getSensorClass(SENSORS.VD6283);
 		if(abstractSensor!=null && abstractSensor instanceof SensorVD6283) {
 			return (SensorVD6283) abstractSensor;
+		}
+		return null;
+	}
+
+	public SensorMLX90632 getSensorMLX90632() {
+		AbstractSensor abstractSensor = getSensorClass(SENSORS.MLX90632);
+		if(abstractSensor!=null && abstractSensor instanceof SensorMLX90632) {
+			return (SensorMLX90632) abstractSensor;
 		}
 		return null;
 	}

@@ -2649,6 +2649,8 @@ public class Configuration {
 			public static final int LSM6DSV_MAG				= 1 << (2 + (8*0));
 			/** VD6283TX45 ambient light (second-generation HW); enable is GEN_CFG_3 bit 3. */
 			public static final int VD6283					= 1 << (1 + (8*0));
+			/** MLX90632 skin temperature (second-generation HW); enable is GEN_CFG_3 bit 4. */
+			public static final int MLX90632				= 1 << (0 + (8*0));
 		}
 		
 		public class DerivedSensorsBitMask {
@@ -2685,6 +2687,7 @@ public class Configuration {
 			public static final int LSM6DSV_GYRO			= 2016;
 			public static final int LSM6DSV_MAG				= 2017;
 			public static final int VD6283					= 2018;
+			public static final int MLX90632				= 2019;
 		}
 		
 		public enum LABEL_SENSOR_TILE{
