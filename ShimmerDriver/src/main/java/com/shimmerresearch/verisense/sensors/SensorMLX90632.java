@@ -78,7 +78,8 @@ public class SensorMLX90632 extends AbstractSensor {
 			Configuration.Verisense.SensorBitmap.MLX90632,
 			GuiLabelSensors.SKIN_TEMP,
 			CompatibilityInfoForMaps.listOfCompatibleVersionInfoLSM6DSV,
-			Arrays.asList(Configuration.Verisense.SENSOR_ID.MLX90632),
+			// listOfSensorIdsConflicting - none (gen-1 convention, e.g. SENSOR_GSR_VERISENSE)
+			new java.util.ArrayList<Integer>(),
 			Arrays.asList(),
 			Arrays.asList(ObjectClusterSensorName.SKIN_TEMP_OBJECT,
 					ObjectClusterSensorName.SKIN_TEMP_AMBIENT),

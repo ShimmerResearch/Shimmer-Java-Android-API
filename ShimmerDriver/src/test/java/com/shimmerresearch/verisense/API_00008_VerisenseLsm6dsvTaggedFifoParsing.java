@@ -98,6 +98,10 @@ public class API_00008_VerisenseLsm6dsvTaggedFifoParsing {
 		return ojc.getFormatClusterValue(channelName, CHANNEL_TYPE.UNCAL.toString());
 	}
 
+	private static double cal(ObjectCluster ojc, String channelName) {
+		return ojc.getFormatClusterValue(channelName, CHANNEL_TYPE.CAL.toString());
+	}
+
 	/** Accel + gyro interleaved 1:1 with a mag sample and a timestamp entry mixed in. */
 	@Test
 	public void test001_accelGyroMagInterleaved() throws Exception {
@@ -134,6 +138,16 @@ public class API_00008_VerisenseLsm6dsvTaggedFifoParsing {
 		assertEquals(150, uncal(magOjc, SensorLSM6DSV.ObjectClusterSensorName.LIS2MDL_MAG_Z), 0.001);
 		assertTrue(Double.isNaN(uncal(magOjc, SensorLSM6DSV.ObjectClusterSensorName.LSM6DSV_ACC_X)));
 		assertTrue(Double.isNaN(uncal(magOjc, SensorLSM6DSV.ObjectClusterSensorName.LSM6DSV_GYRO_X)));
+
+		// CAL assertions - regression-locks the calibration constants against
+		// LITERAL expected values (the gyro sensitivity was ~12.8% wrong before the
+		// DEV-793 round-2 review fix; deriving the expectation from the class
+		// constants would defeat the lock). Defaults: accel +/-4 g = 835.3517
+		// LSB/(m/s^2); gyro +/-500 dps = 57.142857 LSB/dps (ST 17.50 mdps/LSB).
+		assertEquals(100 / 835.3517, cal(aligned0, SensorLSM6DSV.ObjectClusterSensorName.LSM6DSV_ACC_X), 0.0001);
+		assertEquals(-200 / 835.3517, cal(aligned0, SensorLSM6DSV.ObjectClusterSensorName.LSM6DSV_ACC_Y), 0.0001);
+		assertEquals(10 / 57.142857143, cal(aligned0, SensorLSM6DSV.ObjectClusterSensorName.LSM6DSV_GYRO_X), 0.0001);
+		assertEquals(-20 / 57.142857143, cal(aligned0, SensorLSM6DSV.ObjectClusterSensorName.LSM6DSV_GYRO_Y), 0.0001);
 	}
 
 	/** Gyro-only: gyro acts as the aligned reference stream. */

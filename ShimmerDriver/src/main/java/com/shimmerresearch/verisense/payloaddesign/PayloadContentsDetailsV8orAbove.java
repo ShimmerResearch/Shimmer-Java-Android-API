@@ -327,13 +327,13 @@ public class PayloadContentsDetailsV8orAbove extends PayloadContentsDetails {
 	 * blocks were created with is left in place.
 	 */
 	private void refineSlowSensorSamplingRateFromBlockTicks(DATABLOCK_SENSOR_ID slowSensorId) {
-		List<DataBlockDetails> lightBlocks = new ArrayList<DataBlockDetails>();
+		List<DataBlockDetails> slowSensorBlocks = new ArrayList<DataBlockDetails>();
 		for(DataBlockDetails dataBlockDetails:listOfDataBlocksInOrder) {
 			if(dataBlockDetails.datablockSensorId==slowSensorId) {
-				lightBlocks.add(dataBlockDetails);
+				slowSensorBlocks.add(dataBlockDetails);
 			}
 		}
-		if(lightBlocks.size()<2) {
+		if(slowSensorBlocks.size()<2) {
 			return;
 		}
 
@@ -341,13 +341,19 @@ public class PayloadContentsDetailsV8orAbove extends PayloadContentsDetails {
 		// store real-world-clock ticks; either works as only deltas are used.
 		boolean useUcClockTicks = verisenseDevice.isPayloadDesignV11orAbove();
 		List<Double> perSamplePeriodsS = new ArrayList<Double>();
-		for(int i=1;i<lightBlocks.size();i++) {
-			VerisenseTimeDetails prev = useUcClockTicks? lightBlocks.get(i-1).getTimeDetailsUcClock():lightBlocks.get(i-1).getTimeDetailsRwc();
-			VerisenseTimeDetails curr = useUcClockTicks? lightBlocks.get(i).getTimeDetailsUcClock():lightBlocks.get(i).getTimeDetailsRwc();
-			// 3-byte tick counter at 32768 Hz; handle wrap (every ~512 s, far above the
-			// ~1 s light-block cadence).
-			long deltaTicks = (curr.getEndTimeTicks() - prev.getEndTimeTicks()) & 0xFFFFFF;
-			int sampleCount = lightBlocks.get(i).getSampleCount();
+		for(int i=1;i<slowSensorBlocks.size();i++) {
+			VerisenseTimeDetails prev = useUcClockTicks? slowSensorBlocks.get(i-1).getTimeDetailsUcClock():slowSensorBlocks.get(i-1).getTimeDetailsRwc();
+			VerisenseTimeDetails curr = useUcClockTicks? slowSensorBlocks.get(i).getTimeDetailsUcClock():slowSensorBlocks.get(i).getTimeDetailsRwc();
+			// The per-block ticks are a SUB-MINUTE counter (resets at
+			// TICKS_PER_MINUTE, 32768 Hz x 60 s - the same semantics the
+			// minute-rollover logic in backfillDataBlockUcClockOrRwcTimestamps
+			// depends on), so a minute-boundary crossing shows as a negative
+			// delta that must be re-based by one minute - NOT wrapped at 2^24.
+			long deltaTicks = curr.getEndTimeTicks() - prev.getEndTimeTicks();
+			if(deltaTicks<0) {
+				deltaTicks += (long) AsmBinaryFileConstants.TICKS_PER_MINUTE;
+			}
+			int sampleCount = slowSensorBlocks.get(i).getSampleCount();
 			if(deltaTicks>0 && sampleCount>0) {
 				perSamplePeriodsS.add((deltaTicks/32768.0)/sampleCount);
 			}
@@ -363,9 +369,30 @@ public class PayloadContentsDetailsV8orAbove extends PayloadContentsDetails {
 		}
 
 		double achievedRateHz = 1.0/medianPeriodS;
-		for(DataBlockDetails dataBlockDetails:lightBlocks) {
+		for(DataBlockDetails dataBlockDetails:slowSensorBlocks) {
 			dataBlockDetails.setSamplingRate(achievedRateHz);
 			dataBlockDetails.calculateTimestampDiffInS();
+		}
+
+		// Seed the CSV gap-splitting window from the OBSERVED period spread rather
+		// than a single-rate +/-10% band. The header-derived estimate can sit within
+		// ~1% of the band edge (VD6283: 10 Hz estimated vs ~9.09 Hz achieved), and
+		// the slow sensors' cadence is inherently bimodal (exposure vs exposure +
+		// dead time: ~100 vs ~110 ms for the light at the default exposure), so a
+		// band centred on ANY single rate can clip real spacing and fragment the
+		// CSV. Spanning [min, max] observed period with the standard tolerance keeps
+		// everything seen continuous while a dropped block (2x period) still splits.
+		// populateExpectedPayloadTsDiffLimitMapIfNeeded runs after this and is
+		// containsKey-guarded, so this seeding wins.
+		double minPeriodS = perSamplePeriodsS.get(0);
+		double maxPeriodS = perSamplePeriodsS.get(perSamplePeriodsS.size()-1);
+		double[] samplingRateLimits = new double[] {
+				(1.0/maxPeriodS)*UtilCsvSplitting.FILE_GAP_TOLERANCE_MULTIPLIER.LOWER,
+				(1.0/minPeriodS)*UtilCsvSplitting.FILE_GAP_TOLERANCE_MULTIPLIER.UPPER};
+		for(SENSORS sensorClassKey:verisenseDevice.getOrCreateListOfSensorClassKeysForDataBlockId(slowSensorId)) {
+			if(sensorClassKey!=SENSORS.CLOCK && !UtilCsvSplitting.SAMPLING_RATE_LIMITS_PER_SENSOR.containsKey(sensorClassKey)) {
+				UtilCsvSplitting.SAMPLING_RATE_LIMITS_PER_SENSOR.put(sensorClassKey, samplingRateLimits);
+			}
 		}
 	}
 

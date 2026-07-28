@@ -297,7 +297,8 @@ public class SensorLSM6DSV extends AbstractSensor {
 			Configuration.Verisense.SensorBitmap.LSM6DSV_ACCEL,
 			GuiLabelSensors.ACCEL2,
 			CompatibilityInfoForMaps.listOfCompatibleVersionInfoLSM6DSV,
-			Arrays.asList(Configuration.Verisense.SENSOR_ID.LSM6DSV_ACCEL),
+			// listOfSensorIdsConflicting - none (gen-1 convention, e.g. SENSOR_GSR_VERISENSE)
+			new java.util.ArrayList<Integer>(),
 			Arrays.asList(GuiLabelConfig.LSM6DSV_ACCEL_RANGE, GuiLabelConfig.LSM6DSV_GYRO_RANGE, GuiLabelConfig.LSM6DSV_RATE),
 			Arrays.asList(ObjectClusterSensorName.LSM6DSV_ACC_X, ObjectClusterSensorName.LSM6DSV_ACC_Y, ObjectClusterSensorName.LSM6DSV_ACC_Z),
 			false);
@@ -307,7 +308,8 @@ public class SensorLSM6DSV extends AbstractSensor {
 			Configuration.Verisense.SensorBitmap.LSM6DSV_GYRO,
 			GuiLabelSensors.GYRO,
 			CompatibilityInfoForMaps.listOfCompatibleVersionInfoLSM6DSV,
-			Arrays.asList(Configuration.Verisense.SENSOR_ID.LSM6DSV_GYRO),
+			// listOfSensorIdsConflicting - none (gen-1 convention, e.g. SENSOR_GSR_VERISENSE)
+			new java.util.ArrayList<Integer>(),
 			Arrays.asList(GuiLabelConfig.LSM6DSV_ACCEL_RANGE, GuiLabelConfig.LSM6DSV_GYRO_RANGE, GuiLabelConfig.LSM6DSV_RATE),
 			Arrays.asList(ObjectClusterSensorName.LSM6DSV_GYRO_X, ObjectClusterSensorName.LSM6DSV_GYRO_Y, ObjectClusterSensorName.LSM6DSV_GYRO_Z),
 			false);
@@ -317,7 +319,8 @@ public class SensorLSM6DSV extends AbstractSensor {
 			Configuration.Verisense.SensorBitmap.LSM6DSV_MAG,
 			GuiLabelSensors.MAG,
 			CompatibilityInfoForMaps.listOfCompatibleVersionInfoLSM6DSV,
-			Arrays.asList(Configuration.Verisense.SENSOR_ID.LSM6DSV_MAG),
+			// listOfSensorIdsConflicting - none (gen-1 convention, e.g. SENSOR_GSR_VERISENSE)
+			new java.util.ArrayList<Integer>(),
 			Arrays.asList(GuiLabelConfig.LIS2MDL_RATE),
 			Arrays.asList(ObjectClusterSensorName.LIS2MDL_MAG_X, ObjectClusterSensorName.LIS2MDL_MAG_Y, ObjectClusterSensorName.LIS2MDL_MAG_Z),
 			false);

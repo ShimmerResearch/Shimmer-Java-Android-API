@@ -68,7 +68,12 @@ public class SensorVD6283 extends AbstractSensor {
 	public static final int[] EXPOSURE_US_TABLE = {100000, 1600, 6400, 12800, 25600, 51200, 102400, 204800};
 	/** Op-config index -> 8.8 fixed-point gain (firmware vd6283_gainIndexToValue). */
 	public static final int[] GAIN_8P8_TABLE = {0x0100, 0x01AB, 0x0280, 0x0500, 0x0A00, 0x1900, 0x3200, 0x42AB};
-	/** Reference exposure the normalisation is relative to (firmware VD6283TX_DEFAULT_EXPO). */
+	/** Reference exposure the normalisation is relative to (firmware
+	 * VD6283TX_DEFAULT_EXPO = 100800). NOTE this deliberately differs from
+	 * EXPOSURE_US_TABLE[0] (100000): the firmware normalises against 100800
+	 * regardless of the configured exposure, so a 1.008 scale factor at the
+	 * default exposure is firmware-faithful (verified against App_vd6283tx.c;
+	 * the web SDK uses the same pair). */
 	public static final double DEFAULT_EXPO_US = 100800;
 	/** ALS-counts -> XYZ matrix (firmware App_vd6283tx.c). Rows are X, Y, Z. */
 	private static final double[][] XYZ_MATRIX = {
@@ -118,7 +123,8 @@ public class SensorVD6283 extends AbstractSensor {
 			Configuration.Verisense.SensorBitmap.VD6283,
 			GuiLabelSensors.LIGHT,
 			CompatibilityInfoForMaps.listOfCompatibleVersionInfoLSM6DSV,
-			Arrays.asList(Configuration.Verisense.SENSOR_ID.VD6283),
+			// listOfSensorIdsConflicting - none (gen-1 convention, e.g. SENSOR_GSR_VERISENSE)
+			new java.util.ArrayList<Integer>(),
 			Arrays.asList(),
 			Arrays.asList(ObjectClusterSensorName.LIGHT_RED,
 					ObjectClusterSensorName.LIGHT_VISIBLE,
@@ -173,6 +179,11 @@ public class SensorVD6283 extends AbstractSensor {
 		aMap.put(ObjectClusterSensorName.LIGHT_LUX, CHANNEL_LIGHT_LUX);
 		aMap.put(ObjectClusterSensorName.LIGHT_CCT, CHANNEL_LIGHT_CCT);
 		CHANNEL_MAP_REF = Collections.unmodifiableMap(aMap);
+
+		// Computed (API-side) channels, not part of the on-disk packet - repo
+		// convention per SensorGSR.
+		CHANNEL_LIGHT_LUX.mChannelSource = ChannelDetails.CHANNEL_SOURCE.API;
+		CHANNEL_LIGHT_CCT.mChannelSource = ChannelDetails.CHANNEL_SOURCE.API;
 	}
 	//--------- Channel info end --------------
 
@@ -253,8 +264,17 @@ public class SensorVD6283 extends AbstractSensor {
 		if (norm != 0) {
 			double x = X / norm;
 			double y = Y / norm;
-			double n = (x - 0.3320) / (0.1858 - y);
-			cct = 449*n*n*n + 3525*n*n + 6823.3*n + 5520.33;
+			double denominator = 0.1858 - y;
+			if (denominator != 0) {
+				double n = (x - 0.3320) / denominator;
+				cct = 449*n*n*n + 3525*n*n + 6823.3*n + 5520.33;
+			}
+			// McCamy's polynomial is only meaningful for positive colour
+			// temperatures; clamp the out-of-gamut cases (like lux above) so
+			// no negative/undefined CCT reaches the CSV.
+			if (!(cct > 0) || Double.isInfinite(cct)) {
+				cct = 0;
+			}
 		}
 		return new double[] {lux, cct};
 	}

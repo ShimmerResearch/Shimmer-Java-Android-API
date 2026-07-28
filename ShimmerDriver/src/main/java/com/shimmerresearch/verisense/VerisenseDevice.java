@@ -1945,15 +1945,20 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 		
 		DataBlockDetails dataBlockDetails = null;
 		DATABLOCK_SENSOR_ID[] payloadSensorIdValues = DATABLOCK_SENSOR_ID.values();
-		// Only IDs with a parse implementation are accepted. The enum intentionally
-		// declares the remaining second-generation block IDs (LIGHT, ALGO_HUB,
-		// SKIN_TEMP, FLICKER) ahead of their parser support - accepting them here
-		// without a getSensorKeysForDatablockId()/calculateFifoBlockSize() handler
-		// would corrupt the parse, so they are rejected with the informative
-		// exception below until their decoders are implemented.
-		// Parse-supported block ids: everything up to LIGHT (7), plus SKIN_TEMP (9).
-		// ALGO_HUB (8) and FLICKER (10) still fail loudly below until their decoders land.
-		if(sensorId>0 && (sensorId<=DATABLOCK_SENSOR_ID.LIGHT.ordinal() || sensorId==DATABLOCK_SENSOR_ID.SKIN_TEMP.ordinal())) {
+		// Only IDs with a parse implementation are accepted; anything else is
+		// rejected with the informative exception below (accepting an unhandled ID
+		// would corrupt the parse). Parse-supported: the gen-1 ids (1-5) on any
+		// payload design, and the second-generation ids LSM6DSV (6), LIGHT (7) and
+		// SKIN_TEMP (9) on payload design v13+ only - their sensor classes are only
+		// registered for v13+ devices, so a (corrupt) pre-v13 file carrying one of
+		// those ids must fail loudly here rather than NPE further down. ALGO_HUB (8)
+		// and FLICKER (10) still fail loudly until their decoders land.
+		boolean isGen2DataBlockSensorId = sensorId==DATABLOCK_SENSOR_ID.LSM6DSV.ordinal()
+				|| sensorId==DATABLOCK_SENSOR_ID.LIGHT.ordinal()
+				|| sensorId==DATABLOCK_SENSOR_ID.SKIN_TEMP.ordinal();
+		boolean isParseSupported = (sensorId>0 && sensorId<DATABLOCK_SENSOR_ID.LSM6DSV.ordinal())
+				|| (isGen2DataBlockSensorId && isPayloadDesignV13orAbove());
+		if(isParseSupported) {
 			DATABLOCK_SENSOR_ID datablockSensorId = payloadSensorIdValues[sensorId];
 			
 			List<SENSORS> listOfSensorClassKeys = getOrCreateListOfSensorClassKeysForDataBlockId(datablockSensorId);
@@ -2086,9 +2091,9 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 	 * entries (0x04) are skipped.
 	 * <p>
 	 * Accel and gyro share the LSM6DSV ODR and are interleaved 1:1, so they are
-	 * emitted as aligned samples through {@link #buildMsgForSensorList}. (Mag is read
-	 * via the sensor hub at a different rate; full per-stream mag timestamping is TODO
-	 * - mag bytes are currently left zero so accel/gyro stay byte-aligned.)
+	 * emitted as aligned samples through {@link #buildMsgForSensorList}. Mag is read
+	 * via the sensor hub at its own (lower) cadence and is emitted as a separate OJC
+	 * stream (pass 2 below), its samples spread evenly across the block duration.
 	 */
 	private void parseDataBlockDataLsm6dsv(DataBlockDetails dataBlockDetails, byte[] byteBuffer, int currentByteIndex, COMMUNICATION_TYPE commType) {
 		int numEntries = (byteBuffer[currentByteIndex] & 0xFF) | ((byteBuffer[currentByteIndex+1] & 0xFF) << 8);
@@ -2101,8 +2106,11 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 		// The aligned (accel/gyro) reference stream drives per-sample timing and, for
 		// midday/midnight-split blocks, defines each half's share of the FIFO. Each mag
 		// entry records how many reference entries preceded it in the FIFO so it can be
-		// assigned to the correct half by arrival order.
-		int refTag = accelEn ? LSM6DSV_TAG_ACCEL : LSM6DSV_TAG_GYRO;
+		// assigned to the correct half by arrival order. When neither accel nor gyro is
+		// enabled the mag itself acts as the reference (mirrors
+		// countLsm6dsvAlignedSamples; not firmware-producible today but expressible).
+		boolean magIsReference = !accelEn && !gyroEn;
+		int refTag = accelEn ? LSM6DSV_TAG_ACCEL : (gyroEn ? LSM6DSV_TAG_GYRO : LSM6DSV_TAG_MAG);
 		List<byte[]> accelSamples = new ArrayList<byte[]>();
 		List<byte[]> gyroSamples = new ArrayList<byte[]>();
 		List<byte[]> magSamples = new ArrayList<byte[]>();
@@ -2126,28 +2134,41 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 		}
 
 		int alignedCountFull = accelEn ? accelSamples.size() : (gyroEn ? gyroSamples.size() : 0);
+		int referenceCountFull = magIsReference ? magSamples.size() : alignedCountFull;
 
 		// Midday/midnight-split support: both halves of a split block are handed the SAME
 		// raw block bytes (see the byte-offset walk in PayloadContentsDetailsV8orAbove);
-		// each half parses only its own aligned-sample range. The metadata-time split set
-		// each part's sampleCount in the aligned-sample domain.
-		int alignedFrom = 0;
-		int alignedTo = alignedCountFull;
+		// each half parses only its own reference-sample range. The metadata-time split
+		// set each part's sampleCount in the reference-stream domain (aligned accel/gyro,
+		// or mag when it is the reference).
+		int refFrom = 0;
+		int refTo = referenceCountFull;
 		if(dataBlockDetails.isFirstPartOfSplitDataBlock()) {
-			alignedTo = Math.min(dataBlockDetails.getSampleCount(), alignedCountFull);
+			refTo = Math.min(dataBlockDetails.getSampleCount(), referenceCountFull);
 		} else if(dataBlockDetails.isSecondPartOfSplitDataBlock()) {
-			alignedFrom = Math.max(0, alignedCountFull - dataBlockDetails.getSampleCount());
+			refFrom = Math.max(0, referenceCountFull - dataBlockDetails.getSampleCount());
 		}
+		// The aligned (pass 1) emission range: equal to the reference range normally,
+		// empty when the mag is the reference stream (no accel/gyro to emit).
+		int alignedFrom = magIsReference ? 0 : refFrom;
+		int alignedTo = magIsReference ? 0 : refTo;
 		int alignedCount = alignedTo - alignedFrom;
 
-		// Mag entries are assigned to a split half by FIFO arrival order relative to the
-		// aligned boundary: an entry that arrived before the first aligned sample of the
-		// second half belongs to the first half.
+		// Mag selection per split half. With an aligned reference, mag entries are
+		// assigned by FIFO arrival order relative to the aligned boundary (an entry
+		// that arrived before the first aligned sample of the second half belongs to
+		// the first half). When the mag IS the reference, each mag entry's recorded
+		// position is its own index, so the range check is direct.
 		List<byte[]> magSamplesPart = new ArrayList<byte[]>();
 		if(magEn) {
 			for(int i=0;i<magSamples.size();i++) {
 				int pos = magAlignedPos.get(i);
-				boolean inPart = dataBlockDetails.isSecondPartOfSplitDataBlock() ? (pos > alignedFrom) : (pos <= alignedTo);
+				boolean inPart;
+				if(magIsReference) {
+					inPart = (pos >= refFrom && pos < refTo);
+				} else {
+					inPart = dataBlockDetails.isSecondPartOfSplitDataBlock() ? (pos > refFrom) : (pos <= refTo);
+				}
 				if(inPart) { magSamplesPart.add(magSamples.get(i)); }
 			}
 		}
