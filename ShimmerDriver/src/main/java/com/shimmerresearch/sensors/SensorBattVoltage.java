@@ -68,6 +68,10 @@ public class SensorBattVoltage extends AbstractSensor{
 	
 	// The battery voltage is divided by half before entering the Microcontroller's ADC.  The value is not quite equal to 2 due to the components used in the circuit.
 	public static final double BATTERY_VOLTAGE_DIVIDER_RATIO = 1.988;
+
+	// Second-generation Verisense hardware (SR61-5/6, SR68-9/10) battery-sense divider.
+	// Matches the firmware's conversion in hal_asm_battery.c (measureBatteryVoltage).
+	public static final double BATTERY_VOLTAGE_DIVIDER_RATIO_GEN2 = 2.469;
 	
 	//--------- Sensor specific variables end --------------
 	

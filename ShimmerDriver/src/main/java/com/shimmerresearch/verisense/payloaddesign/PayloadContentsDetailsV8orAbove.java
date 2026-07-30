@@ -2,6 +2,7 @@ package com.shimmerresearch.verisense.payloaddesign;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.ListIterator;
 import java.util.Map.Entry;
@@ -57,7 +58,10 @@ public class PayloadContentsDetailsV8orAbove extends PayloadContentsDetails {
 			setOfPayloadSensorIds.add(dataBlockDetails.datablockSensorId);
 
 			// Update byte offset as it's passed by value into "parseDataBlockMetaData"
-			int dataBlockTotalSize = BYTE_COUNT.PAYLOAD_CONTENTS_GEN8_SENSOR_ID + BYTE_COUNT.PAYLOAD_CONTENTS_RTC_BYTES_TICKS + dataBlockDetails.qtySensorDataBytesInDatablock;  
+			// Use the RAW block size for byte-offset arithmetic - qtySensorDataBytesInDatablock
+			// can be recomputed by the midday/midnight split logic (wrongly for
+			// variable-length blocks such as the LSM6DSV tagged FIFO).
+			int dataBlockTotalSize = BYTE_COUNT.PAYLOAD_CONTENTS_GEN8_SENSOR_ID + BYTE_COUNT.PAYLOAD_CONTENTS_RTC_BYTES_TICKS + dataBlockDetails.getQtySensorDataBytesInDatablockRaw();
 			currentByteIndexInPayload += dataBlockTotalSize;
 
 			if(isParserAtEndOfBuffer(byteBuffer.length, currentByteIndexInPayload)) {
@@ -88,6 +92,14 @@ public class PayloadContentsDetailsV8orAbove extends PayloadContentsDetails {
 		}
 		
 		// --------- End of parsing ------------------
+
+		// The slow sensors' achieved sample rates differ from what the payload
+		// header can tell us (the light rate isn't stored at all and the chip adds
+		// per-measurement dead time; the skin-temp output cadence is refresh-code
+		// derived but similarly approximate), so refine them from the data itself
+		// before the block timings are back-filled below.
+		refineSlowSensorSamplingRateFromBlockTicks(DATABLOCK_SENSOR_ID.LIGHT);
+		refineSlowSensorSamplingRateFromBlockTicks(DATABLOCK_SENSOR_ID.SKIN_TEMP);
 
 		// Up to, and including, payload design v10, the real-world clock time that was
 		// stored in the payload footer was the real-world time at the end of the
@@ -303,6 +315,87 @@ public class PayloadContentsDetailsV8orAbove extends PayloadContentsDetails {
 		return (bufferLength-currentByteIndex)<(footerLength+BYTE_COUNT.PAYLOAD_CRC);
 	}
 
+	/**
+	 * Derive a slow sensor's (ambient light / skin temp) achieved sample period
+	 * from the spacing of consecutive same-sensor block end ticks and apply it to
+	 * those blocks' sampling rate before their timings are back-filled. The
+	 * header-derived rates are only estimates (the light rate isn't stored at all
+	 * - see SensorVD6283.getRateFreq - and the skin-temp cadence is refresh-code
+	 * derived), and each block holds a fixed number of samples, so
+	 * {@code inter-block ticks / samples-per-block} is the exact per-sample period.
+	 * With fewer than two blocks in the payload the header-derived estimate the
+	 * blocks were created with is left in place.
+	 */
+	private void refineSlowSensorSamplingRateFromBlockTicks(DATABLOCK_SENSOR_ID slowSensorId) {
+		List<DataBlockDetails> slowSensorBlocks = new ArrayList<DataBlockDetails>();
+		for(DataBlockDetails dataBlockDetails:listOfDataBlocksInOrder) {
+			if(dataBlockDetails.datablockSensorId==slowSensorId) {
+				slowSensorBlocks.add(dataBlockDetails);
+			}
+		}
+		if(slowSensorBlocks.size()<2) {
+			return;
+		}
+
+		// v11+ payloads store microcontroller-clock ticks per block, earlier designs
+		// store real-world-clock ticks; either works as only deltas are used.
+		boolean useUcClockTicks = verisenseDevice.isPayloadDesignV11orAbove();
+		List<Double> perSamplePeriodsS = new ArrayList<Double>();
+		for(int i=1;i<slowSensorBlocks.size();i++) {
+			VerisenseTimeDetails prev = useUcClockTicks? slowSensorBlocks.get(i-1).getTimeDetailsUcClock():slowSensorBlocks.get(i-1).getTimeDetailsRwc();
+			VerisenseTimeDetails curr = useUcClockTicks? slowSensorBlocks.get(i).getTimeDetailsUcClock():slowSensorBlocks.get(i).getTimeDetailsRwc();
+			// The per-block ticks are a SUB-MINUTE counter (resets at
+			// TICKS_PER_MINUTE, 32768 Hz x 60 s - the same semantics the
+			// minute-rollover logic in backfillDataBlockUcClockOrRwcTimestamps
+			// depends on), so a minute-boundary crossing shows as a negative
+			// delta that must be re-based by one minute - NOT wrapped at 2^24.
+			long deltaTicks = curr.getEndTimeTicks() - prev.getEndTimeTicks();
+			if(deltaTicks<0) {
+				deltaTicks += (long) AsmBinaryFileConstants.TICKS_PER_MINUTE;
+			}
+			int sampleCount = slowSensorBlocks.get(i).getSampleCount();
+			if(deltaTicks>0 && sampleCount>0) {
+				perSamplePeriodsS.add((deltaTicks/32768.0)/sampleCount);
+			}
+		}
+		if(perSamplePeriodsS.isEmpty()) {
+			return;
+		}
+		// Median so a dropped block (a 2x gap) can't skew the period.
+		Collections.sort(perSamplePeriodsS);
+		double medianPeriodS = perSamplePeriodsS.get(perSamplePeriodsS.size()/2);
+		if(!(medianPeriodS>0)) {
+			return;
+		}
+
+		double achievedRateHz = 1.0/medianPeriodS;
+		for(DataBlockDetails dataBlockDetails:slowSensorBlocks) {
+			dataBlockDetails.setSamplingRate(achievedRateHz);
+			dataBlockDetails.calculateTimestampDiffInS();
+		}
+
+		// Seed the CSV gap-splitting window from the OBSERVED period spread rather
+		// than a single-rate +/-10% band. The header-derived estimate can sit within
+		// ~1% of the band edge (VD6283: 10 Hz estimated vs ~9.09 Hz achieved), and
+		// the slow sensors' cadence is inherently bimodal (exposure vs exposure +
+		// dead time: ~100 vs ~110 ms for the light at the default exposure), so a
+		// band centred on ANY single rate can clip real spacing and fragment the
+		// CSV. Spanning [min, max] observed period with the standard tolerance keeps
+		// everything seen continuous while a dropped block (2x period) still splits.
+		// populateExpectedPayloadTsDiffLimitMapIfNeeded runs after this and is
+		// containsKey-guarded, so this seeding wins.
+		double minPeriodS = perSamplePeriodsS.get(0);
+		double maxPeriodS = perSamplePeriodsS.get(perSamplePeriodsS.size()-1);
+		double[] samplingRateLimits = new double[] {
+				(1.0/maxPeriodS)*UtilCsvSplitting.FILE_GAP_TOLERANCE_MULTIPLIER.LOWER,
+				(1.0/minPeriodS)*UtilCsvSplitting.FILE_GAP_TOLERANCE_MULTIPLIER.UPPER};
+		for(SENSORS sensorClassKey:verisenseDevice.getOrCreateListOfSensorClassKeysForDataBlockId(slowSensorId)) {
+			if(sensorClassKey!=SENSORS.CLOCK && !UtilCsvSplitting.SAMPLING_RATE_LIMITS_PER_SENSOR.containsKey(sensorClassKey)) {
+				UtilCsvSplitting.SAMPLING_RATE_LIMITS_PER_SENSOR.put(sensorClassKey, samplingRateLimits);
+			}
+		}
+	}
+
 	private void backfillDataBlockRwcTimestamps() {
 		backfillDataBlockUcClockOrRwcTimestamps(false);
 	}
@@ -407,7 +500,31 @@ public class PayloadContentsDetailsV8orAbove extends PayloadContentsDetails {
 				if(dataBlockDetails.listOfSensorClassKeys.contains(sensorClassKey)) {
 					verisenseDevice.parseDataBlockData(dataBlockDetails, byteBuffer, currentByteIndex, COMMUNICATION_TYPE.SD);
 				}
-				currentByteIndex += dataBlockDetails.qtySensorDataBytesInDatablock;
+				// Advance by the on-disk bytes THIS list entry occupies. A midday/midnight-split
+				// block appears as two consecutive entries whose recomputed sizes
+				// (dataPacketSize*sampleCount) sum to the on-disk block size, so each part must
+				// advance by its own share - advancing by the raw size for each part would count
+				// the block twice and misalign every block after it. Unsplit blocks advance by
+				// the raw size, which for the variable-length LSM6DSV tagged FIFO is the only
+				// valid measure (its raw length includes tag/mag/timestamp entries that a
+				// dataPacketSize*sampleCount recomputation cannot reproduce).
+				if(dataBlockDetails.isFirstPartOfSplitDataBlock() || dataBlockDetails.isSecondPartOfSplitDataBlock()) {
+					if(dataBlockDetails.datablockSensorId==DATABLOCK_SENSOR_ID.LSM6DSV) {
+						// A split tagged-FIFO block cannot be byte-walked from recomputed
+						// sample counts (the raw layout interleaves tag/mag/timestamp
+						// entries). Instead BOTH halves are handed the same raw block bytes
+						// and the LSM6DSV entry parser selects each half's aligned-sample
+						// range - so the first half advances by nothing and the second half
+						// advances by the raw on-disk size, keeping subsequent blocks aligned.
+						if(dataBlockDetails.isSecondPartOfSplitDataBlock()) {
+							currentByteIndex += dataBlockDetails.getQtySensorDataBytesInDatablockRaw();
+						}
+					} else {
+						currentByteIndex += dataBlockDetails.qtySensorDataBytesInDatablock;
+					}
+				} else {
+					currentByteIndex += dataBlockDetails.getQtySensorDataBytesInDatablockRaw();
+				}
 				
 				dataBlockIndex++;
 				
