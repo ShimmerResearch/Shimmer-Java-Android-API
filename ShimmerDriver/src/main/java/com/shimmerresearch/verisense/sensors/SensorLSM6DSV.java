@@ -230,10 +230,19 @@ public class SensorLSM6DSV extends AbstractSensor {
 			CompatibilityInfoForMaps.listOfCompatibleVersionInfoLSM6DSV);
 
 	// ----------------- Calibration Start -----------------------
-	// Identity alignment + zero offset so calibrated = raw / sensitivity, matching
-	// the firmware/SDK nominal model (and the validated standalone decoder).
+	// Zero offset so calibrated = alignment applied to raw / sensitivity.
 	public static final double[][] DEFAULT_OFFSET_VECTOR_LSM6DSV = {{0},{0},{0}};
-	public static final double[][] DEFAULT_ALIGNMENT_MATRIX_LSM6DSV = {{1,0,0},{0,1,0},{0,0,1}};
+
+	// Default alignment, stored in the driver's AM form: UtilCalibration applies
+	// AM^-1, so these are the INVERSE of the applied sensor->ASM map declared in the
+	// web SDK's CALIBRATION_SENSORS_GEN2 (calibrationDefaults.ts) and shown by
+	// verisense-device-console (applied accel/gyro = [0,1,0 / 0,0,1 / 1,0,0]; applied
+	// mag = [1,0,0 / 0,0,1 / 0,1,0]) - the same convention as the gen-1
+	// DEFAULT_ALIGNMENT_MATRIX_LIS2DW12/LSM6DS3 constants. Chip frames differ between
+	// the LSM6DSV and the LIS2MDL (the mag frame is left-handed; det -1), hence the
+	// two constants; the LSM6DSV constant covers accel AND gyro (shared mounting).
+	public static final double[][] DEFAULT_ALIGNMENT_MATRIX_LSM6DSV = {{0,0,1},{1,0,0},{0,1,0}};
+	public static final double[][] DEFAULT_ALIGNMENT_MATRIX_LIS2MDL = {{1,0,0},{0,0,1},{0,1,0}};
 
 	// Accel sensitivity (LSB per m/s^2) = 32768/(FS_g*9.80665)
 	public static final double[][] SENS_ACCEL_2G  = {{1670.703,0,0},{0,1670.703,0},{0,0,1670.703}};
@@ -284,7 +293,7 @@ public class SensorLSM6DSV extends AbstractSensor {
 			DEFAULT_ALIGNMENT_MATRIX_LSM6DSV, SENS_GYRO_2000DPS, DEFAULT_OFFSET_VECTOR_LSM6DSV);
 
 	public CalibDetailsKinematic calibDetailsMag = new CalibDetailsKinematic(
-			0, "Default", DEFAULT_ALIGNMENT_MATRIX_LSM6DSV, SENS_MAG, DEFAULT_OFFSET_VECTOR_LSM6DSV);
+			0, "Default", DEFAULT_ALIGNMENT_MATRIX_LIS2MDL, SENS_MAG, DEFAULT_OFFSET_VECTOR_LSM6DSV);
 
 	public CalibDetailsKinematic mCurrentCalibDetailsAccel = calibDetailsAccel4g;
 	public CalibDetailsKinematic mCurrentCalibDetailsGyro = calibDetailsGyro500dps;
