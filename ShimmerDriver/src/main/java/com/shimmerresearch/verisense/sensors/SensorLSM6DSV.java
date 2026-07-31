@@ -28,6 +28,7 @@ import com.shimmerresearch.driverUtilities.ChannelDetails.CHANNEL_DATA_TYPE;
 import com.shimmerresearch.driverUtilities.ChannelDetails.CHANNEL_TYPE;
 import com.shimmerresearch.sensors.AbstractSensor;
 import com.shimmerresearch.sensors.ActionSetting;
+import com.shimmerresearch.sensors.lisxmdl.SensorLIS2MDL;
 
 /**
  * Second-generation Verisense IMU: LSM6DSV (accelerometer + gyroscope) with the
@@ -38,10 +39,17 @@ import com.shimmerresearch.sensors.ActionSetting;
  * tagged FIFO ([TAG_CNT][X][Y][Z]) interleaving the three streams; the byte-level
  * extraction + per-stream timestamping lives in
  * {@code VerisenseDevice.parseDataBlockDataLsm6dsv(...)}. This class provides the
- * channel definitions, configuration and calibration. Calibration matches the
- * firmware/SDK nominal model: value = raw / sensitivity (identity alignment,
- * zero offset) where sensitivity = 32768/(FS*9.80665) for accel, 32768/FS for
- * gyro and 1/0.15 for mag.
+ * channel definitions, configuration and calibration.
+ * <p>
+ * Sensitivities: 32768/(FS*9.80665) LSB per m/s^2 for accel, the ST angular-rate
+ * spec of 4.375 mdps/LSB at +-125 dps for gyro, and 667 LSB/Gauss for the LIS2MDL
+ * mag - the last taken from {@link SensorLIS2MDL} rather than duplicated here, so
+ * calibrated magnetometer output is in GAUSS, consistent with every other Shimmer
+ * magnetometer and with the per-unit calibration the device stores.
+ * <p>
+ * Default alignment is seeded from the web SDK's gen-2 calibration defaults (one
+ * map shared by the LSM6DSV accel/gyro, a separate one for the LIS2MDL mag - see
+ * the constants below); offsets are zero.
  *
  * @author Mark Nolan
  */
@@ -260,8 +268,17 @@ public class SensorLSM6DSV extends AbstractSensor {
 	public static final double[][] SENS_GYRO_1000DPS = {{28.571428571,0,0},{0,28.571428571,0},{0,0,28.571428571}};
 	public static final double[][] SENS_GYRO_2000DPS = {{14.285714286,0,0},{0,14.285714286,0},{0,0,14.285714286}};
 
-	// Mag sensitivity (LSB per uT) = 1/0.15
-	public static final double[][] SENS_MAG = {{6.666667,0,0},{0,6.666667,0},{0,0,6.666667}};
+	// Mag sensitivity: taken from the LIS2MDL's own sensor class rather than
+	// re-declared here, because it is a property of the chip (1.5 mGauss/LSB) and not
+	// of the LSM6DSV sensor hub the samples arrive through. 667 LSB/Gauss, matching
+	// the firmware calibration seed (SC_LIS2MDL_MAG_SENS), the web SDK catalog, and
+	// every other Shimmer magnetometer (LSM303DLHC etc. are all LSB/Gauss).
+	//
+	// This was previously a local copy of 6.666667 = 1/0.15 LSB/uT, which made
+	// gen-2 magnetometer output 100x larger than every other Shimmer device for the
+	// same field, and 100x out of step with the per-unit calibration the device
+	// stores. Reference the shared constant so the two cannot diverge again.
+	public static final double[][] SENS_MAG = SensorLIS2MDL.DefaultSensitivityMatrixMagShimmer3r;
 
 	public CalibDetailsKinematic calibDetailsAccel2g = new CalibDetailsKinematic(
 			LSM6DSV_ACCEL_RANGE.RANGE_2G.configValue, LSM6DSV_ACCEL_RANGE.RANGE_2G.label,
