@@ -261,8 +261,13 @@ public class SensorLSM6DSV extends AbstractSensor {
 	// matrix with cross-axis terms.
 	public static final double[][] DEFAULT_ALIGNMENT_LSM6DSV_ACCEL_GYRO =
 			UtilCalibration.matrixInverse3x3(APPLIED_ALIGNMENT_LSM6DSV_ACCEL_GYRO);
-	public static final double[][] DEFAULT_ALIGNMENT_LIS2MDL_MAG =
-			UtilCalibration.matrixInverse3x3(APPLIED_ALIGNMENT_LIS2MDL_MAG);
+	/* The mag applied matrix is its own inverse (an involution), but deriving it via
+	 * matrixInverse3x3 would stamp -0.0 into the zero entries (its determinant is -1),
+	 * which survives serialization and fails Arrays.deepEquals against 0.0 - so the
+	 * driver-form matrix is written out as a literal. ASM_PC_00032 guards that it
+	 * really is the inverse of the applied form. (The accel/gyro inverse above is
+	 * det +1 and computes canonical 0.0 entries, so it stays derived.) */
+	public static final double[][] DEFAULT_ALIGNMENT_LIS2MDL_MAG = {{1,0,0},{0,0,1},{0,1,0}};
 
 	// Accel sensitivity (LSB per m/s^2) = 32768/(FS_g*9.80665)
 	public static final double[][] SENS_ACCEL_2G  = {{1670.703,0,0},{0,1670.703,0},{0,0,1670.703}};
