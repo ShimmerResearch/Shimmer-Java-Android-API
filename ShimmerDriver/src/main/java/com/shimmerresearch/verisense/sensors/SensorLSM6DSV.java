@@ -54,7 +54,9 @@ import com.shimmerresearch.sensors.lisxmdl.SensorLIS2MDL;
  * for firmware payload design v13 and above (see
  * {@code VerisenseDevice.sensorAndConfigMapsCreate()}), i.e. second-generation
  * firmware, and every second-generation mounting (SR61 rev &gt;= 5, SR68 rev
- * &gt;= 9) shares this frame. Offsets are zero.
+ * &gt;= 9) shares this frame. Note the FW/HW pairing itself is not enforced
+ * anywhere: a first-generation board flashed with gen-2 firmware would get this
+ * frame too. Offsets are zero.
  *
  * @author Mark Nolan
  */
@@ -259,6 +261,9 @@ public class SensorLSM6DSV extends AbstractSensor {
 	// UtilCalibration applies AM^-1. Neither path is used for this sensor today;
 	// if gen-2 per-unit calibration is ever enabled, the loaded alignment must be
 	// inverted to driver form at load or calibration will be applied backwards.
+	// The trap is bidirectional: generateCalParamByteArray() likewise writes the
+	// driver-form AM out uninverted, so writing calibration TO a gen-2 device
+	// would send the inverse of the applied form the firmware and console expect.
 	/** Applied sensor->ASM alignment for the LSM6DSV accel + gyro; det +1 (a proper rotation). */
 	public static final double[][] APPLIED_ALIGNMENT_LSM6DSV_ACCEL_GYRO = {{0,1,0},{0,0,1},{1,0,0}};
 	/** Applied sensor->ASM alignment for the LIS2MDL mag; its frame is left-handed, so det -1 (a reflection). */
@@ -297,8 +302,8 @@ public class SensorLSM6DSV extends AbstractSensor {
 	public static final double[][] SENS_GYRO_2000DPS = {{14.285714286,0,0},{0,14.285714286,0},{0,0,14.285714286}};
 
 	// Mag sensitivity: taken from the LIS2MDL's own sensor class rather than
-	// re-declared here, because it is a property of the chip (1.5 mGauss/LSB, i.e.
-	// 666.67 LSB/Gauss exactly; 667 is the established Shimmer rounding) and not
+	// re-declared here, because it is a property of the chip (1.5 mGauss/LSB =
+	// 2000/3 = 666.67 LSB/Gauss; 667 is the established Shimmer rounding) and not
 	// of the LSM6DSV sensor hub the samples arrive through. 667 LSB/Gauss, matching
 	// the firmware calibration seed (SC_LIS2MDL_MAG_SENS), the web SDK catalog, and
 	// every other Shimmer magnetometer (LSM303DLHC etc. are all LSB/Gauss).
