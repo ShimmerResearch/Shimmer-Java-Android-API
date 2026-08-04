@@ -50,9 +50,11 @@ import com.shimmerresearch.sensors.lisxmdl.SensorLIS2MDL;
  * Default alignment is the real sensor->ASM frame map (accel/gyro share the chip
  * mounting; the LIS2MDL frame is left-handed), matching the web SDK's
  * CALIBRATION_SENSORS_GEN2 and what verisense-device-console writes to the device.
- * No hardware-revision gate is needed: every revision carrying this IMU (SR61 rev
- * &gt;= 5, SR68 rev &gt;= 9) shares the same mounting, so a device that has an
- * LSM6DSV is second-generation by construction. Offsets are zero.
+ * No hardware-revision gate is needed here: this sensor class is only instantiated
+ * for firmware payload design v13 and above (see
+ * {@code VerisenseDevice.sensorAndConfigMapsCreate()}), i.e. second-generation
+ * firmware, and every second-generation mounting (SR61 rev &gt;= 5, SR68 rev
+ * &gt;= 9) shares this frame. Offsets are zero.
  *
  * @author Mark Nolan
  */
@@ -248,6 +250,15 @@ public class SensorLSM6DSV extends AbstractSensor {
 	// as verisense-device-console displays them and as the web SDK declares them
 	// (calibrationDefaults.ts, CALIBRATION_SENSORS_GEN2). Those two and this class
 	// must stay in agreement; they are the same physical mounting.
+	//
+	// WARNING for future per-unit calibration work: the device stores alignment in
+	// this same APPLIED form (the firmware seeds it in asm_calibration.c and the
+	// console writes it back), but the existing load paths
+	// (CalibDetailsKinematic.parseCalParamByteArray and the file parser's
+	// CalibrationFileManager) copy bytes into the AM slot WITHOUT inverting, and
+	// UtilCalibration applies AM^-1. Neither path is used for this sensor today;
+	// if gen-2 per-unit calibration is ever enabled, the loaded alignment must be
+	// inverted to driver form at load or calibration will be applied backwards.
 	/** Applied sensor->ASM alignment for the LSM6DSV accel + gyro; det +1 (a proper rotation). */
 	public static final double[][] APPLIED_ALIGNMENT_LSM6DSV_ACCEL_GYRO = {{0,1,0},{0,0,1},{1,0,0}};
 	/** Applied sensor->ASM alignment for the LIS2MDL mag; its frame is left-handed, so det -1 (a reflection). */
@@ -286,7 +297,8 @@ public class SensorLSM6DSV extends AbstractSensor {
 	public static final double[][] SENS_GYRO_2000DPS = {{14.285714286,0,0},{0,14.285714286,0},{0,0,14.285714286}};
 
 	// Mag sensitivity: taken from the LIS2MDL's own sensor class rather than
-	// re-declared here, because it is a property of the chip (1.5 mGauss/LSB) and not
+	// re-declared here, because it is a property of the chip (1.5 mGauss/LSB, i.e.
+	// 666.67 LSB/Gauss exactly; 667 is the established Shimmer rounding) and not
 	// of the LSM6DSV sensor hub the samples arrive through. 667 LSB/Gauss, matching
 	// the firmware calibration seed (SC_LIS2MDL_MAG_SENS), the web SDK catalog, and
 	// every other Shimmer magnetometer (LSM303DLHC etc. are all LSB/Gauss).
