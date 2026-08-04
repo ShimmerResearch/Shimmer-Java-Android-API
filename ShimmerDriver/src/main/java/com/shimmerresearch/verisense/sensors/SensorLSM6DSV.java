@@ -47,8 +47,16 @@ import com.shimmerresearch.sensors.lisxmdl.SensorLIS2MDL;
  * calibrated magnetometer output is in GAUSS, consistent with every other Shimmer
  * magnetometer and with the per-unit calibration the device stores.
  * <p>
- * Alignment is left as identity here and corrected by the file parser per hardware
- * revision; offsets are zero.
+ * Default alignment is the real sensor->ASM frame map (accel/gyro share the chip
+ * mounting; the LIS2MDL frame is left-handed), matching the web SDK's
+ * CALIBRATION_SENSORS_GEN2 and what verisense-device-console writes to the device.
+ * No hardware-revision gate is needed here: this sensor class is only instantiated
+ * for firmware payload design v13 and above (see
+ * {@code VerisenseDevice.sensorAndConfigMapsCreate()}), i.e. second-generation
+ * firmware, and every second-generation mounting (SR61 rev &gt;= 5, SR68 rev
+ * &gt;= 9) shares this frame. Note the FW/HW pairing itself is not enforced
+ * anywhere: a first-generation board flashed with gen-2 firmware would get this
+ * frame too. Offsets are zero.
  *
  * @author Mark Nolan
  */
@@ -237,12 +245,45 @@ public class SensorLSM6DSV extends AbstractSensor {
 			CompatibilityInfoForMaps.listOfCompatibleVersionInfoLSM6DSV);
 
 	// ----------------- Calibration Start -----------------------
-	// Identity alignment is a placeholder, NOT the real sensor->ASM map: the file
-	// parser overrides it per hardware revision at parse time (see
-	// CalibrationFileManager.applyGen2DefaultAlignment in the VerisenseDriver repo).
-	// Correcting it here as well would give two sources of truth for the same values.
 	public static final double[][] DEFAULT_OFFSET_VECTOR_LSM6DSV = {{0},{0},{0}};
-	public static final double[][] DEFAULT_ALIGNMENT_MATRIX_LSM6DSV = {{1,0,0},{0,1,0},{0,0,1}};
+
+	// Default alignment, stored first in APPLIED form - the sensor->ASM map,
+	// physical = applied . (raw - bias) / sens - so the literals below read exactly
+	// as verisense-device-console displays them and as the web SDK declares them
+	// (calibrationDefaults.ts, CALIBRATION_SENSORS_GEN2). Those two and this class
+	// must stay in agreement; they are the same physical mounting.
+	//
+	// WARNING for future per-unit calibration work: the device stores alignment in
+	// this same APPLIED form (the firmware seeds it in asm_calibration.c and the
+	// console writes it back), but the existing load paths
+	// (CalibDetailsKinematic.parseCalParamByteArray and the file parser's
+	// CalibrationFileManager) copy bytes into the AM slot WITHOUT inverting, and
+	// UtilCalibration applies AM^-1. Neither path is used for this sensor today;
+	// if gen-2 per-unit calibration is ever enabled, the loaded alignment must be
+	// inverted to driver form at load or calibration will be applied backwards.
+	// The trap is bidirectional: generateCalParamByteArray() likewise writes the
+	// driver-form AM out uninverted, so writing calibration TO a gen-2 device
+	// would send the inverse of the applied form the firmware and console expect.
+	/** Applied sensor->ASM alignment for the LSM6DSV accel + gyro; det +1 (a proper rotation). */
+	public static final double[][] APPLIED_ALIGNMENT_LSM6DSV_ACCEL_GYRO = {{0,1,0},{0,0,1},{1,0,0}};
+	/** Applied sensor->ASM alignment for the LIS2MDL mag; its frame is left-handed, so det -1 (a reflection). */
+	public static final double[][] APPLIED_ALIGNMENT_LIS2MDL_MAG = {{1,0,0},{0,0,1},{0,1,0}};
+
+	// The driver stores the opposite convention: CalibDetailsKinematic holds AM and
+	// UtilCalibration computes AM^-1 . SM^-1 . (data - OV), so the matrices handed to
+	// the calibration blocks below are the INVERSES of the applied form. A true
+	// inverse, not a transpose: the two coincide only for orthogonal
+	// signed-permutation defaults like these, and would differ for a rig-measured
+	// matrix with cross-axis terms.
+	public static final double[][] DEFAULT_ALIGNMENT_LSM6DSV_ACCEL_GYRO =
+			UtilCalibration.matrixInverse3x3(APPLIED_ALIGNMENT_LSM6DSV_ACCEL_GYRO);
+	/* The mag applied matrix is its own inverse (an involution), but deriving it via
+	 * matrixInverse3x3 would stamp -0.0 into the zero entries (its determinant is -1),
+	 * which survives serialization and fails Arrays.deepEquals against 0.0 - so the
+	 * driver-form matrix is written out as a literal. ASM_PC_00032 guards that it
+	 * really is the inverse of the applied form. (The accel/gyro inverse above is
+	 * det +1 and computes canonical 0.0 entries, so it stays derived.) */
+	public static final double[][] DEFAULT_ALIGNMENT_LIS2MDL_MAG = {{1,0,0},{0,0,1},{0,1,0}};
 
 	// Accel sensitivity (LSB per m/s^2) = 32768/(FS_g*9.80665)
 	public static final double[][] SENS_ACCEL_2G  = {{1670.703,0,0},{0,1670.703,0},{0,0,1670.703}};
@@ -261,7 +302,8 @@ public class SensorLSM6DSV extends AbstractSensor {
 	public static final double[][] SENS_GYRO_2000DPS = {{14.285714286,0,0},{0,14.285714286,0},{0,0,14.285714286}};
 
 	// Mag sensitivity: taken from the LIS2MDL's own sensor class rather than
-	// re-declared here, because it is a property of the chip (1.5 mGauss/LSB) and not
+	// re-declared here, because it is a property of the chip (1.5 mGauss/LSB =
+	// 2000/3 = 666.67 LSB/Gauss; 667 is the established Shimmer rounding) and not
 	// of the LSM6DSV sensor hub the samples arrive through. 667 LSB/Gauss, matching
 	// the firmware calibration seed (SC_LIS2MDL_MAG_SENS), the web SDK catalog, and
 	// every other Shimmer magnetometer (LSM303DLHC etc. are all LSB/Gauss).
@@ -274,35 +316,35 @@ public class SensorLSM6DSV extends AbstractSensor {
 
 	public CalibDetailsKinematic calibDetailsAccel2g = new CalibDetailsKinematic(
 			LSM6DSV_ACCEL_RANGE.RANGE_2G.configValue, LSM6DSV_ACCEL_RANGE.RANGE_2G.label,
-			DEFAULT_ALIGNMENT_MATRIX_LSM6DSV, SENS_ACCEL_2G, DEFAULT_OFFSET_VECTOR_LSM6DSV);
+			DEFAULT_ALIGNMENT_LSM6DSV_ACCEL_GYRO, SENS_ACCEL_2G, DEFAULT_OFFSET_VECTOR_LSM6DSV);
 	public CalibDetailsKinematic calibDetailsAccel4g = new CalibDetailsKinematic(
 			LSM6DSV_ACCEL_RANGE.RANGE_4G.configValue, LSM6DSV_ACCEL_RANGE.RANGE_4G.label,
-			DEFAULT_ALIGNMENT_MATRIX_LSM6DSV, SENS_ACCEL_4G, DEFAULT_OFFSET_VECTOR_LSM6DSV);
+			DEFAULT_ALIGNMENT_LSM6DSV_ACCEL_GYRO, SENS_ACCEL_4G, DEFAULT_OFFSET_VECTOR_LSM6DSV);
 	public CalibDetailsKinematic calibDetailsAccel8g = new CalibDetailsKinematic(
 			LSM6DSV_ACCEL_RANGE.RANGE_8G.configValue, LSM6DSV_ACCEL_RANGE.RANGE_8G.label,
-			DEFAULT_ALIGNMENT_MATRIX_LSM6DSV, SENS_ACCEL_8G, DEFAULT_OFFSET_VECTOR_LSM6DSV);
+			DEFAULT_ALIGNMENT_LSM6DSV_ACCEL_GYRO, SENS_ACCEL_8G, DEFAULT_OFFSET_VECTOR_LSM6DSV);
 	public CalibDetailsKinematic calibDetailsAccel16g = new CalibDetailsKinematic(
 			LSM6DSV_ACCEL_RANGE.RANGE_16G.configValue, LSM6DSV_ACCEL_RANGE.RANGE_16G.label,
-			DEFAULT_ALIGNMENT_MATRIX_LSM6DSV, SENS_ACCEL_16G, DEFAULT_OFFSET_VECTOR_LSM6DSV);
+			DEFAULT_ALIGNMENT_LSM6DSV_ACCEL_GYRO, SENS_ACCEL_16G, DEFAULT_OFFSET_VECTOR_LSM6DSV);
 
 	public CalibDetailsKinematic calibDetailsGyro125dps = new CalibDetailsKinematic(
 			LSM6DSV_GYRO_RANGE.RANGE_125DPS.configValue, LSM6DSV_GYRO_RANGE.RANGE_125DPS.label,
-			DEFAULT_ALIGNMENT_MATRIX_LSM6DSV, SENS_GYRO_125DPS, DEFAULT_OFFSET_VECTOR_LSM6DSV);
+			DEFAULT_ALIGNMENT_LSM6DSV_ACCEL_GYRO, SENS_GYRO_125DPS, DEFAULT_OFFSET_VECTOR_LSM6DSV);
 	public CalibDetailsKinematic calibDetailsGyro250dps = new CalibDetailsKinematic(
 			LSM6DSV_GYRO_RANGE.RANGE_250DPS.configValue, LSM6DSV_GYRO_RANGE.RANGE_250DPS.label,
-			DEFAULT_ALIGNMENT_MATRIX_LSM6DSV, SENS_GYRO_250DPS, DEFAULT_OFFSET_VECTOR_LSM6DSV);
+			DEFAULT_ALIGNMENT_LSM6DSV_ACCEL_GYRO, SENS_GYRO_250DPS, DEFAULT_OFFSET_VECTOR_LSM6DSV);
 	public CalibDetailsKinematic calibDetailsGyro500dps = new CalibDetailsKinematic(
 			LSM6DSV_GYRO_RANGE.RANGE_500DPS.configValue, LSM6DSV_GYRO_RANGE.RANGE_500DPS.label,
-			DEFAULT_ALIGNMENT_MATRIX_LSM6DSV, SENS_GYRO_500DPS, DEFAULT_OFFSET_VECTOR_LSM6DSV);
+			DEFAULT_ALIGNMENT_LSM6DSV_ACCEL_GYRO, SENS_GYRO_500DPS, DEFAULT_OFFSET_VECTOR_LSM6DSV);
 	public CalibDetailsKinematic calibDetailsGyro1000dps = new CalibDetailsKinematic(
 			LSM6DSV_GYRO_RANGE.RANGE_1000DPS.configValue, LSM6DSV_GYRO_RANGE.RANGE_1000DPS.label,
-			DEFAULT_ALIGNMENT_MATRIX_LSM6DSV, SENS_GYRO_1000DPS, DEFAULT_OFFSET_VECTOR_LSM6DSV);
+			DEFAULT_ALIGNMENT_LSM6DSV_ACCEL_GYRO, SENS_GYRO_1000DPS, DEFAULT_OFFSET_VECTOR_LSM6DSV);
 	public CalibDetailsKinematic calibDetailsGyro2000dps = new CalibDetailsKinematic(
 			LSM6DSV_GYRO_RANGE.RANGE_2000DPS.configValue, LSM6DSV_GYRO_RANGE.RANGE_2000DPS.label,
-			DEFAULT_ALIGNMENT_MATRIX_LSM6DSV, SENS_GYRO_2000DPS, DEFAULT_OFFSET_VECTOR_LSM6DSV);
+			DEFAULT_ALIGNMENT_LSM6DSV_ACCEL_GYRO, SENS_GYRO_2000DPS, DEFAULT_OFFSET_VECTOR_LSM6DSV);
 
 	public CalibDetailsKinematic calibDetailsMag = new CalibDetailsKinematic(
-			0, "Default", DEFAULT_ALIGNMENT_MATRIX_LSM6DSV, SENS_MAG, DEFAULT_OFFSET_VECTOR_LSM6DSV);
+			0, "Default", DEFAULT_ALIGNMENT_LIS2MDL_MAG, SENS_MAG, DEFAULT_OFFSET_VECTOR_LSM6DSV);
 
 	public CalibDetailsKinematic mCurrentCalibDetailsAccel = calibDetailsAccel4g;
 	public CalibDetailsKinematic mCurrentCalibDetailsGyro = calibDetailsGyro500dps;
