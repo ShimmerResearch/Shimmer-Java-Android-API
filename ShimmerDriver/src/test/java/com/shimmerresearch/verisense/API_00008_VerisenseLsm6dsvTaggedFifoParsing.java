@@ -143,11 +143,19 @@ public class API_00008_VerisenseLsm6dsvTaggedFifoParsing {
 		// LITERAL expected values (the gyro sensitivity was ~12.8% wrong before the
 		// DEV-793 round-2 review fix; deriving the expectation from the class
 		// constants would defeat the lock). Defaults: accel +/-4 g = 835.3517
-		// LSB/(m/s^2); gyro +/-500 dps = 57.142857 LSB/dps (ST 17.50 mdps/LSB).
-		assertEquals(100 / 835.3517, cal(aligned0, SensorLSM6DSV.ObjectClusterSensorName.LSM6DSV_ACC_X), 0.0001);
-		assertEquals(-200 / 835.3517, cal(aligned0, SensorLSM6DSV.ObjectClusterSensorName.LSM6DSV_ACC_Y), 0.0001);
-		assertEquals(10 / 57.142857143, cal(aligned0, SensorLSM6DSV.ObjectClusterSensorName.LSM6DSV_GYRO_X), 0.0001);
-		assertEquals(-20 / 57.142857143, cal(aligned0, SensorLSM6DSV.ObjectClusterSensorName.LSM6DSV_GYRO_Y), 0.0001);
+		// LSB/(m/s^2); gyro +/-500 dps = 57.142857 LSB/dps (ST 17.50 mdps/LSB);
+		// mag 667 LSB/Gauss (LIS2MDL 1.5 mGauss/LSB, legacy rounding of 666.67).
+		// Since DEV-922 the defaults also apply the gen-2 sensor->ASM alignment:
+		// accel/gyro calibrated X/Y/Z come from raw Y/Z/X, mag X/Y/Z from raw X/Z/Y.
+		assertEquals(-200 / 835.3517, cal(aligned0, SensorLSM6DSV.ObjectClusterSensorName.LSM6DSV_ACC_X), 0.0001);
+		assertEquals(300 / 835.3517, cal(aligned0, SensorLSM6DSV.ObjectClusterSensorName.LSM6DSV_ACC_Y), 0.0001);
+		assertEquals(100 / 835.3517, cal(aligned0, SensorLSM6DSV.ObjectClusterSensorName.LSM6DSV_ACC_Z), 0.0001);
+		assertEquals(-20 / 57.142857143, cal(aligned0, SensorLSM6DSV.ObjectClusterSensorName.LSM6DSV_GYRO_X), 0.0001);
+		assertEquals(30 / 57.142857143, cal(aligned0, SensorLSM6DSV.ObjectClusterSensorName.LSM6DSV_GYRO_Y), 0.0001);
+		assertEquals(10 / 57.142857143, cal(aligned0, SensorLSM6DSV.ObjectClusterSensorName.LSM6DSV_GYRO_Z), 0.0001);
+		assertEquals(-150 / 667.0, cal(magOjc, SensorLSM6DSV.ObjectClusterSensorName.LIS2MDL_MAG_X), 0.0001);
+		assertEquals(150 / 667.0, cal(magOjc, SensorLSM6DSV.ObjectClusterSensorName.LIS2MDL_MAG_Y), 0.0001);
+		assertEquals(5 / 667.0, cal(magOjc, SensorLSM6DSV.ObjectClusterSensorName.LIS2MDL_MAG_Z), 0.0001);
 	}
 
 	/** Gyro-only: gyro acts as the aligned reference stream. */
