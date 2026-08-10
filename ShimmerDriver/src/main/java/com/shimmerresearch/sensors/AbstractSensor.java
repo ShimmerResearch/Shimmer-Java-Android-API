@@ -68,6 +68,8 @@ public abstract class AbstractSensor implements Serializable{
 		LIS3MDL("LIS3MDL"), //to be changed
 		LIS2MDL("LIS2MDL"),
 		LSM6DSV("LSM6DSV"),
+		VD6283("VD6283"),
+		MLX90632("MLX90632"),
 		BMP390("BMP390"),
 		BMP581("BMP581");
 		
