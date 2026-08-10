@@ -9,7 +9,7 @@ public class Orientation3DObject {
 	/** (Yaw, Pitch, Roll) == (Heading, Attitude, Bank) == (Azimuth, elevation, tilt)*/
 	private double yaw, pitch, roll; 
 	
-	private static boolean isUseQuatToEuler = true;
+	private static boolean isUseQuatToEuler = false;
 
     public Orientation3DObject(double q1, double q2, double q3, double q4){
         this.quaternionW = q1;
