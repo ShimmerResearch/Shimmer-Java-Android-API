@@ -381,14 +381,13 @@ public class PayloadContentsDetailsV8orAbove extends PayloadContentsDetails {
 		// exposure + dead time: ~100 vs ~110 ms at the default exposure) and the
 		// MLX90632's conversions can slip by several refresh periods and then catch
 		// up (observed +12.5% block spacing with no samples lost - DEV-927
-		// validation data). Because this seeding is containsKey-guarded, it comes
-		// from the FIRST payload with >= 2 blocks - often a single inter-block gap,
-		// i.e. no spread information - so the gap side of the window cannot rely on
-		// observed spread at all: it is set to tolerate anything up to
-		// SLOW_SENSOR_MAX_INTER_BLOCK_GAP_RATIO x the achieved median spacing, which
-		// keeps healthy jitter continuous while a genuinely dropped block (2x
-		// spacing) still splits. The fast side keeps the observed-minimum-period
-		// basis with the standard tolerance.
+		// validation data). A single payload carries only 2-3 slow-sensor blocks,
+		// i.e. one or two inter-block gaps - no spread information - so the gap
+		// side of the window cannot rely on observed spread at all: it is set to
+		// tolerate anything up to SLOW_SENSOR_MAX_INTER_BLOCK_GAP_RATIO x the
+		// achieved median spacing, which keeps healthy jitter continuous while a
+		// genuinely dropped block (2x spacing) still splits. The fast side keeps
+		// the observed-minimum-period basis with the standard tolerance.
 		// The put is deliberately UNCONDITIONAL: the limits map is global across
 		// payloads, and a payload with fewer than two blocks of this sensor (early
 		// return above - e.g. the very first payload of a recording) leaves
