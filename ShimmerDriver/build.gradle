@@ -146,7 +146,7 @@ dependencies {
 // (aws-lambda-builders) runs an unqualified `gradle build`, which runs `test` on every project
 // in the composite - including this one. Skip tests when SAM is driving the build (it sets the
 // system property below); they still run via `gradlew test` and CI builds use -x test anyway.
-// Set GRADLE_SAM_EXECUTE_TEST=1 to force them on.
+// Set GRADLE_SAM_EXECUTE_TEST (to any value) to force them on.
 tasks.withType(Test).configureEach {
     onlyIf {
         System.getProperty('software.amazon.aws.lambdabuilders.scratch-dir') == null ||
