@@ -288,23 +288,27 @@ public class SensorLSM6DSV extends AbstractSensor {
 	// Accel sensitivity (LSB per m/s^2) from the ST datasheet linear-acceleration
 	// sensitivity: 0.061 / 0.122 / 0.244 / 0.488 mg/LSB, i.e. 1/(mg_per_LSB/1000)/9.80665.
 	//
-	// These were previously derived as 32768/(FS_g*9.80665), which is the exact form:
-	// unlike the gyro (see below) the accel really does span the full 16-bit range at
-	// its nominal full scale, so ST's printed figures are just 32768/FS rounded to
-	// three significant figures (2/32768 g = 0.06103516 mg/LSB -> "0.061"). The exact
-	// derivation is therefore 0.0576% larger and, on its own terms, slightly more
-	// accurate.
+	// These were previously derived as 32768/(FS_g*9.80665), on the assumption that
+	// the accel spans exactly the full 16-bit range at nominal full scale and that
+	// ST's printed figures were just that quantity rounded to three significant
+	// figures. They are not. The datasheet's own worked example (AN5922 Table 27,
+	// FS_XL = +-2 g) settles it: 1 g reads 0x4009 = 16393 LSB and 350 mg reads
+	// 0x1669 = 5737 LSB. 0.061 mg/LSB predicts 16393.4 and 5737.7; the 32768/FS
+	// derivation predicts 16384 and 5734.4. So the sensor really is 0.061 mg/LSB -
+	// full scale sits a little inside +-2 g - and the old derivation was wrong by
+	// 0.0576%, not merely a rounding apart from the datasheet.
 	//
-	// We use the datasheet figures anyway, for agreement rather than precision. The
-	// firmware seeds these exact values into the on-device calibration blob
-	// (SC_ACCEL_SENS in asm_calibration.c), so they are what the device itself
-	// reports and what becomes the source of truth once per-unit calibration is
-	// loaded; the web SDK catalog and the gen-1 SensorLSM6DS3/SensorLIS2DW12 classes
-	// use them too, as does ST's own reference driver (lsm6dsv_from_fs2_to_mg
-	// multiplies by 0.061f). Keeping the exact form here would leave a 0.0576% step
-	// change in calibrated output waiting to appear the day the device blob is
-	// honoured. 0.0576% is far inside per-unit sensitivity variation, so consistency
-	// is worth more than the last digit.
+	// Same story as the gyro below, just with a much smaller margin: neither part
+	// maps its nominal full scale onto exactly 2^15 counts, so for both of them the
+	// ST mg/LSB and mdps/LSB figures are the authority and a 32768/FS derivation is
+	// simply incorrect. These values also match the firmware calibration seed
+	// (SC_ACCEL_SENS in asm_calibration.c), the web SDK catalog, the gen-1
+	// SensorLSM6DS3/SensorLIS2DW12 classes and ST's own reference driver
+	// (lsm6dsv_from_fs2_to_mg multiplies by 0.061f). Every example in
+	// STMems_Standard_C_drivers/lsm6dsv_STdC/examples converts through those
+	// helpers and none derives 32768/FS - including lsm6dsv_self_test.c, whose
+	// pass/fail limits are specified in mg, so ST's own self-test only comes out
+	// right if 0.122 mg/LSB is the true sensitivity.
 	public static final double[][] SENS_ACCEL_2G  = {{1671.665922915,0,0},{0,1671.665922915,0},{0,0,1671.665922915}};
 	public static final double[][] SENS_ACCEL_4G  = {{835.832961457,0,0},{0,835.832961457,0},{0,0,835.832961457}};
 	public static final double[][] SENS_ACCEL_8G  = {{417.916480729,0,0},{0,417.916480729,0},{0,0,417.916480729}};
