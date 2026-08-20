@@ -41,11 +41,16 @@ import com.shimmerresearch.sensors.lisxmdl.SensorLIS2MDL;
  * {@code VerisenseDevice.parseDataBlockDataLsm6dsv(...)}. This class provides the
  * channel definitions, configuration and calibration.
  * <p>
- * Sensitivities: the ST datasheet nominal for every axis - 0.061 mg/LSB at +-2 g
- * spec of 4.375 mdps/LSB at +-125 dps for gyro, and 667 LSB/Gauss for the LIS2MDL
- * mag - the last taken from {@link SensorLIS2MDL} rather than duplicated here, so
- * calibrated magnetometer output is in GAUSS, consistent with every other Shimmer
- * magnetometer and with the per-unit calibration the device stores.
+ * Sensitivities are the ST datasheet nominals throughout:
+ * <ul>
+ * <li>accel 0.061 / 0.122 / 0.244 / 0.488 mg/LSB for +-2 / 4 / 8 / 16 g;</li>
+ * <li>gyro 4.375 / 8.75 / 17.5 / 35 / 70 mdps/LSB for +-125 / 250 / 500 / 1000 /
+ * 2000 dps;</li>
+ * <li>LIS2MDL mag 667 LSB/Gauss.</li>
+ * </ul>
+ * The mag figure is taken from {@link SensorLIS2MDL} rather than duplicated here,
+ * so calibrated magnetometer output is in GAUSS, consistent with every other
+ * Shimmer magnetometer and with the per-unit calibration the device stores.
  * <p>
  * Default alignment is the real sensor->ASM frame map (accel/gyro share the chip
  * mounting; the LIS2MDL frame is left-handed), matching the web SDK's
