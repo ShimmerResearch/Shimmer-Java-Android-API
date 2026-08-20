@@ -569,9 +569,18 @@ public class SensorMapsExample extends BasicProcessWithCallBack {
 		if (textAreaDeviceSpec == null) {
 			return;
 		}
-		ShimmerDevice device = btManager.getShimmerDeviceBtConnected(btComport);
-		textAreaDeviceSpec.setText(buildDeviceSpecString(device));
-		textAreaDeviceSpec.setCaretPosition(0);
+		final ShimmerDevice device = btManager.getShimmerDeviceBtConnected(btComport);
+		final String specString = buildDeviceSpecString(device);
+		javax.swing.SwingUtilities.invokeLater(new Runnable() {
+			@Override
+			public void run() {
+				if (textAreaDeviceSpec == null) {
+					return;
+				}
+				textAreaDeviceSpec.setText(specString);
+				textAreaDeviceSpec.setCaretPosition(0);
+			}
+		});
 	}
 
 	@Override
