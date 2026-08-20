@@ -10762,7 +10762,7 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 	 * SR number/revision and the firmware version that produces the new output
 	 * format.
 	 *
-	 * @return
+	 * @return true if the connected Shimmer3R board revision and firmware version indicate BMP581 output support
 	 */
 	public boolean isSupportedBmp581() {
 		return isSupportedBmp581(getShimmerVerObject(), getExpansionBoardDetails());
