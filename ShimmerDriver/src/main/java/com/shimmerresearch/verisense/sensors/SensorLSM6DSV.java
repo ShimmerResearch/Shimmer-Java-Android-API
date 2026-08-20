@@ -41,7 +41,7 @@ import com.shimmerresearch.sensors.lisxmdl.SensorLIS2MDL;
  * {@code VerisenseDevice.parseDataBlockDataLsm6dsv(...)}. This class provides the
  * channel definitions, configuration and calibration.
  * <p>
- * Sensitivities: 32768/(FS*9.80665) LSB per m/s^2 for accel, the ST angular-rate
+ * Sensitivities: the ST datasheet nominal for every axis - 0.061 mg/LSB at +-2 g
  * spec of 4.375 mdps/LSB at +-125 dps for gyro, and 667 LSB/Gauss for the LIS2MDL
  * mag - the last taken from {@link SensorLIS2MDL} rather than duplicated here, so
  * calibrated magnetometer output is in GAUSS, consistent with every other Shimmer
@@ -285,16 +285,38 @@ public class SensorLSM6DSV extends AbstractSensor {
 	 * det +1 and computes canonical 0.0 entries, so it stays derived.) */
 	public static final double[][] DEFAULT_ALIGNMENT_LIS2MDL_MAG = {{1,0,0},{0,0,1},{0,1,0}};
 
-	// Accel sensitivity (LSB per m/s^2) = 32768/(FS_g*9.80665)
-	public static final double[][] SENS_ACCEL_2G  = {{1670.703,0,0},{0,1670.703,0},{0,0,1670.703}};
-	public static final double[][] SENS_ACCEL_4G  = {{835.3517,0,0},{0,835.3517,0},{0,0,835.3517}};
-	public static final double[][] SENS_ACCEL_8G  = {{417.6759,0,0},{0,417.6759,0},{0,0,417.6759}};
-	public static final double[][] SENS_ACCEL_16G = {{208.8379,0,0},{0,208.8379,0},{0,0,208.8379}};
+	// Accel sensitivity (LSB per m/s^2) from the ST datasheet linear-acceleration
+	// sensitivity: 0.061 / 0.122 / 0.244 / 0.488 mg/LSB, i.e. 1/(mg_per_LSB/1000)/9.80665.
+	//
+	// These were previously derived as 32768/(FS_g*9.80665), which is the exact form:
+	// unlike the gyro (see below) the accel really does span the full 16-bit range at
+	// its nominal full scale, so ST's printed figures are just 32768/FS rounded to
+	// three significant figures (2/32768 g = 0.06103516 mg/LSB -> "0.061"). The exact
+	// derivation is therefore 0.0576% larger and, on its own terms, slightly more
+	// accurate.
+	//
+	// We use the datasheet figures anyway, for agreement rather than precision. The
+	// firmware seeds these exact values into the on-device calibration blob
+	// (SC_ACCEL_SENS in asm_calibration.c), so they are what the device itself
+	// reports and what becomes the source of truth once per-unit calibration is
+	// loaded; the web SDK catalog and the gen-1 SensorLSM6DS3/SensorLIS2DW12 classes
+	// use them too, as does ST's own reference driver (lsm6dsv_from_fs2_to_mg
+	// multiplies by 0.061f). Keeping the exact form here would leave a 0.0576% step
+	// change in calibrated output waiting to appear the day the device blob is
+	// honoured. 0.0576% is far inside per-unit sensitivity variation, so consistency
+	// is worth more than the last digit.
+	public static final double[][] SENS_ACCEL_2G  = {{1671.665922915,0,0},{0,1671.665922915,0},{0,0,1671.665922915}};
+	public static final double[][] SENS_ACCEL_4G  = {{835.832961457,0,0},{0,835.832961457,0},{0,0,835.832961457}};
+	public static final double[][] SENS_ACCEL_8G  = {{417.916480729,0,0},{0,417.916480729,0},{0,0,417.916480729}};
+	public static final double[][] SENS_ACCEL_16G = {{208.958240364,0,0},{0,208.958240364,0},{0,0,208.958240364}};
 
 	// Gyro sensitivity (LSB per dps) from the ST datasheet angular-rate sensitivity
 	// (4.375 mdps/LSB at +-125 dps, doubling per range) - the same spec/values as the
-	// gen-1 LSM6DS3. NOTE: the gyro does NOT span the full 16-bit range at its nominal
-	// full scale (unlike the accel), so a 32768/FS derivation is ~12.8% off.
+	// gen-1 LSM6DS3. NOTE: unlike the accel above, the gyro genuinely does NOT span
+	// the full 16-bit range at its nominal full scale - 4.375 mdps/LSB implies a real
+	// full scale of 143.4 dps for the +-125 dps setting, which is exactly where the
+	// part is observed to saturate - so here a 32768/FS derivation is not a rounding
+	// difference but plainly wrong (~14.7%).
 	public static final double[][] SENS_GYRO_125DPS  = {{228.571428571,0,0},{0,228.571428571,0},{0,0,228.571428571}};
 	public static final double[][] SENS_GYRO_250DPS  = {{114.285714286,0,0},{0,114.285714286,0},{0,0,114.285714286}};
 	public static final double[][] SENS_GYRO_500DPS  = {{57.142857143,0,0},{0,57.142857143,0},{0,0,57.142857143}};
