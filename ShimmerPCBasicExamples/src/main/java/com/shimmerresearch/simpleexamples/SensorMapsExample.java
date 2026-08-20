@@ -10,6 +10,7 @@ import com.shimmerresearch.driver.Configuration;
 import com.shimmerresearch.driver.Configuration.COMMUNICATION_TYPE;
 import com.shimmerresearch.driver.ObjectCluster;
 import com.shimmerresearch.driver.ShimmerDevice;
+import com.shimmerresearch.driver.ShimmerObject;
 import com.shimmerresearch.driver.ShimmerMsg;
 import com.shimmerresearch.driverUtilities.AssembleShimmerConfig;
 import com.shimmerresearch.driverUtilities.BluetoothDeviceDetails;
@@ -45,6 +46,8 @@ import javax.imageio.ImageIO;
 import javax.swing.DefaultComboBoxModel;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
+import javax.swing.JScrollPane;
+import javax.swing.JTextArea;
 import javax.swing.JTextPane;
 import java.awt.event.ActionListener;
 import java.awt.event.ItemEvent;
@@ -71,6 +74,7 @@ public class SensorMapsExample extends BasicProcessWithCallBack {
 	private JFrame frame;
 	private JTextField textField;
 	JTextPane textPaneStatus;
+	static JTextArea textAreaDeviceSpec;
 	static ShimmerDevice shimmerDevice;
 	static BasicShimmerBluetoothManagerPc btManager = new BasicShimmerBluetoothManagerPc();
 	BasicPlotManagerPC plotManager = new BasicPlotManagerPC();
@@ -396,6 +400,18 @@ public class SensorMapsExample extends BasicProcessWithCallBack {
         comboBox = new JComboBox<>(comboModel);
         comboBox.setBounds(164, 59, 116, 22);
 		frame.getContentPane().add(comboBox);
+
+		JLabel lblDeviceSpec = new JLabel("Device Specifications");
+		lblDeviceSpec.setBounds(830, 34, 200, 16);
+		frame.getContentPane().add(lblDeviceSpec);
+
+		textAreaDeviceSpec = new JTextArea();
+		textAreaDeviceSpec.setEditable(false);
+		textAreaDeviceSpec.setLineWrap(false);
+		textAreaDeviceSpec.setText("Not connected");
+		JScrollPane deviceSpecScrollPane = new JScrollPane(textAreaDeviceSpec);
+		deviceSpecScrollPane.setBounds(830, 52, 354, 122);
+		frame.getContentPane().add(deviceSpecScrollPane);
 		
 		JButton btnNewButton = new JButton("Sync (Verisense)");
 		btnNewButton.addActionListener(new ActionListener() {
@@ -515,6 +531,58 @@ public class SensorMapsExample extends BasicProcessWithCallBack {
 	
     
 	
+	/**
+	 * Builds a multi-line summary of the connected device's specifications
+	 * (HW/FW versions, expansion/daughter board, MAC, etc.) for display on the UI.
+	 */
+	static String buildDeviceSpecString(ShimmerDevice device) {
+		if (device == null) {
+			return "Not connected";
+		}
+
+		StringBuilder sb = new StringBuilder();
+		sb.append("Name:\t").append(device.getShimmerUserAssignedName()).append("\n");
+		sb.append("MAC:\t").append(device.getMacId()).append("\n");
+		sb.append("HW:\t").append(device.getHardwareVersionParsed())
+				.append(" (id ").append(device.getHardwareVersion()).append(")\n");
+		sb.append("FW:\t").append(device.getFirmwareVersionParsed()).append("\n");
+
+		if (device instanceof VerisenseDevice) {
+			return sb.toString();
+		}
+
+		// Shimmer3/3R specifics: daughter (expansion) board + BMP581 eligibility
+		sb.append("Exp board:\t").append(device.getExpansionBoardParsedWithVer()).append("\n");
+		sb.append("Exp board id:\t").append(device.getExpansionBoardId())
+				.append(", rev ").append(device.getExpansionBoardRev())
+				.append(".").append(device.getExpansionBoardRevSpecial()).append("\n");
+		sb.append("Sampling rate:\t").append(device.getSamplingRateShimmer()).append(" Hz\n");
+
+		if (device instanceof ShimmerObject) {
+			sb.append("BMP581 supported:\t").append(((ShimmerObject) device).isSupportedBmp581()).append("\n");
+		}
+		return sb.toString();
+	}
+
+	/** Refresh the on-screen device spec panel from the currently connected device. */
+	static void updateDeviceSpec() {
+		if (textAreaDeviceSpec == null) {
+			return;
+		}
+		final ShimmerDevice device = btManager.getShimmerDeviceBtConnected(btComport);
+		final String specString = buildDeviceSpecString(device);
+		javax.swing.SwingUtilities.invokeLater(new Runnable() {
+			@Override
+			public void run() {
+				if (textAreaDeviceSpec == null) {
+					return;
+				}
+				textAreaDeviceSpec.setText(specString);
+				textAreaDeviceSpec.setCaretPosition(0);
+			}
+		});
+	}
+
 	@Override
 	protected void processMsgFromCallback(ShimmerMsg shimmerMSG) {
 		// TODO Auto-generated method stub
@@ -535,6 +603,7 @@ public class SensorMapsExample extends BasicProcessWithCallBack {
                     timer = new Timer();
                 }
 				textPaneStatus.setText("connected");
+				updateDeviceSpec();
 
 				//shimmer = (ShimmerPC) btManager.getShimmerDeviceBtConnected(btComport);
 //				shimmerDevice = btManager.getShimmerDeviceBtConnected(btComport);
@@ -555,7 +624,10 @@ public class SensorMapsExample extends BasicProcessWithCallBack {
                     timer.cancel();
                     timer = null;
                 }
-				textPaneStatus.setText("disconnected");				
+				textPaneStatus.setText("disconnected");
+				if (textAreaDeviceSpec != null) {
+					textAreaDeviceSpec.setText("Not connected");
+				}
 			}else if (callbackObject.mState == BT_STATE.STREAMING) {
 				if (timer!=null){
                     timer.cancel();
@@ -572,6 +644,7 @@ public class SensorMapsExample extends BasicProcessWithCallBack {
 			int msg = callbackObject.mIndicator;
 			if (msg== ShimmerPC.NOTIFICATION_SHIMMER_FULLY_INITIALIZED){
 				textPaneStatus.setText("device fully initialized");
+				updateDeviceSpec();
 				ShimmerDevice device = btManager.getShimmerDeviceBtConnectedFromMac(btComport);
 				if (btComport.contains(PREFIX_COM) || btComport.contains(PREFIX_DEV)) {
 					device = btManager.getShimmerDeviceBtConnected(btComport);

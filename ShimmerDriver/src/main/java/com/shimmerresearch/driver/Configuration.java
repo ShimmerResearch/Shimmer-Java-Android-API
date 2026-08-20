@@ -82,6 +82,7 @@ import com.shimmerresearch.sensors.ShimmerStreamingProperties;
 import com.shimmerresearch.sensors.bmpX80.SensorBMP180;
 import com.shimmerresearch.sensors.bmpX80.SensorBMP280;
 import com.shimmerresearch.sensors.bmpX80.SensorBMP390;
+import com.shimmerresearch.sensors.bmpX80.SensorBMP581;
 import com.shimmerresearch.sensors.kionix.SensorKionixAccel;
 import com.shimmerresearch.sensors.kionix.SensorKionixKXRB52042;
 import com.shimmerresearch.sensors.lisxmdl.SensorLIS3MDL;
@@ -733,6 +734,7 @@ public class Configuration {
 			public static final int SHIMMER_LIS2MDL_MAG = 42;
 			public static final int SHIMMER_LIS3MDL_MAG_ALT = 41;
 			public static final int SHIMMER_BMP390_PRESSURE = 43;
+			public static final int SHIMMER_BMP581_PRESSURE = 44;
 			
 //			public static final int SHIMMER_EXG1_24BIT = 3;
 //			public static final int SHIMMER_EXG2_24BIT = 4;
@@ -924,6 +926,7 @@ public class Configuration {
 			PRESSURE_TEMPERATURE_BMP180(SensorBMP180.LABEL_SENSOR_TILE.PRESSURE_TEMPERATURE),
 			PRESSURE_TEMPERATURE_BMP280(SensorBMP280.LABEL_SENSOR_TILE.PRESSURE_TEMPERATURE),
 			PRESSURE_TEMPERATURE_BMP390(SensorBMP390.LABEL_SENSOR_TILE.PRESSURE_TEMPERATURE),
+			PRESSURE_TEMPERATURE_BMP581(SensorBMP581.LABEL_SENSOR_TILE.PRESSURE_TEMPERATURE),
 			BATTERY_MONITORING(SensorBattVoltage.LABEL_SENSOR_TILE.BATTERY_MONITORING),
 			EXTERNAL_EXPANSION_ADC(SensorADC.LABEL_SENSOR_TILE.EXTERNAL_EXPANSION_ADC),
 			INTERNAL_EXPANSION_ADC(SensorADC.LABEL_SENSOR_TILE.INTERNAL_EXPANSION_ADC),
@@ -1478,7 +1481,15 @@ public class Configuration {
 					svoShimmer3RExgUnifiedLogAndStream,
 					svoShimmer3RBrAmpUnifiedLogAndStream,
 					svoShimmer3RProto3DeluxeLogAndStream,
-					svoShimmer4Stock);  
+					svoShimmer4Stock);
+
+			public static final List<ShimmerVerObject> listOfCompatibleVersionInfoBMP581 = Arrays.asList(
+					svoShimmer3RImuLogAndStream, svoShimmer3RLogAndStream,
+					svoShimmer3RImuAnyExpBrdLogAndStream,
+					svoShimmer3RGsrUnifiedLogAndStream,
+					svoShimmer3RExgUnifiedLogAndStream,
+					svoShimmer3RBrAmpUnifiedLogAndStream,
+					svoShimmer3RProto3DeluxeLogAndStream);
 
 			public static final List<ShimmerVerObject> listOfCompatibleVersionInfoMPU9250 = Arrays.asList(
 					svoNewImuSdLog, svoNewImuLogAndStream, svoShimmer3RLogAndStream,  

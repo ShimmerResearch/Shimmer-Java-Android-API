@@ -70,7 +70,8 @@ public abstract class AbstractSensor implements Serializable{
 		LSM6DSV("LSM6DSV"),
 		VD6283("VD6283"),
 		MLX90632("MLX90632"),
-		BMP390("BMP390");
+		BMP390("BMP390"),
+		BMP581("BMP581");
 		
 	    private final String text;
 
