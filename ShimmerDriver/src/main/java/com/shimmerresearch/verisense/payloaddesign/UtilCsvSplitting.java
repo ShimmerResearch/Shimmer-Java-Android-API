@@ -202,8 +202,9 @@ public class UtilCsvSplitting {
 		}
 		// Bounded history: drop the oldest measurements rather than growing without
 		// limit over a multi-day recording.
-		while(accumulatedPeriodsS.size()>SLOW_SENSOR_PERIOD_HISTORY_MAX) {
-			accumulatedPeriodsS.remove(0);
+		int excess = accumulatedPeriodsS.size()-SLOW_SENSOR_PERIOD_HISTORY_MAX;
+		if(excess>0) {
+			accumulatedPeriodsS.subList(0, excess).clear();
 		}
 		return calculateMedian(accumulatedPeriodsS);
 	}
