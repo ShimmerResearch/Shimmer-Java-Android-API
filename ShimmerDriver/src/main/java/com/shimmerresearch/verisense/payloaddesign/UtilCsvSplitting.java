@@ -15,6 +15,19 @@ public class UtilCsvSplitting {
 		// +/- 10%
 		public static final double UPPER = 1.1;
 		public static final double LOWER = 0.9;
+		/**
+		 * Slow sensors only (VD6283 light / MLX90632 skin temp): the largest
+		 * inter-block gap, as a multiple of the achieved median block spacing, that
+		 * is still treated as continuous. The MLX90632's conversions can slip by
+		 * several refresh periods and then catch up (observed up to +12.5% block
+		 * spacing on the DEV-927 validation recording with no samples lost), and the
+		 * window is seeded from the first payload that carries >= 2 blocks - often a
+		 * single inter-block gap, i.e. no spread information - so the standard
+		 * LOWER (-10%) band is routinely violated by healthy data. A genuinely
+		 * dropped block doubles the spacing (2x), so 1.5x keeps comfortable margin
+		 * on both sides.
+		 */
+		public static final double SLOW_SENSOR_MAX_INTER_BLOCK_GAP_RATIO = 1.5;
 	}
 	
 	protected static HashMap<SENSORS, double[]> SAMPLING_RATE_LIMITS_PER_SENSOR = new HashMap<SENSORS, double[]>(); 
