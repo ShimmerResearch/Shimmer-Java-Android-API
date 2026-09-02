@@ -27,6 +27,7 @@ public class BluetoothModuleVersionDetails implements Serializable {
 
 		VELA_IF820_V01_04_12_12("CYW20820 app=v01.04.12.12", "CYW20820 app=v01.04.12.12", "IF820 v01.04.12.12"),
 		VELA_IF820_V01_04_16_16("CYW20820 app=v01.04.16.16", "CYW20820 app=v01.04.16.16", "IF820 v01.04.16.16"),
+		VELA_IF820_V01_04_18_18("CYW20820 app=v01.04.18.18", "CYW20820 app=v01.04.18.18", "IF820 v01.04.18.18"),
 
 		UNKNOWN("Unknown", "Unknown", "Unknown");
 
@@ -97,6 +98,7 @@ public class BluetoothModuleVersionDetails implements Serializable {
 	
 	public boolean isBtModuleVersionVelaIf820() {
 		return mBtModuleVersionParsed == BT_MODULE_VERSION.VELA_IF820_V01_04_12_12
-				|| mBtModuleVersionParsed == BT_MODULE_VERSION.VELA_IF820_V01_04_16_16;
+				|| mBtModuleVersionParsed == BT_MODULE_VERSION.VELA_IF820_V01_04_16_16
+						|| mBtModuleVersionParsed == BT_MODULE_VERSION.VELA_IF820_V01_04_18_18;
 	}
 }
