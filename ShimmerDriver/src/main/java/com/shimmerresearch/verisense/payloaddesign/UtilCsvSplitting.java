@@ -64,7 +64,7 @@ public class UtilCsvSplitting {
 
 	/**
 	 * Slow sensors only: how many of the most recently observed per-sample periods
-	 * {@link #recordAndGetSlowSensorPeriodS(DATABLOCK_SENSOR_ID, double)} keeps
+	 * {@link #recordAndGetSlowSensorPeriodS(VerisenseDevice, DATABLOCK_SENSOR_ID, double)} keeps
 	 * per sensor. Bounded so the estimate follows genuine long-term drift instead
 	 * of averaging a multi-day recording, and so the median stays cheap to re-take
 	 * on every payload. Large enough that occasional dropped blocks cannot move
@@ -77,17 +77,19 @@ public class UtilCsvSplitting {
 	protected static HashMap<SENSORS, double[]> SAMPLING_RATE_LIMITS_PER_SENSOR = new HashMap<SENSORS, double[]>(); 
 
 	/**
-	 * Slow sensors only: the end-time TICKS of the last block seen for each
-	 * slow-sensor data block id, carried from one payload to the next so the
-	 * achieved per-sample period can be measured across payload boundaries. A
-	 * 1 Hz light block spans 10 s while a payload spans ~2 s, so a payload
-	 * carries at most one light block and there is no inter-block gap inside it.
+	 * Slow sensors only: the ABSOLUTE real-world-clock end time (ms) of the last
+	 * block seen for each slow-sensor data block id, carried from one payload to
+	 * the next so the achieved per-sample period can be measured across payload
+	 * boundaries. A 1 Hz light block spans 10 s while a payload spans ~2 s, so a
+	 * payload carries at most one light block and there is no inter-block gap
+	 * inside it to measure.
 	 * <p>
-	 * Only usable while the sensor's largest legitimate block span is under the
-	 * tick counter's one-minute wrap - see
-	 * {@link #isSlowSensorSpanUnambiguousAcrossPayloads(DATABLOCK_SENSOR_ID, int)}.
+	 * Absolute milliseconds, not the per-block sub-minute tick counter, because a
+	 * tick delta cannot tell a 5 s spacing from a 65 s one - a real 65 s gap
+	 * between 10-sample light blocks aliases to a perfectly legitimate 2 Hz.
+	 * Populated only once the block timings have been back-filled.
 	 */
-	protected static HashMap<DATABLOCK_SENSOR_ID, Long> SLOW_SENSOR_LAST_BLOCK_END_TICKS = new HashMap<DATABLOCK_SENSOR_ID, Long>();
+	protected static HashMap<DATABLOCK_SENSOR_ID, Double> SLOW_SENSOR_LAST_BLOCK_END_TIME_RWC_MS = new HashMap<DATABLOCK_SENSOR_ID, Double>();
 
 	protected static HashMap<DATABLOCK_SENSOR_ID, List<Double>> SLOW_SENSOR_OBSERVED_BLOCK_PERIODS_S = new HashMap<DATABLOCK_SENSOR_ID, List<Double>>();
 
@@ -166,7 +168,7 @@ public class UtilCsvSplitting {
 	 */
 	public static void clearMapOfSamplingRateLimitsPerSensor() {
 		SAMPLING_RATE_LIMITS_PER_SENSOR.clear();
-		SLOW_SENSOR_LAST_BLOCK_END_TICKS.clear();
+		SLOW_SENSOR_LAST_BLOCK_END_TIME_RWC_MS.clear();
 		SLOW_SENSOR_OBSERVED_BLOCK_PERIODS_S.clear();
 	}
 
@@ -224,14 +226,16 @@ public class UtilCsvSplitting {
 	 * produced, i.e. finite, positive and inside
 	 * {@code getSlowSensorPlausibleRateRangeHz}.
 	 * <p>
-	 * This is not belt-and-braces. The block end time is a counter that wraps
-	 * every minute, so a real gap of 60-70 s ALIASES down into a 0-10 s delta and
-	 * arrives here looking like a perfectly ordinary ~1 s period. Detection is not
-	 * affected - {@code isDataBlockContinuous} works on absolute real-world-clock
-	 * milliseconds, so the gap is still reported - but at the start of a CSV set a
-	 * single aliased value can be the whole history and therefore the period that
-	 * gets APPLIED to the blocks. Refusing to record or apply anything outside
-	 * what the hardware can be configured to do costs nothing and removes that.
+	 * This catches a period no configuration could have produced - a dropped block
+	 * or a clock correction stretching a boundary well past the slowest rate, for
+	 * instance - so that neither the running estimate nor the timing of a block
+	 * can be built from one. It does NOT and cannot catch tick aliasing: a real
+	 * 65 s gap between 10-sample light blocks aliases to 0.5 s per sample, i.e.
+	 * 2 Hz, which IS a legitimate firmware rate. That is why the cross-payload
+	 * measurement differences absolute real-world-clock milliseconds instead of
+	 * ticks (see
+	 * {@code PayloadContentsDetailsV8orAbove.observeSlowSensorBlockSpacing}) - the
+	 * ambiguity is removed at the source rather than filtered here.
 	 * 
 	 * @param verisenseDevice the device being parsed
 	 * @param slowSensorId the slow sensor's data block id
@@ -339,12 +343,18 @@ public class UtilCsvSplitting {
 	 * minute) while the true spacing is under a minute. Inside one payload that is
 	 * guaranteed by the payload's own duration, but across payloads it has to be
 	 * bounded by what the sensor could be configured to do: the slowest rate the
-	 * hardware offers times the samples per block. A 10-sample VD6283 block spans
-	 * at most 20 s (slowest firmware rate 0.5 Hz) and is always safe; a 16-sample
-	 * MLX90632 block at its slowest 0.25 Hz output spans 64 s and is not - which
-	 * costs nothing, because the MLX90632's refresh code IS stored in the payload,
-	 * so its header-derived rate is already correct and only needs the
-	 * within-payload refinement it has always had.
+	 * hardware offers times the samples per block.
+	 * <p>
+	 * A 10-sample VD6283 block spans at most 20 s (slowest firmware rate 0.5 Hz)
+	 * and is always safe. A 16-sample MLX90632 block spans 64 s in the common
+	 * medical-mode worst case (0.5 Hz refresh / 2 = 0.25 Hz output) and 96 s in
+	 * the extended-mode worst case
+	 * ({@link com.shimmerresearch.verisense.sensors.SensorMLX90632#MIN_OUTPUT_RATE_HZ},
+	 * 0.5 Hz refresh / 3 = 0.167 Hz), and this method uses that worst case - both
+	 * exceed the 60 s unambiguous span, so the skin temp never qualifies. It costs
+	 * nothing: the MLX90632's refresh code IS stored in the payload, so its
+	 * header-derived rate is already correct and it only needs the within-payload
+	 * refinement it has always had.
 	 * 
 	 * @param slowSensorId the slow sensor's data block id
 	 * @param samplesPerBlock the sensor's fixed samples per block
