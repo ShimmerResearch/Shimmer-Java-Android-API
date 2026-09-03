@@ -81,7 +81,16 @@ public class SensorVD6283 extends AbstractSensor {
 			{-0.028752, 0.506372, -0.120614},
 			{-0.552625, 0.335866, 0.494781}};
 
-	/** Poll ceiling in continuous mode (firmware slow-sensor sampler). */
+	/**
+	 * The rates the firmware can actually be configured to, from the slow-sensor
+	 * sampler's index table (hal_slowSensorSampler.c
+	 * {@code slowSensorRateMs[] = {0, 2000, 1000, 500, 200, 100, 50}}, i.e.
+	 * 0/0.5/1/2/5/10/20 Hz). The index lives in operational-config byte 75
+	 * (LIGHT_SAMPLE_RATE_INDEX) and is NOT copied into the stored payload header,
+	 * so a file parser cannot read the configured rate back - it can only bound
+	 * it. MAX_SAMPLE_RATE_HZ doubles as the poll ceiling in continuous mode.
+	 */
+	public static final double MIN_SAMPLE_RATE_HZ = 0.5;
 	public static final double MAX_SAMPLE_RATE_HZ = 20.0;
 
 	public static final String UNITS_LUX = "lux";
@@ -307,10 +316,28 @@ public class SensorVD6283 extends AbstractSensor {
 	}
 
 	/**
-	 * Exposure-limited sample-rate ESTIMATE (Hz). The configured rate is not in
-	 * the stored payload header and the chip adds per-measurement dead time, so
-	 * this only seeds data-block timing - the parser refines the rate per payload
-	 * from consecutive light-block timestamps.
+	 * Exposure-derived UPPER BOUND on the sample rate (Hz), not the configured
+	 * rate.
+	 * <p>
+	 * The exposure only caps how fast the chip can measure: the firmware sets the
+	 * inter-measurement time to the configured sample period and the VD6283
+	 * measures every {@code max(inter-measurement, exposure)}, so the exposure
+	 * bounds the rate from above and says nothing about it otherwise. The rate
+	 * ITSELF is operational-config byte 75 (LIGHT_SAMPLE_RATE_INDEX) into
+	 * {@link #MIN_SAMPLE_RATE_HZ}..{@link #MAX_SAMPLE_RATE_HZ}, which is NOT
+	 * stored in the payload header - the firmware defaults it to 1 Hz when the
+	 * sensor is enabled with index 0 (ASM_Production/main.c), and 1 Hz with the
+	 * default 100 ms exposure is a factor of TEN below this bound.
+	 * <p>
+	 * So this value is only good enough to seed the timing of the FIRST block of a
+	 * CSV set; every block after it is re-timed from the measured inter-block
+	 * spacing by
+	 * {@code PayloadContentsDetailsV8orAbove.refineSlowSensorSamplingRateFromBlockTicks}.
+	 * Deriving sample spacing from it alone compressed each 10-sample block into
+	 * 0.9 s of a 10 s span and left the remainder looking like a 9.1 s gap, which
+	 * split the CSV on every block (DEV-979).
+	 * 
+	 * @return the exposure-limited upper bound on the sample rate in Hz
 	 */
 	public double getRateFreq() {
 		return Math.min(MAX_SAMPLE_RATE_HZ, 1e6 / getExposureUs());

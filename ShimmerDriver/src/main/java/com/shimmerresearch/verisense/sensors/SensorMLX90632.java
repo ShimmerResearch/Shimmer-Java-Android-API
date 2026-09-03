@@ -51,6 +51,20 @@ public class SensorMLX90632 extends AbstractSensor {
 
 	/** Refresh-rate code (header byte 32 bits 3:1) -> chip refresh Hz. */
 	public static final double[] REFRESH_HZ_TABLE = {0.5, 1, 2, 4, 8, 16, 32, 64};
+	/**
+	 * Output-rate bounds implied by the refresh table across BOTH modes: the
+	 * slowest configuration is REFRESH_HZ_TABLE[0] (0.5 Hz) divided by
+	 * {@link #SUB_MEASUREMENTS_EXTENDED} (3) = 0.167 Hz, and the fastest is
+	 * REFRESH_HZ_TABLE[7] (64 Hz) divided by {@link #SUB_MEASUREMENTS_MEDICAL}
+	 * (2) = 32 Hz. A parser can therefore bound this sensor's output rate from
+	 * the payload header before it has measured anything - and unlike the
+	 * VD6283's, the rate itself IS recoverable from the header (the refresh code
+	 * is stored), so {@link #getRateFreq()} is a real estimate rather than only an
+	 * upper bound.
+	 */
+	public static final double MIN_OUTPUT_RATE_HZ = 0.5/3;
+	public static final double MAX_OUTPUT_RATE_HZ = 32.0;
+
 	/** Sub-measurements per output: medical mode = 2, extended mode = 3. */
 	public static final int SUB_MEASUREMENTS_MEDICAL = 2;
 	public static final int SUB_MEASUREMENTS_EXTENDED = 3;
