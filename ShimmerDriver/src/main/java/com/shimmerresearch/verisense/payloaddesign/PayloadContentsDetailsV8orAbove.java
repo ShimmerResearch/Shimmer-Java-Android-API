@@ -374,23 +374,34 @@ public class PayloadContentsDetailsV8orAbove extends PayloadContentsDetails {
 			dataBlockDetails.calculateTimestampDiffInS();
 		}
 
-		// Seed the CSV gap-splitting window from the OBSERVED period spread rather
-		// than a single-rate +/-10% band. The header-derived estimate can sit within
-		// ~1% of the band edge (VD6283: 10 Hz estimated vs ~9.09 Hz achieved), and
-		// the slow sensors' cadence is inherently bimodal (exposure vs exposure +
-		// dead time: ~100 vs ~110 ms for the light at the default exposure), so a
-		// band centred on ANY single rate can clip real spacing and fragment the
-		// CSV. Spanning [min, max] observed period with the standard tolerance keeps
-		// everything seen continuous while a dropped block (2x period) still splits.
-		// populateExpectedPayloadTsDiffLimitMapIfNeeded runs after this and is
-		// containsKey-guarded, so this seeding wins.
+		// Seed the CSV gap-splitting window from the OBSERVED cadence rather than a
+		// single-rate +/-10% band. The header-derived estimate can sit within ~1% of
+		// the band edge (VD6283: 10 Hz estimated vs ~9.09 Hz achieved), and the slow
+		// sensors' cadence is inherently jittery: the light's is bimodal (exposure vs
+		// exposure + dead time: ~100 vs ~110 ms at the default exposure) and the
+		// MLX90632's conversions can slip by several refresh periods and then catch
+		// up (observed +12.5% block spacing with no samples lost - DEV-927
+		// validation data). A single payload carries only 2-3 slow-sensor blocks,
+		// i.e. one or two inter-block gaps - no spread information - so the gap
+		// side of the window cannot rely on observed spread at all: it is set to
+		// tolerate anything up to SLOW_SENSOR_MAX_INTER_BLOCK_GAP_RATIO x the
+		// achieved median spacing, which keeps healthy jitter continuous while a
+		// genuinely dropped block (2x spacing) still splits. The fast side keeps
+		// the observed-minimum-period basis with the standard tolerance.
+		// The put is deliberately UNCONDITIONAL: the limits map is global across
+		// payloads, and a payload with fewer than two blocks of this sensor (early
+		// return above - e.g. the very first payload of a recording) leaves
+		// populateExpectedPayloadTsDiffLimitMapIfNeeded to seed a configured-rate
+		// +/-10% band first. A containsKey guard here would then lock that too-tight
+		// estimate in for the whole file (observed: 25-min DEV-927 skin-temp
+		// recording fragmented into 7 CSVs); the measured window must win as soon as
+		// it exists, and re-measuring on every payload keeps it tracking the sensor.
 		double minPeriodS = perSamplePeriodsS.get(0);
-		double maxPeriodS = perSamplePeriodsS.get(perSamplePeriodsS.size()-1);
 		double[] samplingRateLimits = new double[] {
-				(1.0/maxPeriodS)*UtilCsvSplitting.FILE_GAP_TOLERANCE_MULTIPLIER.LOWER,
+				achievedRateHz/UtilCsvSplitting.FILE_GAP_TOLERANCE_MULTIPLIER.SLOW_SENSOR_MAX_INTER_BLOCK_GAP_RATIO,
 				(1.0/minPeriodS)*UtilCsvSplitting.FILE_GAP_TOLERANCE_MULTIPLIER.UPPER};
 		for(SENSORS sensorClassKey:verisenseDevice.getOrCreateListOfSensorClassKeysForDataBlockId(slowSensorId)) {
-			if(sensorClassKey!=SENSORS.CLOCK && !UtilCsvSplitting.SAMPLING_RATE_LIMITS_PER_SENSOR.containsKey(sensorClassKey)) {
+			if(sensorClassKey!=SENSORS.CLOCK) {
 				UtilCsvSplitting.SAMPLING_RATE_LIMITS_PER_SENSOR.put(sensorClassKey, samplingRateLimits);
 			}
 		}
