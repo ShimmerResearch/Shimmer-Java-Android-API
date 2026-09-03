@@ -1351,7 +1351,7 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 	protected void discardBufferBytesToNextPacket(){
 		byte[] bTemp = mByteArrayOutputStream.toByteArray();
 		
-		//Find index of first DATA_PACKET or ACK byte within the buffer
+		//Find index of first DATA_PACKET, ACK or NACK byte within the buffer
 		int offset = findOffsetOfNextPacketBoundary(bTemp);
 		//If not found, just skip one byte
 		offset = (offset == -1) ? 1 : offset;
@@ -1375,7 +1375,7 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 	private static int findOffsetOfNextPacketBoundary(byte[] buffer) {
 		for (int i = 1; i < buffer.length; i++) {
 			byte b = buffer[i];
-			if (b == 0 || b == ACK_COMMAND_PROCESSED || b == NACK_COMMAND_PROCESSED)
+			if (b == DATA_PACKET || b == ACK_COMMAND_PROCESSED || b == NACK_COMMAND_PROCESSED)
 				return i;
 		}
 		return -1;
@@ -1951,10 +1951,12 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 	 * Unwinds the in-flight transaction after the Shimmer answered a command
 	 * with NACK (0xFE) instead of ACK.
 	 *
-	 * <p>The refused instruction is dropped and the stack advances, exactly as
-	 * it would on an ACK, so one refused command no longer stalls everything
-	 * queued behind it. The connection is left up: a refusal means the device
-	 * declined this command, not that the link is gone.
+	 * <p>The refused instruction is dropped and the stack advances, as it would
+	 * on an ACK, so one refused command no longer stalls everything queued
+	 * behind it. It is dropped only when it is still queued - a GET's
+	 * instruction is already gone by the time its response is awaited. The
+	 * connection is left up: a refusal means the device declined this command,
+	 * not that the link is gone.
 	 */
 	private void processNackFromCommand() {
 		stopTimerCheckForAckOrResp(); //cancel the ack timer
@@ -1962,11 +1964,17 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 		
 		byte refusedCommand = mCurrentCommand;
 		
+		/* Only the ACK-wait state still has the refused instruction queued: a
+		 * GET's instruction is removed as soon as its ACK arrives, so removing
+		 * one here as well would drop whatever was queued behind it and silently
+		 * skip that command. */
+		boolean instructionStillQueued = mWaitForAck;
+		
 		mWaitForAck=false;
 		mWaitForResponse=false;
 		
-		//Drop the refused instruction, as both ACK paths do for their command
-		if(getListofInstructions().size()>0){
+		//Drop the refused instruction, as the ACK path does for its own command
+		if(instructionStillQueued && getListofInstructions().size()>0){
 			removeInstruction(0);
 		}
 		removeAllNulls();

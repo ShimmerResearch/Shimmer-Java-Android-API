@@ -652,8 +652,16 @@ public class LiteProtocol extends AbstractCommsProtocol{
 				byteBuffer=readBytes(1);
 				mIamAlive = true;
 				
+				/* As in the ACK-wait path above, and matching ShimmerBluetooth: a
+				 * NACK can land here instead if the firmware only discovers it
+				 * cannot serve a GET while building the response. Checked before
+				 * isKnownResponseByte() so it is handled as a refusal rather than
+				 * falling through to the ACK/response timeout. */
+				if((((int)byteBuffer[0])&0xFF)==NACK_COMMAND_PROCESSED_VALUE){
+					processNackFromCommand();
+				}
 				//Check to see whether it is a response byte
-				if(isKnownResponseByte(byteBuffer[0])){
+				else if(isKnownResponseByte(byteBuffer[0])){
 					byte responseCommand = byteBuffer[0];
 					
 					if(mUseShimmerBluetoothApproach){
@@ -1320,10 +1328,15 @@ public class LiteProtocol extends AbstractCommsProtocol{
 		
 		int refusedCommand = ((int)mCurrentCommand)&0xFF;
 		
+		/* Only the ACK-wait state still has the refused instruction queued: a
+		 * GET's instruction is removed as soon as its ACK arrives, so removing
+		 * one here as well would drop whatever was queued behind it. */
+		boolean instructionStillQueued = mWaitForAck;
+		
 		mWaitForAck=false;
 		mWaitForResponse=false;
 		
-		if(getListofInstructions().size()>0){
+		if(instructionStillQueued && getListofInstructions().size()>0){
 			getListofInstructions().remove(0);
 		}
 		getListofInstructions().removeAll(Collections.singleton(null));
