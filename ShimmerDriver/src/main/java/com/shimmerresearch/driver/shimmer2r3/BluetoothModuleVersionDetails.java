@@ -99,6 +99,6 @@ public class BluetoothModuleVersionDetails implements Serializable {
 	public boolean isBtModuleVersionVelaIf820() {
 		return mBtModuleVersionParsed == BT_MODULE_VERSION.VELA_IF820_V01_04_12_12
 				|| mBtModuleVersionParsed == BT_MODULE_VERSION.VELA_IF820_V01_04_16_16
-						|| mBtModuleVersionParsed == BT_MODULE_VERSION.VELA_IF820_V01_04_18_18;
+				|| mBtModuleVersionParsed == BT_MODULE_VERSION.VELA_IF820_V01_04_18_18;
 	}
 }
