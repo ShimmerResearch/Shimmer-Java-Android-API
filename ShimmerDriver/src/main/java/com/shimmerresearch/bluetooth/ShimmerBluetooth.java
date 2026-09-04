@@ -614,15 +614,15 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 				//In-Shimmer Test here
 				if(InShimmerTest) {
 					if (bytesAvailableToBeRead()) {
-					didWork = true;
-					byte[] data = readBytes(availableBytes());
-					if (data!=null) {
-						if (data.length>0) {
-							if (mTestByteListener != null) {
-			        			mTestByteListener.eventNewBytesReceived(data);
-			        		}
+						didWork = true;
+						byte[] data = readBytes(availableBytes());
+						if (data!=null) {
+							if (data.length>0) {
+								if (mTestByteListener != null) {
+									mTestByteListener.eventNewBytesReceived(data);
+								}
+							}
 						}
-					}
 					}
 				}
 				else {
@@ -794,7 +794,14 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 				if (!mIsStreaming && !bytesAvailableToBeRead()){
 					// Report "did work" (true) so the caller's own idle sleep in run()
 					// doesn't stack an extra wait on top of this one.
-					threadSleep(50);
+					// Not threadSleep(): that helper swallows InterruptedException without
+					// restoring the interrupt flag, which would defeat run()'s
+					// !Thread.currentThread().isInterrupted() loop-exit check.
+					try {
+						Thread.sleep(50);
+					} catch (InterruptedException e) {
+						Thread.currentThread().interrupt();
+					}
 					return true;
 				}
 				return false;

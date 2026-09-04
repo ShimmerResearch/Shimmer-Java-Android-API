@@ -616,23 +616,27 @@ public class ShimmerPC extends ShimmerBluetooth implements Serializable{
 			if (ioThread != null) {
 				ioThread.stop = true;
 
-				// Closing serial port before before thread is finished stopping throws an error so waiting here.
+				// Closing serial port before thread is finished stopping throws an error so waiting here.
 				// Bounded join instead of an empty-body busy-wait, so this can't block indefinitely.
 				// Skip the join when closeConnection() is reached from the IOThread itself
 				// (connectionLost() fires on it when the serial port errors mid-read/write) -
 				// a self-join can never succeed and would just burn the full timeout.
 				if(Thread.currentThread() != ioThread){
+					// Interrupt before joining: run() now exits promptly on
+					// Thread.currentThread().isInterrupted(), and any idle Thread.sleep()
+					// it's waiting in will wake immediately - making shutdown faster and
+					// more deterministic than waiting out the bounded join first.
+					ioThread.interrupt();
 					try {
 						ioThread.join(2000);
 					} catch (InterruptedException e) {
 						Thread.currentThread().interrupt();
 					}
 					if (ioThread.isAlive()) {
-						// Didn't terminate within the bounded join - interrupt it so the
-						// thread's own interrupt checks can finish tearing it down, rather
-						// than silently proceeding to close the port under a live reader.
-						consolePrintLn("Warning: IOThread did not terminate within join timeout; interrupting");
-						ioThread.interrupt();
+						// Still not terminated after the interrupt + bounded join - most
+						// likely blocked in a non-interruptible native serial read. Just
+						// warn; a second interrupt() here wouldn't unblock it either.
+						consolePrintLn("Warning: IOThread did not terminate within join timeout; it may be blocked in a non-interruptible read");
 					}
 				}
 
@@ -646,14 +650,15 @@ public class ShimmerPC extends ShimmerBluetooth implements Serializable{
 						// listeners, so a listener calling disconnect() would self-join here -
 						// guard the same way as the IOThread above.
 						if (Thread.currentThread() != pThread) {
+							// Interrupt before joining - see the IOThread teardown above.
+							pThread.interrupt();
 							try {
 								pThread.join(2000);
 							} catch (InterruptedException e) {
 								Thread.currentThread().interrupt();
 							}
 							if (pThread.isAlive()) {
-								consolePrintLn("Warning: ProcessingThread did not terminate within join timeout; interrupting");
-								pThread.interrupt();
+								consolePrintLn("Warning: ProcessingThread did not terminate within join timeout");
 							}
 						}
 					}

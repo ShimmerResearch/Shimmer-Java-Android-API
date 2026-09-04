@@ -550,21 +550,24 @@ public class ShimmerGRPC extends ShimmerBluetooth implements Serializable{
 	        IOThread ioThread = mIOThread;
 	        if (ioThread != null) {
 	            ioThread.stop = true;
-	            ioThread.interrupt();
 	            // Skip the join when closeConnection() is reached from the IOThread itself -
-	            // a self-join can never succeed and would just burn the full timeout.
+	            // a self-join can never succeed and would just burn the full timeout. The
+	            // interrupt() call moves inside this guard too: calling it unconditionally
+	            // would mark the *current* thread interrupted in the self-close case.
 	            if (Thread.currentThread() != ioThread) {
+	                // Interrupt before joining: run() now exits promptly on
+	                // Thread.currentThread().isInterrupted(), and any idle Thread.sleep()
+	                // it's waiting in will wake immediately - making shutdown faster and
+	                // more deterministic than waiting out the bounded join first.
+	                ioThread.interrupt();
 	                try {
 	                    ioThread.join(2000); // Bounded wait so this can't block indefinitely
 	                } catch (InterruptedException e) {
 	                    Thread.currentThread().interrupt();
 	                }
 	                if (ioThread.isAlive()) {
-	                    // Didn't terminate within the bounded join - interrupt again so the
-	                    // thread's own interrupt checks can finish tearing it down, rather
-	                    // than silently proceeding to close the port under a live reader.
-	                    consolePrintLn("Warning: IOThread did not terminate within join timeout; interrupting");
-	                    ioThread.interrupt();
+	                    // Still not terminated after the interrupt + bounded join.
+	                    consolePrintLn("Warning: IOThread did not terminate within join timeout");
 	                }
 	            }
 	            mIOThread = null;
@@ -573,16 +576,16 @@ public class ShimmerGRPC extends ShimmerBluetooth implements Serializable{
 	                ProcessingThread pThread = mPThread;
 	                if (pThread != null) {
 	                    pThread.stop = true;
-	                    pThread.interrupt();
 	                    if (Thread.currentThread() != pThread) {
+	                        // Interrupt before joining - see the IOThread teardown above.
+	                        pThread.interrupt();
 	                        try {
 	                            pThread.join(2000);
 	                        } catch (InterruptedException e) {
 	                            Thread.currentThread().interrupt();
 	                        }
 	                        if (pThread.isAlive()) {
-	                            consolePrintLn("Warning: ProcessingThread did not terminate within join timeout; interrupting");
-	                            pThread.interrupt();
+	                            consolePrintLn("Warning: ProcessingThread did not terminate within join timeout");
 	                        }
 	                    }
 	                }

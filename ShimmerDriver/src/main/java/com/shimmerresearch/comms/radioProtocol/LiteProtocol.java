@@ -260,17 +260,21 @@ public class LiteProtocol extends AbstractCommsProtocol{
 			// synchronously from within IOThread.run()'s catch block (error-driven teardown),
 			// and a thread joining itself would just burn the full timeout.
 			if(Thread.currentThread() != mIOThread){
+				// Interrupt before joining: run() now exits promptly on
+				// Thread.currentThread().isInterrupted(), and any idle Thread.sleep()/
+				// queue poll() it's waiting in will wake immediately - making shutdown
+				// faster and more deterministic than waiting out the bounded join first.
+				mIOThread.interrupt();
 				try {
 					mIOThread.join(2000);
 				} catch (InterruptedException e) {
 					Thread.currentThread().interrupt();
 				}
 				if (mIOThread.isAlive()) {
-					// Didn't terminate within the bounded join - interrupt it so the
-					// thread's own interrupt checks can finish tearing it down, rather
-					// than silently proceeding under a live reader.
-					printLogDataForDebugging("Warning: IOThread did not terminate within join timeout; interrupting");
-					mIOThread.interrupt();
+					// Still not terminated after the interrupt + bounded join - most likely
+					// blocked in a non-interruptible native serial read. Just warn; a second
+					// interrupt() here wouldn't unblock it either.
+					printLogDataForDebugging("Warning: IOThread did not terminate within join timeout; it may be blocked in a non-interruptible read");
 				}
 			}
 			mIOThread = null;
@@ -442,7 +446,14 @@ public class LiteProtocol extends AbstractCommsProtocol{
 					// No instruction pending and nothing else to do - wait here rather than
 					// busy-spinning. Report "did work" (true) so the caller's own idle sleep
 					// in run() doesn't stack an extra wait on top of this one.
-					threadSleep(50);
+					// Not threadSleep(): that helper swallows InterruptedException without
+					// restoring the interrupt flag, which would defeat run()'s
+					// !Thread.currentThread().isInterrupted() loop-exit check.
+					try {
+						Thread.sleep(50);
+					} catch (InterruptedException e) {
+						Thread.currentThread().interrupt();
+					}
 					return true;
 				}
 			}
