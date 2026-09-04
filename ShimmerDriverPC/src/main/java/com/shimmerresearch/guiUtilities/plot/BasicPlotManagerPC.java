@@ -1717,6 +1717,47 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 		}
 	}
 
+	/** DEV-896: {@code mChart} is optional - {@link #filterDataAndPlot(ObjectCluster)} falls back to
+	 * another monitor when no chart is set yet - and the deferred replay can run
+	 * {@code throwExceptionSignalNotFound()} / {@code printSignalProps()} in that state, so neither
+	 * may dereference {@code mChart} directly. */
+	private String getChartNameForPrinting(){
+		return (mChart!=null)? mChart.getName() : "<no chart>";
+	}
+
+	/**
+	 * DEV-896: True when the runtime class overrides
+	 * {@link #updateHrPanelIfVisible(String[], ObjectCluster)}. In this base class that method is a
+	 * no-op, so there is no point recording (and allocating) a deferred HR action per trace per
+	 * sample for plots that will never do anything with it; only the downstream override (Consensys
+	 * {@code PlotManagerPC}) needs them, and it counts its calls, so when it IS present every
+	 * matching trace must still produce exactly one call.
+	 *
+	 * <p>Resolved once per instance rather than per sample. The method is {@code protected}, so
+	 * {@code getMethod()} would not see it - the class hierarchy is walked with
+	 * {@code getDeclaredMethod()} from the runtime class up to (but excluding) this class instead.
+	 * Anything unexpected from the reflective lookup defaults to {@code true}, i.e. to the previous
+	 * unconditional behaviour, so a hardened SecurityManager can only cost the allocation, never
+	 * suppress an HR update.</p>
+	 */
+	private final boolean mIsHrPanelUpdateOverridden = isHrPanelUpdateOverridden(getClass());
+
+	private static boolean isHrPanelUpdateOverridden(Class<?> runtimeClass){
+		try {
+			for(Class<?> c = runtimeClass; c!=null && c!=BasicPlotManagerPC.class; c = c.getSuperclass()){
+				try {
+					c.getDeclaredMethod("updateHrPanelIfVisible", String[].class, ObjectCluster.class);
+					return true;
+				} catch (NoSuchMethodException e) {
+					//Not declared at this level, keep walking up towards BasicPlotManagerPC.
+				}
+			}
+			return false;
+		} catch (Throwable t) {
+			return true; //Safe default: behave exactly as before the optimisation.
+		}
+	}
+
 	/** DEV-896: Replays the work recorded by {@link #filterDataAndPlot(ObjectCluster)} while it held
 	 * the chart monitor. Must be called on every exit path from the batched loop, including the
 	 * "Trace does not exist" throw, because before the lock was batched this work ran inline (the
@@ -1886,7 +1927,7 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 	}
 
 	private void throwExceptionSignalNotFound(String traceName, ObjectCluster ojc) throws Exception {
-		utilShimmer.consolePrintLn("mChart.getName(): " +mChart.getName());
+		utilShimmer.consolePrintLn("mChart.getName(): " +getChartNameForPrinting());
 		if(ojc!=null) {
 			ojc.consolePrintChannelsAndDataSingleLine();
 		}
@@ -1938,7 +1979,7 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 	protected void printSignalProps(ObjectCluster ojc, int traceSize, String[] props, double xData, double yData){
 		if(mIsDebugMode){
 			utilShimmer.consolePrintErrLn(
-					"ChartName:" + mChart.getName()
+					"ChartName:" + getChartNameForPrinting()
 					+ "\tShimmerName:" + ojc.getShimmerName()
 					+ "\ttrace size:" + traceSize + "."
 					+ "\tprops1:" + props[1] + "."
@@ -2116,6 +2157,15 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 				//The per-sample toArray() allocation is deliberate: reusing a cached array would need
 				//the mListofTraces monitor (or a copy under it) at exactly the point where taking that
 				//monitor is what we are avoiding, so there is no trivially safe reuse here.
+				//No explicit synchronized(mListofTraces) is needed for the snapshot itself either:
+				//mListofTraces is a Collections.synchronizedList, so toArray() already copies under
+				//that list's own mutex and cannot observe a half-applied structural change. Its index
+				//alignment with mListofPropertiestoPlot is what actually matters here, and that is
+				//protected by the mListofPropertiestoPlot monitor this method holds for the whole
+				//sample: removeSignal()/removeSignalInternal() mutate both lists under it. The one
+				//exception is removeAllSignals(), which holds neither - but it also clears
+				//mListofPropertiestoPlot underneath this method's live iterator, a pre-existing hazard
+				//that predates and is independent of this batching.
 				ITrace2D[] tracesSnapshot = mListofTraces.toArray(new ITrace2D[0]);
 				Object chartMonitor = (mChart != null) ? (Object)mChart : (Object)mListofPropertiestoPlot;
 				//DEV-896: nothing inside the chart monitor below may call Swing or do console I/O -
@@ -2219,11 +2269,14 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 							deferredActions.add(DeferredPlotAction.printSignalProps(currentTrace.getSize(), props, xData, yData));
 						}
 
-						//Recorded unconditionally: whether an HR panel is actually visible is known
-						//only to the downstream (Consensys) updateHrPanelIfVisible() override, and that
-						//override counts calls, so this must stay one recorded action per matching
-						//trace. In the base class the replayed call is a no-op.
-						deferredActions.add(DeferredPlotAction.updateHrPanel(props));
+						//Recorded once per matching trace whenever the runtime class actually overrides
+						//updateHrPanelIfVisible(): whether a panel is currently visible is known only
+						//to that override, and it counts its calls, so no further filtering is safe.
+						//When it is not overridden the replayed call would be a no-op, so skip the
+						//record (and its allocation) entirely - see mIsHrPanelUpdateOverridden.
+						if(mIsHrPanelUpdateOverridden){
+							deferredActions.add(DeferredPlotAction.updateHrPanel(props));
+						}
 
 						Double halfWindowSize = mMapofHalfWindowSize.get(traceName);
 						if (halfWindowSize!=null){
