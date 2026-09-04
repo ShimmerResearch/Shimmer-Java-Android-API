@@ -577,7 +577,7 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 	}
 	
 	public class ProcessingThread extends Thread {
-		public boolean stop = false;
+		public volatile boolean stop = false;
 		int count=0;
 		public void run() {
 			while (!stop && !Thread.currentThread().isInterrupted()) {
@@ -606,7 +606,7 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 	
 	public class IOThread extends Thread {
 		protected byte[] byteBuffer = {0};
-		public boolean stop = false;
+		public volatile boolean stop = false;
 		
 		public void run() {
 			while(!stop && !Thread.currentThread().isInterrupted()) {
@@ -785,10 +785,15 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 					mTransactionCompleted=false;
 				return true;
 			} else {
+				// getInstruction() returned null here - either the instruction stack is
+				// genuinely empty, or its leading entry was a null placeholder that
+				// getInstruction() just removed (a real instruction may still be next in
+				// the list and will be picked up on the following iteration). Either way,
+				// if there's also nothing else to do this iteration, wait here rather than
+				// busy-spinning.
 				if (!mIsStreaming && !bytesAvailableToBeRead()){
-					// No instruction pending and nothing else to do - wait here rather than
-					// busy-spinning. Report "did work" (true) so the caller's own idle sleep
-					// in run() doesn't stack an extra wait on top of this one.
+					// Report "did work" (true) so the caller's own idle sleep in run()
+					// doesn't stack an extra wait on top of this one.
 					threadSleep(50);
 					return true;
 				}

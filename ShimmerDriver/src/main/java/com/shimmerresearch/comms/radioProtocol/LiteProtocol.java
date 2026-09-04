@@ -265,6 +265,13 @@ public class LiteProtocol extends AbstractCommsProtocol{
 				} catch (InterruptedException e) {
 					Thread.currentThread().interrupt();
 				}
+				if (mIOThread.isAlive()) {
+					// Didn't terminate within the bounded join - interrupt it so the
+					// thread's own interrupt checks can finish tearing it down, rather
+					// than silently proceeding under a live reader.
+					printLogDataForDebugging("Warning: IOThread did not terminate within join timeout; interrupting");
+					mIOThread.interrupt();
+				}
 			}
 			mIOThread = null;
 		}
@@ -273,7 +280,7 @@ public class LiteProtocol extends AbstractCommsProtocol{
 	
 	public class IOThread extends Thread {
 		byte[] byteBuffer = {0};
-		public boolean stop = false;
+		public volatile boolean stop = false;
 		
 		/*
 		 * Deliberately NOT synchronized: Thread.join() locks this same Thread
