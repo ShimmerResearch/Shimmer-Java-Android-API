@@ -326,7 +326,12 @@ public class LiteProtocol extends AbstractCommsProtocol{
 			}
 		}
 
-		/** @return true if an instruction was found and processed (i.e. useful work was done) */
+		/**
+		 * @return true if an instruction was found and processed (i.e. useful work was done),
+		 * or if this call already idle-paced the loop with its own threadSleep(50) below -
+		 * in that case reporting true here stops run()'s outer idle-sleep from stacking an
+		 * additional wait on top of this one.
+		 */
 		private boolean processNextInstruction() throws ShimmerException {
 			// check instruction stack, are there any other instructions left to be executed?
 			if(!getListofInstructions().isEmpty()) {
@@ -427,7 +432,11 @@ public class LiteProtocol extends AbstractCommsProtocol{
 			}
 			else {
 				if (!isStreaming() && !bytesAvailableToBeRead()){
+					// No instruction pending and nothing else to do - wait here rather than
+					// busy-spinning. Report "did work" (true) so the caller's own idle sleep
+					// in run() doesn't stack an extra wait on top of this one.
 					threadSleep(50);
+					return true;
 				}
 			}
 			return false;
