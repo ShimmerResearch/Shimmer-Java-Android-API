@@ -35,9 +35,13 @@ import info.monitorenter.gui.chart.traces.Trace2DLtd;
  *   <li>If X ever arrives out of order (e.g. plot re-fed on rewind / replay / device reset)
  *       the run is reset and we fall back to the superclass scans until enough monotonic
  *       samples have refilled the buffer, so the displayed range is always exact.</li>
- *   <li>Y is left entirely to the superclass. For random Y the oldest point holds the Y
- *       extreme only ~2/size of the time, so the Y rescan cost is already amortised O(1);
- *       optimising it is unnecessary and would risk the displayed Y auto-scale.</li>
+ *   <li>Y is left entirely to the superclass, so the Y bounds are exactly the stock ones and no
+ *       Y work is saved here. For random-walk Y the oldest point holds the Y extreme only
+ *       ~2/size of the time, so that rescan is already amortised O(1). A monotone or steadily
+ *       drifting Y channel (battery, temperature, GSR baseline, sample counters) is the bad case
+ *       and still pays the superclass O(buffer) {@code minYSearch()}/{@code maxYSearch()} on
+ *       essentially every sample; only the X half of the problem is fixed here. That is why the
+ *       caller also bounds how many traces one chart-monitor acquisition covers.</li>
  *   <li>{@code setMaxSize(int)} is {@code final} in {@code Trace2DLtd} so it cannot be
  *       overridden, but no reset hook is needed: {@link #isBufferSortedAscendingByX()} reads
  *       the live {@code m_buffer.size()} each call. Growing leaves the element count and
@@ -46,9 +50,12 @@ import info.monitorenter.gui.chart.traces.Trace2DLtd;
  *       keeps the buffer sorted.</li>
  * </ul>
  *
- * <p>Externally this class behaves identically to {@code Trace2DLtd} (same bounds, same
- * property-change events, same {@code setMaxSize} semantics); it only removes the redundant
- * O(n) X rescans. It extends {@code Trace2DLtd} so existing
+ * <p>Externally this class reports the same bounds, property-change events and
+ * {@code setMaxSize} semantics as {@code Trace2DLtd}; it only removes the redundant O(n) X
+ * rescans. The one behavioural difference is a deliberate opt-out rather than a divergence: if any
+ * error bar policy is installed on the trace, both X searches delegate wholly to the superclass,
+ * because stock {@code minXSearch()}/{@code maxXSearch()} finish by folding the error bar extents
+ * into the bounds and the O(1) path has no equivalent. It extends {@code Trace2DLtd} so existing
  * {@code ((Trace2DLtd)trace).setMaxSize(...)} / {@code .iterator()} casts keep working.</p>
  */
 public class Trace2DLtdMonotonicX extends Trace2DLtd {
@@ -142,6 +149,12 @@ public class Trace2DLtdMonotonicX extends Trace2DLtd {
 
 	@Override
 	protected void minXSearch() {
+		//Stock minXSearch() ends with expandMinXErrorBarBounds(); the O(1) path cannot reproduce
+		//that, so with any error bar policy installed defer entirely to the superclass.
+		if (!getErrorBarPolicies().isEmpty()) {
+			super.minXSearch();
+			return;
+		}
 		if (isBufferSortedAscendingByX()) {
 			try {
 				// Oldest element holds the smallest X when the buffer is sorted ascending.
@@ -156,6 +169,11 @@ public class Trace2DLtdMonotonicX extends Trace2DLtd {
 
 	@Override
 	protected void maxXSearch() {
+		//See minXSearch(): stock maxXSearch() ends with expandMaxXErrorBarBounds().
+		if (!getErrorBarPolicies().isEmpty()) {
+			super.maxXSearch();
+			return;
+		}
 		if (isBufferSortedAscendingByX()) {
 			try {
 				// Youngest element holds the largest X when the buffer is sorted ascending.
