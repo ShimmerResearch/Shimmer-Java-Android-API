@@ -39,6 +39,17 @@ public class AsmBinaryFileConstants {
 		public static final int PAYLOAD_CONFIG11 = 22;
 		public static final int PAYLOAD_CONFIG12 = 23;
 		public static final int PAYLOAD_CONFIG13 = 24;
+		// Second-generation (payload design v13) only: GEN_CFG_3 at abs byte 29 (rel 25)
+		// carries the mag/light/skin-temp/algo-hub enables + LED mode.
+		public static final int GEN_CFG_3 = 25;
+		/** Second-generation only: ambient-light gain index in bits 2:0 and the
+		 * dark-channel enable in bit 7 (abs byte 30). */
+		public static final int LIGHT_GAIN_AND_DARK = 26;
+		/** Second-generation only: ambient-light exposure index (abs byte 31). */
+		public static final int LIGHT_EXPOSURE = 27;
+		/** Second-generation only: skin-temp config (abs byte 32) - bit 0 measType
+		 * (0=medical/1=extended), bits 3:1 MLX90632 refresh-rate code. */
+		public static final int SKIN_TEMP_CONFIG = 28;
 	}
 	
 	public class BYTE_COUNT {

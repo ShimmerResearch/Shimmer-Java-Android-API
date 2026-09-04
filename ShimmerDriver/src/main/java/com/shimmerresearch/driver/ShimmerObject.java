@@ -74,6 +74,7 @@ import com.shimmerresearch.sensors.SensorADC.MICROCONTROLLER_ADC_PROPERTIES;
 import com.shimmerresearch.sensors.bmpX80.SensorBMP180;
 import com.shimmerresearch.sensors.bmpX80.SensorBMP280;
 import com.shimmerresearch.sensors.bmpX80.SensorBMP390;
+import com.shimmerresearch.sensors.bmpX80.SensorBMP581;
 import com.shimmerresearch.sensors.bmpX80.SensorBMPX80;
 import com.shimmerresearch.sensors.kionix.SensorKionixAccel;
 import com.shimmerresearch.sensors.kionix.SensorKionixKXRB52042;
@@ -1995,8 +1996,13 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 				String signalNameBmpX80Temperature = SensorBMP180.ObjectClusterSensorName.TEMPERATURE_BMP180;
 				String signalNameBmpX80Pressure = SensorBMP180.ObjectClusterSensorName.PRESSURE_BMP180;
 				if (getHardwareVersion()==HW_ID.SHIMMER_3R) {
-					signalNameBmpX80Temperature = SensorBMP390.ObjectClusterSensorName.TEMPERATURE_BMP390;
-					signalNameBmpX80Pressure = SensorBMP390.ObjectClusterSensorName.PRESSURE_BMP390;
+					boolean isBmp581 = isSupportedBmp581();
+					signalNameBmpX80Temperature = isBmp581
+							? SensorBMP581.ObjectClusterSensorName.TEMPERATURE_BMP581
+							: SensorBMP390.ObjectClusterSensorName.TEMPERATURE_BMP390;
+					signalNameBmpX80Pressure = isBmp581
+							? SensorBMP581.ObjectClusterSensorName.PRESSURE_BMP581
+							: SensorBMP390.ObjectClusterSensorName.PRESSURE_BMP390;
 				} else if(isSupportedBmp280()){
 					signalNameBmpX80Temperature = SensorBMP280.ObjectClusterSensorName.TEMPERATURE_BMP280;
 					signalNameBmpX80Pressure = SensorBMP280.ObjectClusterSensorName.PRESSURE_BMP280;
@@ -3449,7 +3455,9 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 					packetSize=packetSize+2;
 					enabledSensors |= SENSOR_BMPX80;
 				}else if (getHardwareVersion()==HW_ID.SHIMMER_3R) {
-					String signalName = SensorBMP390.ObjectClusterSensorName.TEMPERATURE_BMP390;
+					String signalName = isSupportedBmp581()
+							? SensorBMP581.ObjectClusterSensorName.TEMPERATURE_BMP581
+							: SensorBMP390.ObjectClusterSensorName.TEMPERATURE_BMP390;
 					signalNameArray[i+1]=signalName;
 					signalDataTypeArray[i+1] = "u24";
 					packetSize=packetSize+3;
@@ -3467,7 +3475,9 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 					packetSize=packetSize+3;
 					enabledSensors |= SENSOR_BMPX80;
 				}else if (getHardwareVersion()==HW_ID.SHIMMER_3R) {
-					String signalName=SensorBMP390.ObjectClusterSensorName.PRESSURE_BMP390;
+					String signalName = isSupportedBmp581()
+							? SensorBMP581.ObjectClusterSensorName.PRESSURE_BMP581
+							: SensorBMP390.ObjectClusterSensorName.PRESSURE_BMP390;
 					signalNameArray[i+1]=signalName;
 					signalDataTypeArray[i+1] = "u24";
 					packetSize=packetSize+3;
@@ -5476,7 +5486,11 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 			}
 			
 		} else if(isShimmerGen3R()){
-			mSensorBMPX80 = new SensorBMP390(this);
+			if(isSupportedBmp581()){
+				mSensorBMPX80 = new SensorBMP581(this);
+			} else {
+				mSensorBMPX80 = new SensorBMP390(this);
+			}
 			addSensorClass(mSensorBMPX80);
 			
 			mSensorLSM6DSV = new SensorLSM6DSV(this);
@@ -10739,6 +10753,46 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 
 	public static boolean isSupportedBmp280(ShimmerVerObject svo, ExpansionBoardDetails ebd) {
 		return isSupportedNewImuSensors(svo, ebd);
+	}
+
+	/** Returns true if this Shimmer3R uses the BMP581 pressure sensor (instead of
+	 * the BMP390). The BMP581 is fitted to up-rev'd Shimmer3R boards; unlike the
+	 * BMP390 it streams pre-compensated pressure/temperature, so no calibration
+	 * coefficients are fetched or applied. Selection is gated on both the board
+	 * SR number/revision and the firmware version that produces the new output
+	 * format.
+	 *
+	 * @return true if the connected Shimmer3R board revision and firmware version indicate BMP581 output support
+	 */
+	public boolean isSupportedBmp581() {
+		return isSupportedBmp581(getShimmerVerObject(), getExpansionBoardDetails());
+	}
+
+	public static boolean isSupportedBmp581(ShimmerVerObject svo, ExpansionBoardDetails ebd) {
+		if(svo==null || ebd==null || svo.getHardwareVersion()!=HW_ID.SHIMMER_3R){
+			return false;
+		}
+
+		// SR48 (GSR+): BMP581 spans two bands - 7.2..7.x AND 8.2 and above.
+		// 7.0/7.1 and 8.0/8.1 are BMP390, so a single lexicographic ">=" can't
+		// express it (8.0/8.1 fall between the two BMP581 bands).
+		boolean sr48Bmp581 =
+				(ebd.getExpansionBoardId()==HW_ID_SR_CODES.EXP_BRD_GSR_UNIFIED
+						&& ebd.getExpansionBoardRev()==7
+						&& ebd.getExpansionBoardRevSpecial()>=2)                  // SR48 7.2..7.x
+				|| ebd.isSrNumberGte(HW_ID_SR_CODES.EXP_BRD_GSR_UNIFIED, 8, 2);   // SR48 8.2 and above
+
+		boolean boardEligible =
+				   ebd.isSrNumberGte(HW_ID_SR_CODES.SHIMMER3,              11, 2)  // SR31 >= 11.2
+				|| ebd.isSrNumberGte(HW_ID_SR_CODES.EXP_BRD_EXG_UNIFIED,   8, 2)  // SR47 >= 8.2
+				|| sr48Bmp581                                                     // SR48 7.2..7.x and 8.2+
+				|| ebd.isSrNumberGte(HW_ID_SR_CODES.EXP_BRD_BR_AMP_UNIFIED, 4, 2); // SR49 >= 4.2
+
+		// Format guard: BMP581 (pre-compensated) output only exists from
+		// LogAndStream_Shimmer3R v1.01.006 onwards.
+		boolean fwEligible = svo.compareVersions(FW_ID.LOGANDSTREAM, 1, 1, 6);
+
+		return boardEligible && fwEligible;
 	}
 
 	/** Returns true if the Shimmer is using new sensors. These sensors are:

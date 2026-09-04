@@ -49,7 +49,7 @@ publishing {
 
             groupId = 'com.shimmerresearch' // Replace with your package's group/organization name
             artifactId = 'shimmerdriver' // Replace with the name of your package
-            version = '0.11.7_beta' // Replace with your package version
+            version = '0.11.8_beta' // Replace with your package version
 
             // Jar publication
             //(
@@ -138,5 +138,24 @@ dependencies {
 	implementation("org.bouncycastle:bcprov-jdk15on:1.61")
  	implementation 'net.java.dev.jna:jna:5.18.1'
     implementation 'net.java.dev.jna:jna-platform:5.18.1'
-} 
+}
+
+// --- AWS SAM / Lambda build: skip tests ----------------------------------------------------
+// ShimmerDriver is a member of the ASM_PC Lambda projects' multi-project builds: each ASM_PC
+// build root does "include ':ShimmerDriver'" with a projectDir retargeted into ASM_PC's
+// Shimmer-Java-Android-API git submodule (DEV-928). AWS SAM (aws-lambda-builders) runs an
+// unqualified `gradle build`, which runs `test` on every project in such a build - including
+// this one. Skip tests when SAM is driving the build (it sets the system property below).
+// They still run everywhere else: via `gradlew test`, in this repo's CI (gradle.yml builds
+// ShimmerDriverPC without -x test, which runs these tests as a subproject), and ASM_PC's
+// deploy workflows exclude them explicitly with -x test.
+// Set GRADLE_SAM_EXECUTE_TEST (to any value) to force them on under SAM.
+// NB: extend by adding another onlyIf { } (they AND-compose); do not convert this to an
+// `onlyIf = { ... }` assignment - that would silently erase the guard.
+tasks.withType(Test).configureEach {
+    onlyIf {
+        System.getProperty('software.amazon.aws.lambdabuilders.scratch-dir') == null ||
+        System.getenv('GRADLE_SAM_EXECUTE_TEST') != null
+    }
+}
 

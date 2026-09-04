@@ -82,6 +82,7 @@ import com.shimmerresearch.sensors.ShimmerStreamingProperties;
 import com.shimmerresearch.sensors.bmpX80.SensorBMP180;
 import com.shimmerresearch.sensors.bmpX80.SensorBMP280;
 import com.shimmerresearch.sensors.bmpX80.SensorBMP390;
+import com.shimmerresearch.sensors.bmpX80.SensorBMP581;
 import com.shimmerresearch.sensors.kionix.SensorKionixAccel;
 import com.shimmerresearch.sensors.kionix.SensorKionixKXRB52042;
 import com.shimmerresearch.sensors.lisxmdl.SensorLIS3MDL;
@@ -733,6 +734,7 @@ public class Configuration {
 			public static final int SHIMMER_LIS2MDL_MAG = 42;
 			public static final int SHIMMER_LIS3MDL_MAG_ALT = 41;
 			public static final int SHIMMER_BMP390_PRESSURE = 43;
+			public static final int SHIMMER_BMP581_PRESSURE = 44;
 			
 //			public static final int SHIMMER_EXG1_24BIT = 3;
 //			public static final int SHIMMER_EXG2_24BIT = 4;
@@ -924,6 +926,7 @@ public class Configuration {
 			PRESSURE_TEMPERATURE_BMP180(SensorBMP180.LABEL_SENSOR_TILE.PRESSURE_TEMPERATURE),
 			PRESSURE_TEMPERATURE_BMP280(SensorBMP280.LABEL_SENSOR_TILE.PRESSURE_TEMPERATURE),
 			PRESSURE_TEMPERATURE_BMP390(SensorBMP390.LABEL_SENSOR_TILE.PRESSURE_TEMPERATURE),
+			PRESSURE_TEMPERATURE_BMP581(SensorBMP581.LABEL_SENSOR_TILE.PRESSURE_TEMPERATURE),
 			BATTERY_MONITORING(SensorBattVoltage.LABEL_SENSOR_TILE.BATTERY_MONITORING),
 			EXTERNAL_EXPANSION_ADC(SensorADC.LABEL_SENSOR_TILE.EXTERNAL_EXPANSION_ADC),
 			INTERNAL_EXPANSION_ADC(SensorADC.LABEL_SENSOR_TILE.INTERNAL_EXPANSION_ADC),
@@ -1478,7 +1481,15 @@ public class Configuration {
 					svoShimmer3RExgUnifiedLogAndStream,
 					svoShimmer3RBrAmpUnifiedLogAndStream,
 					svoShimmer3RProto3DeluxeLogAndStream,
-					svoShimmer4Stock);  
+					svoShimmer4Stock);
+
+			public static final List<ShimmerVerObject> listOfCompatibleVersionInfoBMP581 = Arrays.asList(
+					svoShimmer3RImuLogAndStream, svoShimmer3RLogAndStream,
+					svoShimmer3RImuAnyExpBrdLogAndStream,
+					svoShimmer3RGsrUnifiedLogAndStream,
+					svoShimmer3RExgUnifiedLogAndStream,
+					svoShimmer3RBrAmpUnifiedLogAndStream,
+					svoShimmer3RProto3DeluxeLogAndStream);
 
 			public static final List<ShimmerVerObject> listOfCompatibleVersionInfoMPU9250 = Arrays.asList(
 					svoNewImuSdLog, svoNewImuLogAndStream, svoShimmer3RLogAndStream,  
@@ -2639,6 +2650,18 @@ public class Configuration {
 			public static final int MAX86150_ECG			= 1 << (3 + (8*1));
 			public static final int MAX86916_PPG_BLUE		= 1 << (2 + (8*1));
 			public static final int VBATT					= 1 << (1 + (8*1));
+
+			// Second-generation hardware (SR68-9/10, SR61-5/6): LSM6DSV accel/gyro +
+			// LIS2MDL mag. Distinct host-internal bits; accel/gyro enables are derived
+			// from the payload header ACCEL2/GYRO bits and mag from GEN_CFG_3 (see
+			// VerisenseDevice.configBytesParse second-generation branch).
+			public static final int LSM6DSV_ACCEL			= 1 << (4 + (8*0));
+			public static final int LSM6DSV_GYRO			= 1 << (3 + (8*0));
+			public static final int LSM6DSV_MAG				= 1 << (2 + (8*0));
+			/** VD6283TX45 ambient light (second-generation HW); enable is GEN_CFG_3 bit 3. */
+			public static final int VD6283					= 1 << (1 + (8*0));
+			/** MLX90632 skin temperature (second-generation HW); enable is GEN_CFG_3 bit 4. */
+			public static final int MLX90632				= 1 << (0 + (8*0));
 		}
 		
 		public class DerivedSensorsBitMask {
@@ -2652,6 +2675,9 @@ public class Configuration {
 			public final static int GYRO_ON_THE_FLY_CAL		= (1 << 7);
 			public final static int ORIENTATION_6DOF_QUAT 	= (1 << 8);
 			public final static int ORIENTATION_6DOF_EULER 	= (1 << 9);
+			/** Second-generation IMU (SR61-5/6, SR68-9/10). Bit assignment must stay
+			 * unique against any consumer that persists these derived-sensor bits. */
+			public final static int NON_WEAR_DETECTION_LSM6DSV	= (1 << 10);
 		}
 
 		public class SENSOR_ID {
@@ -2667,6 +2693,12 @@ public class Configuration {
 			public static final int MAX86916_PPG_BLUE 		= 2012;
 			public static final int VBATT			 		= 2013;
 			public static final int GSR				 		= 2014;
+			// Second-generation hardware (SR68-9/10, SR61-5/6)
+			public static final int LSM6DSV_ACCEL			= 2015;
+			public static final int LSM6DSV_GYRO			= 2016;
+			public static final int LSM6DSV_MAG				= 2017;
+			public static final int VD6283					= 2018;
+			public static final int MLX90632				= 2019;
 		}
 		
 		public enum LABEL_SENSOR_TILE{
@@ -2709,8 +2741,17 @@ public class Configuration {
 			public static final List<ShimmerVerObject> listOfCompatibleVersionInfoVbatt = Arrays.asList(
 					svoVerisenseDevBrd, svoVerisenseImu, svoVerisensePpg0, svoVerisensePpg1, svoVerisenseGsrPlus, svoVerisensePulsePlus);
 			
+			// SR61 (Verisense IMU) carries GSR from minor rev 5 (second-generation); the
+			// runtime minor-rev gating is in VerisenseDevice.doesHwSupportGsr() which
+			// mirrors the firmware's ShimBrd_isGsrSupportedForHwVersion.
 			public static final List<ShimmerVerObject> listOfCompatibleVersionInfoGsr = Arrays.asList(
-					svoVerisenseGsrPlus, svoVerisensePulsePlus);
+					svoVerisenseGsrPlus, svoVerisensePulsePlus, svoVerisenseImu);
+
+			// Second-generation IMU: LSM6DSV (accel/gyro) + LIS2MDL (mag), SR68-9/10 and
+			// SR61-5/6. TODO refine to HW minor gating once compat supports it; the
+			// runtime isPayloadDesignV13orAbove() gate protects gen-1 units meanwhile.
+			public static final List<ShimmerVerObject> listOfCompatibleVersionInfoLSM6DSV = Arrays.asList(
+					svoVerisensePulsePlus, svoVerisenseImu);
 		}
 
 	}

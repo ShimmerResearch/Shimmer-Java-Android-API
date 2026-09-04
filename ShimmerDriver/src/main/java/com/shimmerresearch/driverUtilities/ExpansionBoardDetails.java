@@ -164,4 +164,29 @@ public class ExpansionBoardDetails implements Serializable {
 		return mExpansionBoardRevSpecial;
 	}
 
+	/**
+	 * Lexicographic "&gt;=" comparison over (revision, special revision) for a
+	 * given SR number. The revision is the primary key: e.g. board SR48.8.0 is
+	 * considered &gt;= threshold SR48.7.2 because the revision (8) already exceeds
+	 * the threshold revision (7), regardless of the special-rev values.
+	 * <p>
+	 * NB: a naive {@code rev&gt;=minRev && special&gt;=minSpecial} check is WRONG
+	 * (it would reject SR48.8.0 against threshold SR48.7.2) - keep this
+	 * lexicographic.
+	 *
+	 * @param srNumber   the SR number (expansion-board id) to match
+	 * @param minRev     minimum board revision
+	 * @param minSpecial minimum special revision (only compared when rev is equal)
+	 * @return true if this board's SR number matches and (rev, special) &gt;= (minRev, minSpecial)
+	 */
+	public boolean isSrNumberGte(int srNumber, int minRev, int minSpecial) {
+		if (mExpansionBoardId != srNumber) {
+			return false;
+		}
+		if (mExpansionBoardRev != minRev) {
+			return mExpansionBoardRev > minRev;
+		}
+		return mExpansionBoardRevSpecial >= minSpecial;
+	}
+
 }
