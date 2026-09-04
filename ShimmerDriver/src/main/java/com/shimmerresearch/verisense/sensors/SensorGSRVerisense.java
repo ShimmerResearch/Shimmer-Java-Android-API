@@ -113,8 +113,15 @@ public class SensorGSRVerisense extends SensorGSR {
 	//--------- Constructors for this class start --------------
 	public SensorGSRVerisense(ShimmerVerObject svo) {
 		super(svo);
-		
-		if (svo.getHardwareVersion() == HW_ID.VERISENSE_PULSE_PLUS) {
+
+		// The Pulse+ (SR68) and the second-generation Verisense IMU (SR61-5/6) share the
+		// same DC-based GSR front-end with its own feedback-resistor set; the GSR+ (SR62)
+		// uses the Shimmer3 values. An SR61 only gets this sensor class registered when
+		// VerisenseDevice.doesHwSupportGsr() has already confirmed HW minor >= 5, so no
+		// minor-revision check is needed here. Verified against a 33k/100k/470k resistor
+		// sweep on an SR61-5 (DEV-793 datasets B4a-c).
+		if (svo.getHardwareVersion() == HW_ID.VERISENSE_PULSE_PLUS
+				|| svo.getHardwareVersion() == HW_ID.VERISENSE_IMU) {
 			setCurrentGsrRefResistorsKohms(VERISENSE_PULSE_PLUS_GSR_REF_RESISTORS_KOHMS);
 			setCurrentGsrUncalLimitRange3(VERISENSE_PULSE_PLUS_GSR_UNCAL_LIMIT_RANGE3);
 		}

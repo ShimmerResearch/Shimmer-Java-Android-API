@@ -203,6 +203,13 @@ public abstract class PayloadContentsDetails implements Serializable {
 		if(isPayloadDesignV12orAbove(svo)) {
 			extendedPayloadConfigSize += 1;
 		}
+		if(isPayloadDesignV13orAbove(svo)) {
+			// Second-generation (FW v2.00.004+): config header grows from 25 to 32 bytes
+			// (abs bytes 4..35). +7 = LSM6DSV already occupies the gen-1 gyro/accel2 slots;
+			// the extra 7 are GEN_CFG_3 (29), light gain/exposure (30,31), skin-temp (32),
+			// algo report (33), and the 2-byte calibration CRC (34,35).
+			extendedPayloadConfigSize += 7;
+		}
 		return extendedPayloadConfigSize;
 	}
 
@@ -253,6 +260,21 @@ public abstract class PayloadContentsDetails implements Serializable {
 
 	public static boolean isPayloadDesignV12orAbove(ShimmerVerObject svo) {
 		return VerisenseDevice.compareFwVersions(svo, VerisenseDevice.FW_CHANGES.CCF21_010_3);
+	}
+
+	/**
+	 * Second-generation hardware payload design (SR68-9/10, SR61-5/6). The
+	 * firmware calls this its "payload design v9" (32-byte config header, bytes
+	 * 4..35, of which bytes 34..35 are the calibration-blob CRC). It is NOT the
+	 * same as {@link #isPayloadDesignV9orAbove(ShimmerVerObject)} above, which is
+	 * this driver's own internal sequence (FW v1.02.074). Gen-2 firmware
+	 * (v2.00.004+, confirmed on a real SR68-9) is the next step after V12 in this
+	 * driver's numbering.
+	 *
+	 * @see VerisenseDevice.FW_CHANGES#CCF_GEN2
+	 */
+	public static boolean isPayloadDesignV13orAbove(ShimmerVerObject svo) {
+		return VerisenseDevice.compareFwVersions(svo, VerisenseDevice.FW_CHANGES.CCF_GEN2);
 	}
 
 	/**
@@ -331,7 +353,12 @@ public abstract class PayloadContentsDetails implements Serializable {
 	protected int parseBatteryVoltageBytes(int currentByteIndex) {
 		byte[] batteryVoltageArray = new byte[BYTE_COUNT.PAYLOAD_CONTENTS_BATTERY_VOLTAGE];
 		System.arraycopy(byteBuffer, currentByteIndex, batteryVoltageArray, 0, BYTE_COUNT.PAYLOAD_CONTENTS_BATTERY_VOLTAGE);
-		long batteryVoltageCal = UtilParseData.parseData(batteryVoltageArray, CHANNEL_DATA_TYPE.UINT12, CHANNEL_DATA_ENDIAN.LSB);
+		// Second-generation firmware writes the full battery voltage in mV which can
+		// exceed 12-bits (e.g. 4133 mV) - masking to UINT12 would wrap it (-> 37 mV).
+		// Keep the legacy UINT12 mask for gen-1 to preserve existing behaviour.
+		CHANNEL_DATA_TYPE battChannelDataType = isPayloadDesignV13orAbove(verisenseDevice.getShimmerVerObject())
+				? CHANNEL_DATA_TYPE.UINT16 : CHANNEL_DATA_TYPE.UINT12;
+		long batteryVoltageCal = UtilParseData.parseData(batteryVoltageArray, battChannelDataType, CHANNEL_DATA_ENDIAN.LSB);
 		setBatteryVoltage(batteryVoltageCal);
 		currentByteIndex += batteryVoltageArray.length;
 		return currentByteIndex;
