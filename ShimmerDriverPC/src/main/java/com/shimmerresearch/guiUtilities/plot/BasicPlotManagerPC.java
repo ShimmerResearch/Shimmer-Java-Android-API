@@ -347,7 +347,7 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 	}
 
 	private ITrace2D createNormalTrace(int plotMaxSize) {
-		Trace2DLtd trace = new Trace2DLtd(plotMaxSize);
+		Trace2DLtd trace = new Trace2DLtdMonotonicX(plotMaxSize); //DEV-896: monotonic-X trace avoids O(n) minX rescans per sample
 		BasicStroke stroke = ((BasicStroke)trace.getStroke());
 		BasicStroke newStroke = new BasicStroke(DEFAULT_LINE_THICKNESS,stroke.getEndCap(),stroke.getLineJoin(),stroke.getMiterLimit(),stroke.getDashArray(),stroke.getDashPhase());
 		trace.setStroke(newStroke);
@@ -355,7 +355,7 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 	}
 
 	private ITrace2D createBarTrace(Chart2D chart, int plotMaxSize) {
-		ITrace2D trace = new Trace2DLtd(plotMaxSize);
+		ITrace2D trace = new Trace2DLtdMonotonicX(plotMaxSize); //DEV-896: monotonic-X trace avoids O(n) minX rescans per sample
 		trace.setTracePainter(new TracePainterVerticalBar(chart));
 		return trace;
 	}
@@ -369,7 +369,7 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 	 */
 	private ITrace2D addSignalToExistingChartInternal(String[] signal, int plotMaxSize, Color color) throws Exception{
 		if (!checkIfPropertyExist(signal)){
-			ITrace2D trace = new Trace2DLtd(plotMaxSize);
+			ITrace2D trace = new Trace2DLtdMonotonicX(plotMaxSize); //DEV-896: monotonic-X trace avoids O(n) minX rescans per sample
 			mChart.addTrace(trace);
 			
 			mListofTraces.add(trace);
@@ -1645,7 +1645,203 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 		}
 		trace.addPoint(xData, yData);
 	}
-	
+
+	/** DEV-896: Max points added per single chart-monitor acquisition in {@link #addPointsToTrace}.
+	 * Bounds how long the batch can hold the chart lock so a large burst can't monopolise the EDT. */
+	private static final int POINT_BATCH_MAX = 256;
+
+	/** DEV-896: Max traces processed per single chart-monitor acquisition in
+	 * {@link #filterDataAndPlot(ObjectCluster)}. Holding the monitor across every trace of a sample
+	 * would let the worst-case EDT wait grow with the trace count: {@code Trace2DLtd.addPointInternal}
+	 * still runs an O(buffer) {@code minYSearch/maxYSearch} whenever the evicted point held the Y
+	 * extreme, which for a monotone or steadily drifting Y channel (battery, temperature, GSR
+	 * baseline, sample counters) is essentially every sample. Re-acquiring every
+	 * {@code TRACE_BATCH_MAX} traces keeps the churn saving while capping one hold at a constant
+	 * number of those rescans. */
+	private static final int TRACE_BATCH_MAX = 8;
+
+	/**
+	 * DEV-896: A unit of work recorded while {@link #filterDataAndPlot(ObjectCluster)} holds the
+	 * chart monitor and replayed, in the order recorded, once the monitor has been released. Two
+	 * kinds of work must not run under that monitor:
+	 * <ul>
+	 * <li>Swing calls - {@code updateHrPanelIfVisible()} is overridden downstream (Consensys) to do
+	 * {@code JLabel.setText/revalidate/repaint} from the data thread. That would take
+	 * chart -&gt; Swing tree/RepaintManager locks while the EDT takes tree lock -&gt; chart inside
+	 * {@code Chart2D.paintComponent()}: a lock inversion.</li>
+	 * <li>Console I/O - {@code throwExceptionSignalNotFound()} dumps a whole ObjectCluster per
+	 * missing signal and {@code printSignalProps()} prints per sample in debug mode; holding the
+	 * chart monitor across a blocking {@code System.out} write stalls the EDT for the duration.</li>
+	 * </ul>
+	 * A single ordered list is used (rather than one list per kind) so the replay preserves the
+	 * original per-trace interleaving - the two console kinds share {@code System.out}, so grouping
+	 * by kind would reorder the debug output. The list and its entries are allocated per sample,
+	 * which is dwarfed by the per-sample {@code mListofTraces.toArray()} snapshot the batch already
+	 * needs; they are deliberately not shared instance state, because the only monitor that would
+	 * make sharing safe ({@code mListofPropertiestoPlot}) is a public non-final field that
+	 * {@code AbstractPlotManager}'s constructors reassign.
+	 */
+	private static final class DeferredPlotAction {
+		static final int KIND_SIGNAL_NOT_FOUND = 0;
+		static final int KIND_PRINT_SIGNAL_PROPS = 1;
+		static final int KIND_UPDATE_HR_PANEL = 2;
+
+		final int mKind;
+		final String mTraceName;
+		final String[] mProps;
+		/** Read while the chart monitor is held, so the deferred debug line reports the same trace
+		 * size it reported before the print was moved out of the lock. */
+		final int mTraceSize;
+		final double mXData;
+		final double mYData;
+
+		private DeferredPlotAction(int kind, String traceName, String[] props, int traceSize, double xData, double yData){
+			mKind = kind;
+			mTraceName = traceName;
+			mProps = props;
+			mTraceSize = traceSize;
+			mXData = xData;
+			mYData = yData;
+		}
+
+		static DeferredPlotAction signalNotFound(String traceName){
+			return new DeferredPlotAction(KIND_SIGNAL_NOT_FOUND, traceName, null, 0, 0, 0);
+		}
+
+		static DeferredPlotAction printSignalProps(int traceSize, String[] props, double xData, double yData){
+			return new DeferredPlotAction(KIND_PRINT_SIGNAL_PROPS, null, props, traceSize, xData, yData);
+		}
+
+		static DeferredPlotAction updateHrPanel(String[] props){
+			return new DeferredPlotAction(KIND_UPDATE_HR_PANEL, null, props, 0, 0, 0);
+		}
+	}
+
+	/** DEV-896: {@code mChart} is optional - {@link #filterDataAndPlot(ObjectCluster)} falls back to
+	 * another monitor when no chart is set yet - and the deferred replay can run
+	 * {@code throwExceptionSignalNotFound()} / {@code printSignalProps()} in that state, so neither
+	 * may dereference {@code mChart} directly. */
+	private String getChartNameForPrinting(){
+		return (mChart!=null)? mChart.getName() : "<no chart>";
+	}
+
+	/**
+	 * DEV-896: True when the runtime class overrides
+	 * {@link #updateHrPanelIfVisible(String[], ObjectCluster)}. In this base class that method is a
+	 * no-op, so there is no point recording (and allocating) a deferred HR action per trace per
+	 * sample for plots that will never do anything with it; only the downstream override (Consensys
+	 * {@code PlotManagerPC}) needs them, and it counts its calls, so when it IS present every
+	 * matching trace must still produce exactly one call.
+	 *
+	 * <p>Resolved once per instance rather than per sample. The method is {@code protected}, so
+	 * {@code getMethod()} would not see it - the class hierarchy is walked with
+	 * {@code getDeclaredMethod()} from the runtime class up to (but excluding) this class instead.
+	 * Anything unexpected from the reflective lookup defaults to {@code true}, i.e. to the previous
+	 * unconditional behaviour, so a hardened SecurityManager can only cost the allocation, never
+	 * suppress an HR update.</p>
+	 */
+	private final boolean mIsHrPanelUpdateOverridden = isHrPanelUpdateOverridden(getClass());
+
+	private static boolean isHrPanelUpdateOverridden(Class<?> runtimeClass){
+		try {
+			for(Class<?> c = runtimeClass; c!=null && c!=BasicPlotManagerPC.class; c = c.getSuperclass()){
+				try {
+					c.getDeclaredMethod("updateHrPanelIfVisible", String[].class, ObjectCluster.class);
+					return true;
+				} catch (NoSuchMethodException e) {
+					//Not declared at this level, keep walking up towards BasicPlotManagerPC.
+				}
+			}
+			return false;
+		} catch (Throwable t) {
+			return true; //Safe default: behave exactly as before the optimisation.
+		}
+	}
+
+	/** DEV-896: Appends one action to the (lazily created) deferral list and returns the list to
+	 * assign back, so the common case - no debug mode, no missing signal, no HR override - allocates
+	 * nothing at all on this per-sample path. Ordering is unaffected: actions are still appended in
+	 * the order they are recorded. */
+	private static List<DeferredPlotAction> recordDeferredPlotAction(List<DeferredPlotAction> deferredActions, DeferredPlotAction action){
+		if(deferredActions == null){
+			deferredActions = new ArrayList<DeferredPlotAction>();
+		}
+		deferredActions.add(action);
+		return deferredActions;
+	}
+
+	/** DEV-896: Replays the work recorded by {@link #filterDataAndPlot(ObjectCluster)} while it held
+	 * the chart monitor. Must be called on every exit path from the batched loop, including the
+	 * "Trace does not exist" throw, because before the lock was batched this work ran inline (the
+	 * downstream HR panel keeps a per-call counter, so a dropped call is observable). A {@code null}
+	 * list means nothing was recorded (see {@link #recordDeferredPlotAction}) and is a no-op. */
+	private void replayDeferredPlotActions(List<DeferredPlotAction> deferredActions, ObjectCluster ojc) throws Exception {
+		if(deferredActions == null){
+			return;
+		}
+		for(int i=0; i<deferredActions.size(); i++){
+			DeferredPlotAction action = deferredActions.get(i);
+			switch(action.mKind){
+				case DeferredPlotAction.KIND_SIGNAL_NOT_FOUND:
+					throwExceptionSignalNotFound(action.mTraceName, ojc);
+					break;
+				case DeferredPlotAction.KIND_PRINT_SIGNAL_PROPS:
+					printSignalProps(ojc, action.mTraceSize, action.mProps, action.mXData, action.mYData);
+					break;
+				case DeferredPlotAction.KIND_UPDATE_HR_PANEL:
+					updateHrPanelIfVisible(action.mProps, ojc);
+					break;
+				default:
+					break;
+			}
+		}
+	}
+
+	/**
+	 * DEV-896: Batch variant of {@link #addPointToTrace(ITrace2D, double, double)}. Adds many
+	 * points to a single trace while acquiring the chart monitor once per (bounded) chunk rather
+	 * than once per point. {@code ATrace2D.addPoint()} synchronizes on the chart
+	 * ({@code trace.getRenderer()}) - the same monitor {@code Chart2D.paintComponent()} holds - so
+	 * adding N points individually took the monitor N times and starved the Swing EDT. Java monitors
+	 * are reentrant, so {@code addPoint()}'s internal {@code synchronized(chart)} is free while we
+	 * hold the outer lock. Behaviour per point is identical to {@link #addPointToTrace}.
+	 */
+	public void addPointsToTrace(ITrace2D trace, double[] xData, double[] yData){
+		if(xData == null || yData == null){
+			return;
+		}
+		addPointsToTrace(trace, xData, yData, 0, Math.min(xData.length, yData.length));
+	}
+
+	/**
+	 * DEV-896: See {@link #addPointsToTrace(ITrace2D, double[], double[])}. Adds points
+	 * {@code [fromIndex, toIndex)} from the given arrays.
+	 */
+	public void addPointsToTrace(ITrace2D trace, double[] xData, double[] yData, int fromIndex, int toIndex){
+		if(trace == null || xData == null || yData == null){
+			return;
+		}
+		int end = Math.min(toIndex, Math.min(xData.length, yData.length));
+		int i = Math.max(0, fromIndex);
+		//trace.getRenderer() returns the Chart2D the trace was added to (null until then); it is the
+		//exact monitor ATrace2D.addPoint() locks, so holding it makes the per-point locks reentrant.
+		Chart2D chart = trace.getRenderer();
+		while(i < end){
+			int chunkEnd = Math.min(i + POINT_BATCH_MAX, end);
+			if(chart != null){
+				synchronized(chart){
+					for(; i < chunkEnd; i++){
+						addPointToTrace(trace, xData[i], yData[i]);
+					}
+				}
+			} else {
+				for(; i < chunkEnd; i++){
+					addPointToTrace(trace, xData[i], yData[i]);
+				}
+			}
+		}
+	}
+
 	public CircularFifoBuffer getCirculurBufferedTraceData(String traceName){
 		CircularFifoBuffer circularFifoBuffer = mMapOfCirculurBufferedTraceDataPoints.get(traceName);
 		if(circularFifoBuffer != null){ 
@@ -1747,7 +1943,7 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 	}
 
 	private void throwExceptionSignalNotFound(String traceName, ObjectCluster ojc) throws Exception {
-		utilShimmer.consolePrintLn("mChart.getName(): " +mChart.getName());
+		utilShimmer.consolePrintLn("mChart.getName(): " +getChartNameForPrinting());
 		if(ojc!=null) {
 			ojc.consolePrintChannelsAndDataSingleLine();
 		}
@@ -1789,11 +1985,19 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 	}
 
 	protected void printSignalProps(ObjectCluster ojc, ITrace2D currentTrace, String[] props, double xData, double yData){
+		if(mIsDebugMode && currentTrace!=null){
+			printSignalProps(ojc, currentTrace.getSize(), props, xData, yData);
+		}
+	}
+
+	/** DEV-896: Variant taking an already-read trace size, so the caller can read the size while it
+	 * holds the chart monitor but do the (blocking) console write after releasing it. */
+	protected void printSignalProps(ObjectCluster ojc, int traceSize, String[] props, double xData, double yData){
 		if(mIsDebugMode){
 			utilShimmer.consolePrintErrLn(
-					"ChartName:" + mChart.getName()
-					+ "\tShimmerName:" + ojc.getShimmerName() 
-					+ "\ttrace size:" + currentTrace.getSize() + "."
+					"ChartName:" + getChartNameForPrinting()
+					+ "\tShimmerName:" + ojc.getShimmerName()
+					+ "\ttrace size:" + traceSize + "."
 					+ "\tprops1:" + props[1] + "."
 					+ "\tprops2:" + props[2] + "."
 					+ "\tx-value:" + xData + "."
@@ -1869,10 +2073,9 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 						if(results.length==2 && results[0].length>startBin){
 							
 							trace.removeAllPoints();
-							
-							for(int x=startBin;x<results[0].length;x++){
-								addPointToTrace(trace, results[0][x], results[1][x]);
-							}
+
+							//DEV-896: batch the FFT bins into one chart-monitor acquisition per chunk
+							addPointsToTrace(trace, results[0], results[1], startBin, results[0].length);
 						}
 					}
 					
@@ -1951,9 +2154,49 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 			synchronized(mListofPropertiestoPlot){
 				Iterator <String[]> entries = mListofPropertiestoPlot.iterator();
 				int indexOfTrace = 0;
-				boolean isDummyPointAddedToFillTrace = false; 
-				
+				boolean isDummyPointAddedToFillTrace = false;
+
+				//DEV-896: Acquire the chart monitor once per group of TRACE_BATCH_MAX traces instead
+				//of once per trace inside ATrace2D.addPoint(). addPoint() synchronizes on the chart
+				//(trace.getRenderer()) - the same monitor Chart2D.paintComponent() holds - so grabbing
+				//it once per point was starving the Swing EDT. Java monitors are reentrant, so the
+				//per-point synchronized(chart) inside addPoint() is free while we hold this outer lock.
+				//The monitor is released and re-acquired between groups so one hold stays bounded by a
+				//constant, not by the trace count (see TRACE_BATCH_MAX).
+				//Falls back to the already-held mListofPropertiestoPlot monitor if no chart is set yet.
+				//IMPORTANT (lock ordering): snapshot mListofTraces BEFORE the first chart-monitor
+				//acquisition, and keep using that one snapshot for the whole sample. Other threads
+				//(e.g. clearAllDataBuffer, trace resizing) hold the mListofTraces monitor while calling
+				//chart-locking trace mutators (removeAllPoints/setMaxSize), i.e. mListofTraces -> chart.
+				//Touching mListofTraces while holding the chart monitor here would be the reverse order
+				//and a real deadlock cycle.
+				//The per-sample toArray() allocation is deliberate: reusing a cached array would need
+				//the mListofTraces monitor (or a copy under it) at exactly the point where taking that
+				//monitor is what we are avoiding, so there is no trivially safe reuse here.
+				//No explicit synchronized(mListofTraces) is needed for the snapshot itself either:
+				//mListofTraces is a Collections.synchronizedList, so toArray() already copies under
+				//that list's own mutex and cannot observe a half-applied structural change. Its index
+				//alignment with mListofPropertiestoPlot is what actually matters here, and that is
+				//protected by the mListofPropertiestoPlot monitor this method holds for the whole
+				//sample: removeSignal()/removeSignalInternal() mutate both lists under it. The one
+				//exception is removeAllSignals(), which holds neither - but it also clears
+				//mListofPropertiestoPlot underneath this method's live iterator, a pre-existing hazard
+				//that predates and is independent of this batching.
+				ITrace2D[] tracesSnapshot = mListofTraces.toArray(new ITrace2D[0]);
+				Object chartMonitor = (mChart != null) ? (Object)mChart : (Object)mListofPropertiestoPlot;
+				//DEV-896: nothing inside the chart monitor below may call Swing or do console I/O -
+				//such work is recorded here and replayed afterwards (see DeferredPlotAction).
+				//Left null until something is actually recorded: on the typical sample (no debug
+				//mode, no missing signal, no HR override) nothing is, so this per-sample path
+				//allocates no list at all. See recordDeferredPlotAction().
+				List<DeferredPlotAction> deferredActions = null;
+				//DEV-896: stash rather than propagate, so the deferred work still gets replayed on the
+				//"Trace does not exist" path (it used to run inline, before the batching).
+				Exception pendingException = null;
+				try {
 				while (entries.hasNext()) {
+				synchronized(chartMonitor){
+				for(int tracesThisBatch=0; tracesThisBatch<TRACE_BATCH_MAX && entries.hasNext(); tracesThisBatch++){
 					String[] props = entries.next();
 					
 					String traceName = joinChannelStringArray(props);
@@ -1970,7 +2213,7 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 							FormatCluster f = ObjectCluster.returnFormatCluster(ojc.getCollectionOfFormatClusters(props[1]), props[2]);
 							if(f == null){
 								indexOfTrace++;
-								throwExceptionSignalNotFound(traceName, ojc);
+								deferredActions = recordDeferredPlotAction(deferredActions, DeferredPlotAction.signalNotFound(traceName)); //DEV-896: printed after the chart monitor is released
 								continue;
 							}
 
@@ -1998,7 +2241,7 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 						FormatCluster f = ObjectCluster.returnFormatCluster(ojc.getCollectionOfFormatClusters(props[1]), props[2]);
 						if(f == null){
 							indexOfTrace++;
-							throwExceptionSignalNotFound(traceName, ojc);
+							deferredActions = recordDeferredPlotAction(deferredActions, DeferredPlotAction.signalNotFound(traceName)); //DEV-896: printed after the chart monitor is released
 							continue;
 						}
 
@@ -2011,18 +2254,49 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 							continue;
 						}
 
-						if (indexOfTrace>mListofTraces.size()){
+						//DEV-896: was '>' (pre-existing off-by-one against mListofTraces.size());
+						//indexOfTrace == length is already out of bounds.
+						if (indexOfTrace>=tracesSnapshot.length){
 							throw new Exception("Trace does not exist: (" + traceName + ")");
 						}
-						ITrace2D currentTrace = mListofTraces.get(indexOfTrace); 
+						ITrace2D currentTrace = tracesSnapshot[indexOfTrace];
 						//utilShimmer.consolePrintErrLn(currentTrace.getMaxY());
+
+						//DEV-896: defensive null check only. The snapshot is taken before the first
+						//chart-monitor acquisition, so in principle a trace removed mid-sample could
+						//still be in it, but there is no cheap way to detect that: jchart2d 3.3.2's
+						//Chart2D.removeTrace() does not clear the trace's renderer, and the only real
+						//"still attached" check, Chart2D.getTraces(), builds a fresh TreeSet per call.
+						//In practice removeSignal()/removeSignalInternal() mutate mListofTraces under
+						//the mListofPropertiestoPlot monitor this method holds for the whole sample, so
+						//a stale entry cannot appear via them; a stale entry from any other path just
+						//receives points into a buffer nothing paints, as it did before the batching.
+						//Do NOT filter on getRenderer()==null here: that only catches a trace that was
+						//never attached to a chart, and silently swallowing the IllegalStateException
+						//jchart2d raises for that would also skip the mCurrentXValue update below.
+						if (currentTrace==null){
+							indexOfTrace++;
+							continue;
+						}
 
 						mCurrentXValue = xData;
 
-						printSignalProps(ojc, currentTrace, props, xData, yData);
+						//DEV-896: record instead of printing/updating Swing here - see DeferredPlotAction.
+						//The trace size is read now, under the monitor, so the deferred debug line
+						//matches what it printed before batching.
+						if(mIsDebugMode){
+							deferredActions = recordDeferredPlotAction(deferredActions, DeferredPlotAction.printSignalProps(currentTrace.getSize(), props, xData, yData));
+						}
 
-						updateHrPanelIfVisible(props, ojc);
-						
+						//Recorded once per matching trace whenever the runtime class actually overrides
+						//updateHrPanelIfVisible(): whether a panel is currently visible is known only
+						//to that override, and it counts its calls, so no further filtering is safe.
+						//When it is not overridden the replayed call would be a no-op, so skip the
+						//record (and its allocation) entirely - see mIsHrPanelUpdateOverridden.
+						if(mIsHrPanelUpdateOverridden){
+							deferredActions = recordDeferredPlotAction(deferredActions, DeferredPlotAction.updateHrPanel(props));
+						}
+
 						Double halfWindowSize = mMapofHalfWindowSize.get(traceName);
 						if (halfWindowSize!=null){
 							if(addDummyPointToFillTraceIfRequired(currentTrace, xData-halfWindowSize)) {
@@ -2067,6 +2341,20 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 					}
 					indexOfTrace++;
 				}
+				} //DEV-896: release the chart monitor between groups of TRACE_BATCH_MAX traces
+				} //while(entries.hasNext())
+				} catch (Exception e) {
+					pendingException = e;
+				}
+
+				//DEV-896: replay, in the recorded order, the work that must not run under the chart
+				//monitor. This runs on every exit path from the loop above, the "Trace does not exist"
+				//throw included, because before the batching it ran inline per trace.
+				replayDeferredPlotActions(deferredActions, ojc);
+				if(pendingException != null){
+					throw pendingException;
+				}
+
 				if(isDummyPointAddedToFillTrace) {
 					isFirstPointOnFillTrace = false;
 				}
