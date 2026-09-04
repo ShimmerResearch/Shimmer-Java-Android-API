@@ -1758,11 +1758,27 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 		}
 	}
 
+	/** DEV-896: Appends one action to the (lazily created) deferral list and returns the list to
+	 * assign back, so the common case - no debug mode, no missing signal, no HR override - allocates
+	 * nothing at all on this per-sample path. Ordering is unaffected: actions are still appended in
+	 * the order they are recorded. */
+	private static List<DeferredPlotAction> recordDeferredPlotAction(List<DeferredPlotAction> deferredActions, DeferredPlotAction action){
+		if(deferredActions == null){
+			deferredActions = new ArrayList<DeferredPlotAction>();
+		}
+		deferredActions.add(action);
+		return deferredActions;
+	}
+
 	/** DEV-896: Replays the work recorded by {@link #filterDataAndPlot(ObjectCluster)} while it held
 	 * the chart monitor. Must be called on every exit path from the batched loop, including the
 	 * "Trace does not exist" throw, because before the lock was batched this work ran inline (the
-	 * downstream HR panel keeps a per-call counter, so a dropped call is observable). */
+	 * downstream HR panel keeps a per-call counter, so a dropped call is observable). A {@code null}
+	 * list means nothing was recorded (see {@link #recordDeferredPlotAction}) and is a no-op. */
 	private void replayDeferredPlotActions(List<DeferredPlotAction> deferredActions, ObjectCluster ojc) throws Exception {
+		if(deferredActions == null){
+			return;
+		}
 		for(int i=0; i<deferredActions.size(); i++){
 			DeferredPlotAction action = deferredActions.get(i);
 			switch(action.mKind){
@@ -2170,7 +2186,10 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 				Object chartMonitor = (mChart != null) ? (Object)mChart : (Object)mListofPropertiestoPlot;
 				//DEV-896: nothing inside the chart monitor below may call Swing or do console I/O -
 				//such work is recorded here and replayed afterwards (see DeferredPlotAction).
-				List<DeferredPlotAction> deferredActions = new ArrayList<DeferredPlotAction>();
+				//Left null until something is actually recorded: on the typical sample (no debug
+				//mode, no missing signal, no HR override) nothing is, so this per-sample path
+				//allocates no list at all. See recordDeferredPlotAction().
+				List<DeferredPlotAction> deferredActions = null;
 				//DEV-896: stash rather than propagate, so the deferred work still gets replayed on the
 				//"Trace does not exist" path (it used to run inline, before the batching).
 				Exception pendingException = null;
@@ -2194,7 +2213,7 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 							FormatCluster f = ObjectCluster.returnFormatCluster(ojc.getCollectionOfFormatClusters(props[1]), props[2]);
 							if(f == null){
 								indexOfTrace++;
-								deferredActions.add(DeferredPlotAction.signalNotFound(traceName)); //DEV-896: printed after the chart monitor is released
+								deferredActions = recordDeferredPlotAction(deferredActions, DeferredPlotAction.signalNotFound(traceName)); //DEV-896: printed after the chart monitor is released
 								continue;
 							}
 
@@ -2222,7 +2241,7 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 						FormatCluster f = ObjectCluster.returnFormatCluster(ojc.getCollectionOfFormatClusters(props[1]), props[2]);
 						if(f == null){
 							indexOfTrace++;
-							deferredActions.add(DeferredPlotAction.signalNotFound(traceName)); //DEV-896: printed after the chart monitor is released
+							deferredActions = recordDeferredPlotAction(deferredActions, DeferredPlotAction.signalNotFound(traceName)); //DEV-896: printed after the chart monitor is released
 							continue;
 						}
 
@@ -2266,7 +2285,7 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 						//The trace size is read now, under the monitor, so the deferred debug line
 						//matches what it printed before batching.
 						if(mIsDebugMode){
-							deferredActions.add(DeferredPlotAction.printSignalProps(currentTrace.getSize(), props, xData, yData));
+							deferredActions = recordDeferredPlotAction(deferredActions, DeferredPlotAction.printSignalProps(currentTrace.getSize(), props, xData, yData));
 						}
 
 						//Recorded once per matching trace whenever the runtime class actually overrides
@@ -2275,7 +2294,7 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 						//When it is not overridden the replayed call would be a no-op, so skip the
 						//record (and its allocation) entirely - see mIsHrPanelUpdateOverridden.
 						if(mIsHrPanelUpdateOverridden){
-							deferredActions.add(DeferredPlotAction.updateHrPanel(props));
+							deferredActions = recordDeferredPlotAction(deferredActions, DeferredPlotAction.updateHrPanel(props));
 						}
 
 						Double halfWindowSize = mMapofHalfWindowSize.get(traceName);
