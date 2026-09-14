@@ -1096,7 +1096,12 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 			SensorVD6283 sensorVd6283 = getSensorVD6283();
 
 			if(sensorVd6283.isConfiguredRateKnown()) {
-				sb.append(generateCalcSamplingRateConfigStr(sensorClassKey, sensorVd6283.getRateFreq(), calculatedSamplingRate));
+				// The CONFIGURED rate, not getRateFreq()'s exposure-clamped one. This is
+				// the field a user reads to check what they asked the device to do, so a
+				// 20 Hz configuration must not print as 10 Hz merely because the exposure
+				// cannot sustain it. The clamp still governs block timing and the gap
+				// window; Exposure is on this same line for anyone deriving the bound.
+				sb.append(generateCalcSamplingRateConfigStr(sensorClassKey, sensorVd6283.getRate().freqHz, calculatedSamplingRate));
 			} else {
 				sb.append(sensorClassKey.toString());
 				sb.append(" {Sampling Rate [");

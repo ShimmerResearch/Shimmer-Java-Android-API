@@ -3,6 +3,7 @@ package com.shimmerresearch.verisense.payloaddesign;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import java.io.ByteArrayOutputStream;
@@ -234,15 +235,27 @@ public class API_00009_VerisenseSlowSensorGapWindow {
 	/**
 	 * A reserved index (7..15) must read as unknown rather than being clamped to
 	 * the nearest rate: guessing 20 Hz would mis-time every sample in the block.
+	 * <p>
+	 * It must also stay DISTINCT from "not stored". Both get the wide fallback
+	 * window, but they mean opposite things - one is an old recording behaving as
+	 * designed, the other is a payload holding a rate nobody can decode - and the
+	 * diagnostic has to be able to say which.
 	 */
 	@Test
-	public void test003_reservedRateIndicesReadAsNotStored() {
+	public void test003_reservedRateIndicesReadAsReservedNotAsNotStored() {
 		for (int rateIndex = 7; rateIndex <= 15; rateIndex++) {
 			VerisenseDevice device = setupLightDevice(rateIndex);
-			assertEquals("reserved index " + rateIndex, VD6283_RATE.NOT_STORED,
-					device.getSensorVD6283().getRate());
-			assertFalse(device.getSensorVD6283().isConfiguredRateKnown());
+			SensorVD6283 sensor = device.getSensorVD6283();
+			assertEquals("reserved index " + rateIndex, VD6283_RATE.RESERVED_INDEX, sensor.getRate());
+			assertTrue("reserved index " + rateIndex, sensor.isRateIndexReserved());
+			assertFalse(sensor.isConfiguredRateKnown());
+			assertEquals("the raw nibble must survive for the diagnostic",
+					rateIndex, sensor.getRateIndexRaw());
 		}
+		// A clear field is the other state, and must not be confused with it.
+		SensorVD6283 notStored = setupLightDevice(0).getSensorVD6283();
+		assertEquals(VD6283_RATE.NOT_STORED, notStored.getRate());
+		assertFalse(notStored.isRateIndexReserved());
 		// ...and the field cannot spill into gain or the dark bit.
 		VerisenseDevice device = setupLightDevice(15);
 		assertEquals(2.5, device.getSensorVD6283().getGain(), 1e-9);
@@ -552,7 +565,7 @@ public class API_00009_VerisenseSlowSensorGapWindow {
 		String printed = captureConsole(new Runnable() {
 			@Override
 			public void run() {
-				UtilCsvSplitting.warnIfLightRateFieldMissingOnNewFirmware(device);
+				UtilCsvSplitting.warnIfLightRateFieldUnusable(device);
 			}
 		});
 		assertEquals("an old recording must print nothing", "", printed.trim());
@@ -575,9 +588,9 @@ public class API_00009_VerisenseSlowSensorGapWindow {
 			@Override
 			public void run() {
 				// Three payloads of the same file: the warning is per recording.
-				UtilCsvSplitting.warnIfLightRateFieldMissingOnNewFirmware(device);
-				UtilCsvSplitting.warnIfLightRateFieldMissingOnNewFirmware(device);
-				UtilCsvSplitting.warnIfLightRateFieldMissingOnNewFirmware(device);
+				UtilCsvSplitting.warnIfLightRateFieldUnusable(device);
+				UtilCsvSplitting.warnIfLightRateFieldUnusable(device);
+				UtilCsvSplitting.warnIfLightRateFieldUnusable(device);
 			}
 		});
 		assertTrue("it must say the firmware is at fault: " + printed, printed.contains("firmware fault"));
@@ -588,7 +601,7 @@ public class API_00009_VerisenseSlowSensorGapWindow {
 		String nextFile = captureConsole(new Runnable() {
 			@Override
 			public void run() {
-				UtilCsvSplitting.warnIfLightRateFieldMissingOnNewFirmware(device);
+				UtilCsvSplitting.warnIfLightRateFieldUnusable(device);
 			}
 		});
 		assertTrue("the next file must warn again", nextFile.contains("WARNING"));
@@ -603,10 +616,80 @@ public class API_00009_VerisenseSlowSensorGapWindow {
 		String printed = captureConsole(new Runnable() {
 			@Override
 			public void run() {
-				UtilCsvSplitting.warnIfLightRateFieldMissingOnNewFirmware(device);
+				UtilCsvSplitting.warnIfLightRateFieldUnusable(device);
 			}
 		});
 		assertEquals("", printed.trim());
+	}
+
+	/**
+	 * A reserved index is reported whatever the payload design says.
+	 * <p>
+	 * Two reasons it cannot be folded into the previous case. It is a different
+	 * fault, so saying the field is "clear" would send a reader after the wrong
+	 * firmware bug. And on an OLD recording those bits should be clear by
+	 * construction, so a non-zero one is an anomaly in its own right - gating the
+	 * report on the firmware version would have said nothing at all.
+	 */
+	@Test
+	public void test026_reservedRateIndexIsReportedWhateverTheFirmwareVersion() {
+		for(final int[] fw:new int[][] {{2, 0, 9}, {2, 2, 0}}) {
+			UtilCsvSplitting.clearMapOfSamplingRateLimitsPerSensor();
+			final VerisenseDevice device = setupGen2Device(
+					lightHeaderByte(9), SKIN_TEMP_CONFIG_32HZ_REFRESH, fw[0], fw[1], fw[2]);
+			assertTrue(device.getSensorVD6283().isRateIndexReserved());
+
+			String printed = captureConsole(new Runnable() {
+				@Override
+				public void run() {
+					UtilCsvSplitting.warnIfLightRateFieldUnusable(device);
+				}
+			});
+			String where = "firmware " + fw[0] + "." + fw[1] + "." + fw[2] + ": " + printed;
+			assertTrue("a reserved index must be reported, " + where, printed.contains("WARNING"));
+			assertTrue("and named, " + where, printed.contains("reserved index 9"));
+			assertFalse("it must not be described as clear, " + where, printed.contains("field clear"));
+		}
+	}
+
+	// ------------------------------------- the layer above the window seeder
+
+	/**
+	 * Everything else here drives {@link UtilCsvSplitting} directly. This drives
+	 * the layer that decides WHETHER the seeder runs during a real payload parse.
+	 * <p>
+	 * That layer matters for a reason that is invisible from the seeder itself:
+	 * asking the device for the sensor-class keys behind a data block id CREATES
+	 * and caches them, and the lookup returns the second-generation slow sensors
+	 * unconditionally. Seeding for a sensor the payload has no blocks for would
+	 * therefore populate mappings and rate limits for hardware the recording does
+	 * not have - visible on first-generation files, which have neither slow sensor.
+	 */
+	@Test
+	public void test027_windowIsSeededOnlyForSensorsThePayloadActuallyCarries() {
+		VerisenseDevice device = setupLightDevice(2);
+		PayloadContentsDetailsV8orAbove payload = new PayloadContentsDetailsV8orAbove(device);
+
+		assertFalse("an empty payload carries neither slow sensor",
+				payload.containsDataBlockForSensor(DATABLOCK_SENSOR_ID.LIGHT));
+		payload.seedSlowSensorGapWindow(DATABLOCK_SENSOR_ID.LIGHT);
+		assertNull("no blocks means no window", windowFor(DATABLOCK_SENSOR_ID.LIGHT));
+		assertNull(windowFor(DATABLOCK_SENSOR_ID.SKIN_TEMP));
+
+		// Give it a light block and the light window appears - and only that one.
+		payload.listOfDataBlocksInOrder.add(newBlock(device, DATABLOCK_SENSOR_ID.LIGHT, ticks(10)));
+		assertTrue(payload.containsDataBlockForSensor(DATABLOCK_SENSOR_ID.LIGHT));
+		assertFalse(payload.containsDataBlockForSensor(DATABLOCK_SENSOR_ID.SKIN_TEMP));
+
+		payload.seedSlowSensorGapWindow(DATABLOCK_SENSOR_ID.LIGHT);
+		payload.seedSlowSensorGapWindow(DATABLOCK_SENSOR_ID.SKIN_TEMP);
+
+		double[] lightWindow = windowFor(DATABLOCK_SENSOR_ID.LIGHT);
+		assertNotNull("a payload carrying light blocks must get its window", lightWindow);
+		assertEquals(1.0/UtilCsvSplitting.FILE_GAP_TOLERANCE_MULTIPLIER.SLOW_SENSOR_MAX_INTER_BLOCK_GAP_RATIO,
+				lightWindow[0], 1e-9);
+		assertNull("and the sensor with no blocks must get nothing",
+				windowFor(DATABLOCK_SENSOR_ID.SKIN_TEMP));
 	}
 
 	/** Nothing here may disturb a fast sensor's own band. */

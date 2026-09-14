@@ -42,8 +42,10 @@ public class AsmBinaryFileConstants {
 		// Second-generation (payload design v13) only: GEN_CFG_3 at abs byte 29 (rel 25)
 		// carries the mag/light/skin-temp/algo-hub enables + LED mode.
 		public static final int GEN_CFG_3 = 25;
-		/** Second-generation only: ambient-light gain index in bits 2:0 and the
-		 * dark-channel enable in bit 7 (abs byte 30). */
+		/** Second-generation only (abs byte 30): ambient-light gain index in bits
+		 * 2:0, the effective sample-rate index in bits 6:3 from FW v2.02.000 where
+		 * 0 means not recorded, and the dark-channel enable in bit 7. See
+		 * {@code SensorVD6283.VD6283_RATE}. */
 		public static final int LIGHT_GAIN_AND_DARK = 26;
 		/** Second-generation only: ambient-light exposure index (abs byte 31). */
 		public static final int LIGHT_EXPOSURE = 27;

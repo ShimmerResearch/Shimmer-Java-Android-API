@@ -105,6 +105,19 @@ public class SensorVD6283 extends AbstractSensor {
 	 */
 	public static enum VD6283_RATE {
 		NOT_STORED("Not stored", 0, 0.0),
+		/**
+		 * Bits 6:3 held 7..15, which the firmware rate table does not define.
+		 * <p>
+		 * Distinct from {@link #NOT_STORED} on purpose. Both end up with the wide
+		 * fallback window, but they mean opposite things: NOT_STORED is an old
+		 * recording behaving exactly as expected, while this is a payload that
+		 * wrote a rate nobody can decode. Collapsing the two made the firmware-fault
+		 * warning report a field that was "clear" when it was not, which sends a
+		 * reader looking for the wrong bug.
+		 * <p>
+		 * Not in {@code BY_CONFIG_VALUE}: -1 is not a storable index.
+		 */
+		RESERVED_INDEX("Reserved", -1, 0.0),
 		RATE_0_5_HZ("0.5Hz", 1, 0.5),
 		RATE_1_HZ("1.0Hz", 2, 1.0),
 		RATE_2_HZ("2.0Hz", 3, 2.0),
@@ -118,7 +131,12 @@ public class SensorVD6283 extends AbstractSensor {
 
 		static Map<Integer, VD6283_RATE> BY_CONFIG_VALUE = new LinkedHashMap<Integer, VD6283_RATE>();
 		static {
-			for (VD6283_RATE e : values()) { BY_CONFIG_VALUE.put(e.configValue, e); }
+			for (VD6283_RATE e : values()) {
+				// RESERVED_INDEX carries -1, which is not a storable index and must not
+				// become a lookup key - getForConfigValue returns it as a verdict, never
+				// finds it.
+				if(e.configValue>=0) { BY_CONFIG_VALUE.put(e.configValue, e); }
+			}
 		}
 
 		private VD6283_RATE(String label, Integer configValue, double freqHz) {
@@ -134,9 +152,18 @@ public class SensorVD6283 extends AbstractSensor {
 		 */
 		public static VD6283_RATE getForConfigValue(int configValue) {
 			VD6283_RATE rate = BY_CONFIG_VALUE.get(configValue);
-			return rate==null? NOT_STORED:rate;
+			if(rate!=null) {
+				return rate;
+			}
+			// 0 means the firmware never wrote the field. 7..15 mean it wrote
+			// something this driver does not know, which is a different problem and
+			// has to be reportable as one - see RESERVED_INDEX.
+			return configValue==0? NOT_STORED:RESERVED_INDEX;
 		}
 	}
+
+	/** Raw bits 6:3 of header byte 30, kept so diagnostics can name what was there. */
+	private int rateIndexRaw = 0;
 
 	/** Payload header byte 30 field layout (firmware PAYLOAD_HDR_LIGHT_*). */
 	public static final int LIGHT_GAIN_MASK = 0x07;
@@ -355,9 +382,31 @@ public class SensorVD6283 extends AbstractSensor {
 			// zero here means the rate was not recorded rather than index 0. No
 			// firmware-version check is needed: the firmware stores the EFFECTIVE
 			// index, which is never zero while light blocks exist.
-			rate = VD6283_RATE.getForConfigValue(
-				(gainAndDark >> LIGHT_RATE_INDEX_BIT_SHIFT) & LIGHT_RATE_INDEX_MASK);
+			//
+			// "Earlier firmware always left these clear" is load-bearing, so here is
+			// the proof rather than the assertion. On firmware before 2.02.000,
+			// backupConfigSettings() built this byte as
+			//   cfg15Bkup = (lightGainIndex & 0x07) | (lightDarkEnable ? 0x80 : 0)
+			// which cannot set bits 6:3, and resetPayloadBackupConfig() zeroed the
+			// whole byte. There is no third writer.
+			//
+			// Gating this on the firmware version as well would look safer and is
+			// not: the header-patched regression datasets deliberately keep their
+			// true firmware version, so a version gate would stop the parser reading
+			// the very field those datasets exist to exercise. A reserved index is
+			// the residual risk and it is reported rather than silently accepted -
+			// see VD6283_RATE.RESERVED_INDEX.
+			rateIndexRaw = (gainAndDark >> LIGHT_RATE_INDEX_BIT_SHIFT) & LIGHT_RATE_INDEX_MASK;
+			rate = VD6283_RATE.getForConfigValue(rateIndexRaw);
 			exposureIndex = configBytes[PAYLOAD_CONFIG_BYTE_INDEX.LIGHT_EXPOSURE] & 0xFF;
+		} else if(commType == COMMUNICATION_TYPE.SD) {
+			// The light sensor is disabled in THIS payload. Clear the rate rather
+			// than letting the previous payload's value stand: unlike gain and
+			// exposure, which only affect calibration, the rate now drives block
+			// timing and CSV splitting, so a stale one would mis-time a later
+			// recording segment after a mid-file configuration change.
+			rateIndexRaw = 0;
+			rate = VD6283_RATE.NOT_STORED;
 		}
 	}
 
@@ -403,7 +452,22 @@ public class SensorVD6283 extends AbstractSensor {
 	 * can only return the exposure bound.
 	 */
 	public boolean isConfiguredRateKnown() {
-		return rate!=VD6283_RATE.NOT_STORED && rate.freqHz>0;
+		return rate!=VD6283_RATE.NOT_STORED && rate!=VD6283_RATE.RESERVED_INDEX && rate.freqHz>0;
+	}
+
+	/**
+	 * True when bits 6:3 held a value the firmware rate table does not define.
+	 * <p>
+	 * Worth separating from "not stored" because it should never happen and says
+	 * something different when it does - see {@link VD6283_RATE#RESERVED_INDEX}.
+	 */
+	public boolean isRateIndexReserved() {
+		return rate==VD6283_RATE.RESERVED_INDEX;
+	}
+
+	/** The raw 4-bit value from header byte 30 bits 6:3, for diagnostics. */
+	public int getRateIndexRaw() {
+		return rateIndexRaw;
 	}
 
 	public VD6283_RATE getRate() {

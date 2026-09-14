@@ -102,11 +102,18 @@ public class PayloadContentsDetailsV8orAbove extends PayloadContentsDetails {
 		// than v2.02.000 - the blocks are timed from the exposure bound, which only
 		// bounds the rate from above and is ten times too fast at the 1 Hz default.
 		// That is a real loss against measuring the spacing, and it is deliberate:
-		// it costs the CSV header start time on those recordings (up to 8.1 s at
-		// 1 Hz), while measuring cost the ability to report data loss at all. No
-		// per-sample timestamps are affected, because the light and skin-temp CSVs
-		// carry none. Second-generation firmware never shipped to a customer, so
-		// this only touches internal recordings.
+		// measuring cost the ability to report data loss at all.
+		//
+		// Be precise about what it costs, because it is more than the CSV header.
+		// The light and skin-temp CSVs carry no timestamp column, so the FILE PARSER
+		// output moves only by its header start time, up to 8.1 s at 1 Hz. But the
+		// per-sample ObjectCluster stream is stamped from each block's start time
+		// stepping by its timestampDiffInS, so for those recordings every consumer
+		// of that stream - the Android API, live streaming, algorithm modules - now
+		// sees a 10-sample block laid over 0.9 s of the 10 s it really spans, and a
+		// 9.1 s jump to the next block. Second-generation firmware never shipped to
+		// a customer, so this reaches internal recordings only, and a recording from
+		// v2.02.000 onwards is unaffected either way.
 		seedSlowSensorGapWindow(DATABLOCK_SENSOR_ID.LIGHT);
 		seedSlowSensorGapWindow(DATABLOCK_SENSOR_ID.SKIN_TEMP);
 
@@ -347,7 +354,11 @@ public class PayloadContentsDetailsV8orAbove extends PayloadContentsDetails {
 	 *
 	 * @param slowSensorId the slow sensor data block id
 	 */
-	private void seedSlowSensorGapWindow(DATABLOCK_SENSOR_ID slowSensorId) {
+	// Package-private so API_00009 can drive this layer directly. It is the layer
+	// that decides WHETHER the seeder runs, and the guard that keeps first-
+	// generation payloads away from the sensor-class lookup, so testing only
+	// UtilCsvSplitting leaves it uncovered.
+	void seedSlowSensorGapWindow(DATABLOCK_SENSOR_ID slowSensorId) {
 		if(!containsDataBlockForSensor(slowSensorId)) {
 			// No blocks of this sensor in this payload, so there is no boundary to
 			// judge and nothing to seed. Seeding regardless would ask the device for
@@ -358,12 +369,12 @@ public class PayloadContentsDetailsV8orAbove extends PayloadContentsDetails {
 			return;
 		}
 		if(slowSensorId==DATABLOCK_SENSOR_ID.LIGHT) {
-			UtilCsvSplitting.warnIfLightRateFieldMissingOnNewFirmware(verisenseDevice);
+			UtilCsvSplitting.warnIfLightRateFieldUnusable(verisenseDevice);
 		}
 		UtilCsvSplitting.seedSlowSensorGapWindow(verisenseDevice, slowSensorId);
 	}
 
-	private boolean containsDataBlockForSensor(DATABLOCK_SENSOR_ID slowSensorId) {
+	boolean containsDataBlockForSensor(DATABLOCK_SENSOR_ID slowSensorId) {
 		for(DataBlockDetails dataBlockDetails:listOfDataBlocksInOrder) {
 			if(dataBlockDetails.datablockSensorId==slowSensorId) {
 				return true;

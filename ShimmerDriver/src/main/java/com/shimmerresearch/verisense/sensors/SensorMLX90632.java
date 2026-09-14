@@ -195,7 +195,7 @@ public class SensorMLX90632 extends AbstractSensor {
 	 * It is the CONFIGURED rate. Conversions slip by several refresh periods and
 	 * then catch up, so an individual boundary can read up to about 12.5% either
 	 * side of it while losing no samples at all - which is why the CSV gap window
-	 * built from this widens the fast side by
+	 * built from this widens BOTH sides by
 	 * {@code SLOW_SENSOR_CONVERSION_SLIP_TOLERANCE}.
 	 */
 	public double getRateFreq() {

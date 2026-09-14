@@ -19,15 +19,21 @@ public class UtilCsvSplitting {
 		public static final double LOWER = 0.9;
 		/**
 		 * Slow sensors only (VD6283 light / MLX90632 skin temp): the largest
-		 * inter-block gap, as a multiple of the achieved median block spacing, that
-		 * is still treated as continuous. The MLX90632's conversions can slip by
-		 * several refresh periods and then catch up (observed up to +12.5% block
-		 * spacing on the DEV-927 validation recording with no samples lost), and the
-		 * window is seeded from the first payload that carries >= 2 blocks - often a
-		 * single inter-block gap, i.e. no spread information - so the standard
-		 * LOWER (-10%) band is routinely violated by healthy data. A genuinely
-		 * dropped block doubles the spacing (2x), so 1.5x keeps comfortable margin
-		 * on both sides.
+		 * inter-block gap, as a multiple of the CONFIGURED block spacing taken from
+		 * the payload header, that is still treated as continuous. A genuinely
+		 * dropped block doubles the spacing, so 1.5x leaves 25% of margin against
+		 * it while absorbing the jitter that the standard LOWER (-10%) band is far
+		 * too tight for.
+		 * <p>
+		 * <b>This also sets the MLX90632 gap edge, and that edge is pinned against
+		 * real data.</b> For skin temp the window is widened again by
+		 * {@link #SLOW_SENSOR_CONVERSION_SLIP_TOLERANCE}, so the edge lands at
+		 * {@code cfg/1.725} - and Test_065 contains a HEALTHY skin-temp boundary at
+		 * 1.63x nominal spacing during start-up settling. Retuning this constant for
+		 * the light sensor alone moves the skin-temp edge with it: 1.4 would put it
+		 * at 1.61x and re-split that recording. See
+		 * {@link UtilCsvSplitting#getSlowSensorPlausibleRateRangeHz} and change it
+		 * only against a measurement on both sensors.
 		 */
 		public static final double SLOW_SENSOR_MAX_INTER_BLOCK_GAP_RATIO = 1.5;
 		/**
@@ -177,7 +183,7 @@ public class UtilCsvSplitting {
 		}
 		if(slowSensorId==DATABLOCK_SENSOR_ID.SKIN_TEMP) {
 			double configuredRateHz = verisenseDevice.getSamplingRateForSensor(SENSORS.MLX90632);
-			if(isRateUsable(configuredRateHz)) {
+			if(isSlowSensorConfiguredRateKnown(verisenseDevice, slowSensorId)) {
 				// Both sides are widened, and the slow side is the uncomfortable one.
 				// It puts the gap edge at cfg/1.725, while a dropped block landing on a
 				// 12.5% catch-up presents cfg/1.75 - so that case is reported, but by
@@ -197,6 +203,9 @@ public class UtilCsvSplitting {
 					configuredRateHz/FILE_GAP_TOLERANCE_MULTIPLIER.SLOW_SENSOR_CONVERSION_SLIP_TOLERANCE,
 					configuredRateHz*FILE_GAP_TOLERANCE_MULTIPLIER.SLOW_SENSOR_CONVERSION_SLIP_TOLERANCE};
 			}
+			// Unreachable today: getRateFreq() is refresh/sub-measurements, always
+			// within [0.167, 32], and the sensor class exists whenever skin-temp
+			// blocks do. Kept because the caller no longer guarantees either.
 			return new double[] {SensorMLX90632.MIN_OUTPUT_RATE_HZ, SensorMLX90632.MAX_OUTPUT_RATE_HZ};
 		}
 		return null;
@@ -230,6 +239,15 @@ public class UtilCsvSplitting {
 	 * after several. The put is unconditional because
 	 * populateExpectedPayloadTsDiffLimitMapIfNeeded is containsKey-guarded and
 	 * runs later in the parse: this window must win.
+	 * <p>
+	 * <b>The MLX90632 gap edge is coupled to
+	 * {@link FILE_GAP_TOLERANCE_MULTIPLIER#SLOW_SENSOR_MAX_INTER_BLOCK_GAP_RATIO}
+	 * and it is pinned against real data.</b> That edge is
+	 * {@code cfg / (1.15 x 1.5) = cfg/1.725}, an emergent product of the slip
+	 * tolerance and that ratio, and Test_065 contains a healthy skin-temp boundary
+	 * at 1.63x nominal spacing. Retuning the ratio for the light sensor alone
+	 * moves the skin-temp edge with it: 1.4 would put it at 1.61x and re-split
+	 * that recording. Check both sensors, against a measurement.
 	 *
 	 * @param verisenseDevice the device being parsed
 	 * @param slowSensorId the slow sensor data block id
@@ -262,8 +280,9 @@ public class UtilCsvSplitting {
 	}
 
 	/**
-	 * Reports, once per file, a payload that claims firmware new enough to store
-	 * the ambient-light rate index yet carries light blocks with the field clear.
+	 * Reports, once per file, an ambient-light rate field this parser cannot use:
+	 * either a payload claiming firmware new enough to store the index yet leaving
+	 * it clear, or any payload holding a reserved index 7..15.
 	 * <p>
 	 * This is the one failure the header-driven design cannot otherwise see. A
 	 * zero field is indistinguishable from an old recording, so the parser falls
@@ -283,21 +302,37 @@ public class UtilCsvSplitting {
 	 *
 	 * @param verisenseDevice the device being parsed
 	 */
-	public static void warnIfLightRateFieldMissingOnNewFirmware(VerisenseDevice verisenseDevice) {
-		if(hasWarnedLightRateFieldMissing || !verisenseDevice.isPayloadDesignV14orAbove()) {
+	public static void warnIfLightRateFieldUnusable(VerisenseDevice verisenseDevice) {
+		if(hasWarnedLightRateFieldMissing) {
 			return;
 		}
 		SensorVD6283 sensorVd6283 = verisenseDevice.getSensorVD6283();
 		if(sensorVd6283==null || sensorVd6283.isConfiguredRateKnown()) {
 			return;
 		}
+
+		// Two different faults, and they must not be reported as one.
+		String fault;
+		if(sensorVd6283.isRateIndexReserved()) {
+			// A value no firmware rate table defines. Report this whatever the
+			// payload design claims: on an old recording those bits should be clear,
+			// so a non-zero one is an anomaly in its own right and the version tells
+			// us nothing useful about it.
+			fault = "carries ambient light blocks whose rate field holds the reserved index "
+					+ sensorVd6283.getRateIndexRaw() + ", which no firmware rate table defines";
+		} else if(verisenseDevice.isPayloadDesignV14orAbove()) {
+			fault = "stores the VD6283 sample rate in payload header byte 30 bits 6:3, but this"
+					+ " recording carries ambient light blocks with that field clear. This is a"
+					+ " firmware fault, not an old recording";
+		} else {
+			// Old recording, field clear: exactly as expected, and not worth a line.
+			return;
+		}
+
 		hasWarnedLightRateFieldMissing = true;
 		double[] fallbackRangeHz = getSlowSensorPlausibleRateRangeHz(verisenseDevice, DATABLOCK_SENSOR_ID.LIGHT);
-		System.out.println("WARNING!!! Firmware " + verisenseDevice.getFirmwareVersionParsed()
-				+ " stores the VD6283 sample rate in payload header byte 30 bits 6:3, but this"
-				+ " recording carries ambient light blocks with that field clear. This is a"
-				+ " firmware fault, not an old recording."
-				+ " Falling back to the whole rate table, " + fallbackRangeHz[0] + " to "
+		System.out.println("WARNING!!! Firmware " + verisenseDevice.getFirmwareVersionParsed() + " "
+				+ fault + ". Falling back to the whole rate table, " + fallbackRangeHz[0] + " to "
 				+ fallbackRangeHz[1] + " Hz, so light blocks are timed from the exposure bound"
 				+ " and gap detection for this file is close to blind.");
 	}
