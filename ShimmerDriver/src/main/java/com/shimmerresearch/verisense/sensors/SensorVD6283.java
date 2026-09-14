@@ -43,14 +43,21 @@ import com.shimmerresearch.verisense.payloaddesign.AsmBinaryFileConstants.PAYLOA
  * and BLUE are unaffected, so lux/CCT remain valid in either mode. No
  * dark-enabled recording exists yet - revisit the naming when one does.
  * <p>
- * The sample rate is configured in the op config (LIGHT_SAMPLE_RATE_INDEX) but
- * is NOT mirrored into the stored payload header, and the achieved rate also
- * differs from both the configured rate and 1/exposure (the chip adds dead
- * time per measurement, e.g. ~110 ms/sample for the 100 ms exposure). The
- * getRateFreq() value here is therefore only the exposure-limited ESTIMATE
- * used to seed data-block timing; the parser refines it per payload from the
- * spacing of consecutive light-block timestamps
- * (PayloadContentsDetailsV8orAbove.refineLightSamplingRateFromBlockTicks).
+ * The sample rate is configured in the op config (LIGHT_SAMPLE_RATE_INDEX).
+ * From FW v2.02.000 the firmware mirrors the EFFECTIVE index (post-default)
+ * into payload header byte 30 bits 6:3, so {@link #getRateFreq()} returns the
+ * real configured rate - see {@link VD6283_RATE}. Earlier firmware stored it
+ * nowhere and left 0 in those bits, in which case all that can be said is that
+ * 1/exposure bounds the rate from ABOVE; at the firmware default of 1 Hz with
+ * the default 100 ms exposure that bound is ten times the truth, which is what
+ * fragmented light data into one CSV per block (DEV-979).
+ * <p>
+ * Even the configured rate is not always the ACHIEVED rate: the chip measures
+ * every max(inter-measurement, exposure) plus dead time, so 10 Hz configured
+ * with a 100 ms exposure achieves ~9.09 Hz. getRateFreq() therefore clamps the
+ * configured rate with the exposure bound, and the CSV gap window built from it
+ * (UtilCsvSplitting.seedSlowSensorGapWindow) is tolerant enough to absorb the
+ * remainder.
  */
 public class SensorVD6283 extends AbstractSensor {
 
@@ -81,7 +88,92 @@ public class SensorVD6283 extends AbstractSensor {
 			{-0.028752, 0.506372, -0.120614},
 			{-0.552625, 0.335866, 0.494781}};
 
-	/** Poll ceiling in continuous mode (firmware slow-sensor sampler). */
+	/**
+	 * The rates the firmware can be configured to, from the slow-sensor sampler
+	 * index table (hal_slowSensorSampler.c {@code slowSensorRateMs[] = {0, 2000,
+	 * 1000, 500, 200, 100, 50}} ms). The index lives in operational-config byte
+	 * 75 (LIGHT_SAMPLE_RATE_INDEX) and, from FW v2.02.000, is mirrored into
+	 * payload header byte 30 bits 6:3 as the EFFECTIVE index - the value the
+	 * sampler was actually started with, after the firmware fallback from 0
+	 * (Off) to 1 Hz. It is therefore never {@code NOT_STORED} while light data
+	 * blocks exist, which is what lets a parser read 0 as "recorded by earlier
+	 * firmware" without consulting the firmware version at all.
+	 * <p>
+	 * The indices are a stored-data contract shared with the firmware: they may
+	 * be appended to but never renumbered, and cannot exceed the 4-bit header
+	 * field (the firmware carries a compile-time guard for that).
+	 */
+	public static enum VD6283_RATE {
+		NOT_STORED("Not stored", 0, 0.0),
+		/**
+		 * Bits 6:3 held 7..15, which the firmware rate table does not define.
+		 * <p>
+		 * Distinct from {@link #NOT_STORED} on purpose. Both end up with the wide
+		 * fallback window, but they mean opposite things: NOT_STORED is an old
+		 * recording behaving exactly as expected, while this is a payload that
+		 * wrote a rate nobody can decode. Collapsing the two made the firmware-fault
+		 * warning report a field that was "clear" when it was not, which sends a
+		 * reader looking for the wrong bug.
+		 * <p>
+		 * Not in {@code BY_CONFIG_VALUE}: -1 is not a storable index.
+		 */
+		RESERVED_INDEX("Reserved", -1, 0.0),
+		RATE_0_5_HZ("0.5Hz", 1, 0.5),
+		RATE_1_HZ("1.0Hz", 2, 1.0),
+		RATE_2_HZ("2.0Hz", 3, 2.0),
+		RATE_5_HZ("5.0Hz", 4, 5.0),
+		RATE_10_HZ("10.0Hz", 5, 10.0),
+		RATE_20_HZ("20.0Hz", 6, 20.0);
+
+		public String label;
+		public Integer configValue;
+		public double freqHz;
+
+		static Map<Integer, VD6283_RATE> BY_CONFIG_VALUE = new LinkedHashMap<Integer, VD6283_RATE>();
+		static {
+			for (VD6283_RATE e : values()) {
+				// RESERVED_INDEX carries -1, which is not a storable index and must not
+				// become a lookup key - getForConfigValue returns it as a verdict, never
+				// finds it.
+				if(e.configValue>=0) { BY_CONFIG_VALUE.put(e.configValue, e); }
+			}
+		}
+
+		private VD6283_RATE(String label, Integer configValue, double freqHz) {
+			this.label = label; this.configValue = configValue; this.freqHz = freqHz;
+		}
+
+		/**
+		 * Deliberately does NOT clamp the way the other sensors rate enums do
+		 * (e.g. SensorLSM6DSV.LSM6DSV_RATE, which nudges into range): an index the
+		 * table does not define - 7..15, reserved - must read as unknown, never as
+		 * the nearest rate. Guessing 20 Hz for a reserved code would silently
+		 * mis-time every sample in the block.
+		 */
+		public static VD6283_RATE getForConfigValue(int configValue) {
+			VD6283_RATE rate = BY_CONFIG_VALUE.get(configValue);
+			if(rate!=null) {
+				return rate;
+			}
+			// 0 means the firmware never wrote the field. 7..15 mean it wrote
+			// something this driver does not know, which is a different problem and
+			// has to be reportable as one - see RESERVED_INDEX.
+			return configValue==0? NOT_STORED:RESERVED_INDEX;
+		}
+	}
+
+	/** Raw bits 6:3 of header byte 30, kept so diagnostics can name what was there. */
+	private int rateIndexRaw = 0;
+
+	/** Payload header byte 30 field layout (firmware PAYLOAD_HDR_LIGHT_*). */
+	public static final int LIGHT_GAIN_MASK = 0x07;
+	public static final int LIGHT_RATE_INDEX_BIT_SHIFT = 3;
+	public static final int LIGHT_RATE_INDEX_MASK = 0x0F;
+	public static final int LIGHT_DARK_ENABLE_MASK = 0x80;
+
+	/** Slowest rate the firmware can be configured to (see VD6283_RATE). */
+	public static final double MIN_SAMPLE_RATE_HZ = 0.5;
+	/** Fastest, and also the poll ceiling in continuous mode. */
 	public static final double MAX_SAMPLE_RATE_HZ = 20.0;
 
 	public static final String UNITS_LUX = "lux";
@@ -90,6 +182,7 @@ public class SensorVD6283 extends AbstractSensor {
 	private int gainIndex = 0;
 	private int exposureIndex = 0;
 	private boolean darkChannelEnabled = false;
+	private VD6283_RATE rate = VD6283_RATE.NOT_STORED;
 
 	public class GuiLabelSensors {
 		public static final String LIGHT = "Light";
@@ -283,9 +376,37 @@ public class SensorVD6283 extends AbstractSensor {
 	public void configBytesParse(ShimmerDevice shimmerDevice, byte[] configBytes, COMMUNICATION_TYPE commType) {
 		if(commType == COMMUNICATION_TYPE.SD && isSensorEnabled(Configuration.Verisense.SENSOR_ID.VD6283)) {
 			int gainAndDark = configBytes[PAYLOAD_CONFIG_BYTE_INDEX.LIGHT_GAIN_AND_DARK] & 0xFF;
-			gainIndex = gainAndDark & 0x07;
-			darkChannelEnabled = (gainAndDark & 0x80) != 0;
+			gainIndex = gainAndDark & LIGHT_GAIN_MASK;
+			darkChannelEnabled = (gainAndDark & LIGHT_DARK_ENABLE_MASK) != 0;
+			// Bits 6:3 were spare before FW v2.02.000 and were written as zero, so a
+			// zero here means the rate was not recorded rather than index 0. No
+			// firmware-version check is needed: the firmware stores the EFFECTIVE
+			// index, which is never zero while light blocks exist.
+			//
+			// "Earlier firmware always left these clear" is load-bearing, so here is
+			// the proof rather than the assertion. On firmware before 2.02.000,
+			// backupConfigSettings() built this byte as
+			//   cfg15Bkup = (lightGainIndex & 0x07) | (lightDarkEnable ? 0x80 : 0)
+			// which cannot set bits 6:3, and resetPayloadBackupConfig() zeroed the
+			// whole byte. There is no third writer.
+			//
+			// Gating this on the firmware version as well would look safer and is
+			// not: the header-patched regression datasets deliberately keep their
+			// true firmware version, so a version gate would stop the parser reading
+			// the very field those datasets exist to exercise. A reserved index is
+			// the residual risk and it is reported rather than silently accepted -
+			// see VD6283_RATE.RESERVED_INDEX.
+			rateIndexRaw = (gainAndDark >> LIGHT_RATE_INDEX_BIT_SHIFT) & LIGHT_RATE_INDEX_MASK;
+			rate = VD6283_RATE.getForConfigValue(rateIndexRaw);
 			exposureIndex = configBytes[PAYLOAD_CONFIG_BYTE_INDEX.LIGHT_EXPOSURE] & 0xFF;
+		} else if(commType == COMMUNICATION_TYPE.SD) {
+			// The light sensor is disabled in THIS payload. Clear the rate rather
+			// than letting the previous payload's value stand: unlike gain and
+			// exposure, which only affect calibration, the rate now drives block
+			// timing and CSV splitting, so a stale one would mis-time a later
+			// recording segment after a mid-file configuration change.
+			rateIndexRaw = 0;
+			rate = VD6283_RATE.NOT_STORED;
 		}
 	}
 
@@ -307,13 +428,50 @@ public class SensorVD6283 extends AbstractSensor {
 	}
 
 	/**
-	 * Exposure-limited sample-rate ESTIMATE (Hz). The configured rate is not in
-	 * the stored payload header and the chip adds per-measurement dead time, so
-	 * this only seeds data-block timing - the parser refines the rate per payload
-	 * from consecutive light-block timestamps.
+	 * The sample rate to time this sensor data blocks with (Hz).
+	 * <p>
+	 * When the payload header carries the configured rate (FW v2.02.000+, see
+	 * {@link VD6283_RATE}) that rate is returned, clamped by the exposure bound
+	 * because the chip cannot measure faster than it integrates. Otherwise only
+	 * the exposure bound itself is available, and that is an UPPER BOUND rather
+	 * than an estimate of the rate: it is ten times too fast at the firmware
+	 * default of 1 Hz. Callers that need to know which of the two they got
+	 * should ask {@link #isConfiguredRateKnown()}.
 	 */
 	public double getRateFreq() {
-		return Math.min(MAX_SAMPLE_RATE_HZ, 1e6 / getExposureUs());
+		double exposureLimitHz = Math.min(MAX_SAMPLE_RATE_HZ, 1e6 / getExposureUs());
+		if(isConfiguredRateKnown()) {
+			return Math.min(rate.freqHz, exposureLimitHz);
+		}
+		return exposureLimitHz;
+	}
+
+	/**
+	 * Whether the payload header told us the configured sample rate. False for
+	 * recordings from FW earlier than v2.02.000, where {@link #getRateFreq()}
+	 * can only return the exposure bound.
+	 */
+	public boolean isConfiguredRateKnown() {
+		return rate!=VD6283_RATE.NOT_STORED && rate!=VD6283_RATE.RESERVED_INDEX && rate.freqHz>0;
+	}
+
+	/**
+	 * True when bits 6:3 held a value the firmware rate table does not define.
+	 * <p>
+	 * Worth separating from "not stored" because it should never happen and says
+	 * something different when it does - see {@link VD6283_RATE#RESERVED_INDEX}.
+	 */
+	public boolean isRateIndexReserved() {
+		return rate==VD6283_RATE.RESERVED_INDEX;
+	}
+
+	/** The raw 4-bit value from header byte 30 bits 6:3, for diagnostics. */
+	public int getRateIndexRaw() {
+		return rateIndexRaw;
+	}
+
+	public VD6283_RATE getRate() {
+		return rate;
 	}
 
 	@Override
