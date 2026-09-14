@@ -24,12 +24,16 @@ Test results land in `**/build/test-results/test/*.xml`.
 | `ShimmerPCBasicExamples` | Start here for usage — `SensorMapsExample`, `ShimmerPCExample` |
 
 ## Eclipse-bound
-Every subproject has a `.classpath`/`.project`. The Eclipse workspace binds them by absolute path,
-so the repo cannot be relocated. Two checkouts of this repo exist on this machine — one standalone,
-one as a submodule of `ASM_PC` — so confirm which one is in play before editing.
+Every subproject carries a `.classpath`/`.project`, and an Eclipse workspace registers each one by
+absolute path. Relocating the repo therefore means re-importing it in Eclipse, not just moving the
+folder.
 
 ## Consumed as a submodule
-`ASM_PC` includes this repo at its root. A driver change can break ASM_PC's build; check there too.
+`ASM_PC` includes this repo at its root (DEV-928), pinned to an exact commit and built from source
+rather than consumed as a published artifact. A working copy of this repo may therefore be either a
+standalone clone or that submodule — the submodule sits in **detached HEAD** at the pinned commit,
+which is normal. Driver changes made there follow the two-step flow in ASM_PC's own CLAUDE.md, and a
+driver change can break ASM_PC's build, so check there too.
 
 ## API conventions
 The README documents a long-running deprecation: state and data are delivered via
