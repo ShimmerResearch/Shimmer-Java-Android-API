@@ -83,7 +83,15 @@ dependencies {
     api group: 'org.apache.commons', name: 'commons-lang3', version: '3.4'
     api group: 'org.apache.commons', name: 'commons-math3', version: '3.6'
     api group: 'org.apache.commons', name: 'commons-math', version: '2.2'
-    api group: 'com.google.guava', name: 'guava', version: '19.0'
+    // Must stay an 'api' dependency and stay explicitly declared: Guava is part of this
+    // module's public surface - ObjectCluster.getPropertyCluster() returns a Multimap and
+    // ShimmerObject exposes BiMap, so consumers compile against it.
+    // 33.3.1-jre is what actually resolves (io.grpc:grpc-all pulls it in and wins on
+    // conflict resolution), so declare that rather than a version we have not built
+    // against since grpc was added. The -jre coordinate still publishes both
+    // jreApiElements and androidApiElements, so a Gradle consumer targeting Android
+    // continues to select the android variant via org.gradle.jvm.environment.
+    api group: 'com.google.guava', name: 'guava', version: '33.3.1-jre'
 
     // https://mvnrepository.com/artifact/java3d/vecmath
     api group: 'java3d', name: 'vecmath', version: '1.3.1'
