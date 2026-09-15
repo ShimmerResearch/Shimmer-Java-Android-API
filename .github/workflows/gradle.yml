@@ -19,6 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      checks: write   # the Publish Test Report step creates a check run
 
     steps:
     - uses: actions/checkout@v4
