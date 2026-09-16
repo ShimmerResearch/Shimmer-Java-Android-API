@@ -3901,6 +3901,10 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 		mStreamingStartTimeMilliSecs = -1;
 		
 		setCurrentTimeStampCycle(0);
+		//Belongs with the unwrap state reset above: it describes the last sample
+		//unwrapped against that state, so leaving it set would carry a rejection
+		//into a recording that has not started yet.
+		mLastTimestampRejected = false;
 	}
 
 
