@@ -18,6 +18,7 @@ import com.shimmerresearch.driverUtilities.SensorDetails;
 import com.shimmerresearch.driverUtilities.SensorDetailsRef;
 import com.shimmerresearch.driverUtilities.SensorGroupingDetails;
 import com.shimmerresearch.driverUtilities.ShimmerVerDetails.HW_ID;
+import com.shimmerresearch.driverUtilities.TimestampUnwrap;
 import com.shimmerresearch.driverUtilities.UtilParseData;
 import com.shimmerresearch.driverUtilities.UtilShimmer;
 import com.shimmerresearch.driverUtilities.ChannelDetails.CHANNEL_SOURCE;
@@ -40,6 +41,9 @@ public class SensorShimmerClock extends AbstractSensor {
 	protected double mStreamingStartTimeMilliSecs;	
 
 	protected int mTimeStampTicksMaxValue = 16777216; // or 65536 
+	/** Set per sample by unwrapTimeStamp; see isLastTimestampRejected(). Transient
+	 * because it describes the sample in hand, not the device's configuration. */
+	protected transient boolean mLastTimestampRejected = false;
 
 	protected boolean mFirstTime = true;
 	double mFirstTsOffsetFromInitialTsTicks = 0;
@@ -373,7 +377,11 @@ public class SensorShimmerClock extends AbstractSensor {
 						double timestampUnCalToSave = shimmerTimestampTicks; 
 
 						//incrementPacketsReceivedCounters();
-						calculateTrialPacketLoss(timestampUnwrappedMilliSecs);
+						if(!isLastTimestampRejected()){
+							//A rejected sample carries the previous timestamp, so feeding it
+							//to the packet-loss estimate would show a gap that never happened.
+							calculateTrialPacketLoss(timestampUnwrappedMilliSecs);
+						}
 
 						//TODO update from ShimmerObject
 						double timestampUnwrappedWithOffsetTicks = 0;
@@ -710,29 +718,37 @@ public class SensorShimmerClock extends AbstractSensor {
 
 	/**
 	 * Unwraps the timestamp based on the current recording (i.e., per file for
-	 * SD recordings not taking into account the initial file start time)
+	 * SD recordings not taking into account the initial file start time).
+	 * <p>
+	 * A sample can be rejected rather than unwrapped - see
+	 * {@link TimestampUnwrap} and {@link #isLastTimestampRejected()}.
 	 * 
 	 * @param timeStampTicks
 	 * @return
 	 */
 	protected double unwrapTimeStamp(double timeStampTicks){
-		//first convert to continuous time stamp
-		double timestampUnwrappedTicks = calculateTimeStampUnwrapped(timeStampTicks);
-		
-		//Check if there was a roll-over
-		if (getLastReceivedTimeStampTicksUnwrapped()>timestampUnwrappedTicks){ 
-			mCurrentTimeStampCycle += 1;
-			//Recalculate timestamp
-			timestampUnwrappedTicks = calculateTimeStampUnwrapped(timeStampTicks);
-		}
+		TimestampUnwrap.Result result = TimestampUnwrap.unwrap(timeStampTicks,
+				getLastReceivedTimeStampTicksUnwrapped(), mCurrentTimeStampCycle, mTimeStampTicksMaxValue);
 
-		setLastReceivedTimeStampTicksUnwrapped(timestampUnwrappedTicks);
+		mLastTimestampRejected = result.rejected;
+		mCurrentTimeStampCycle = result.cycle;
+		//On a rejected sample this puts back the value it already held, which is
+		//what keeps the rejection from cascading: the next sample reads above it
+		//and is accepted normally.
+		setLastReceivedTimeStampTicksUnwrapped(result.unwrapped);
 
-		return timestampUnwrappedTicks;
+		return result.unwrapped;
 	}
-	
-	private double calculateTimeStampUnwrapped(double timeStampTicks) {
-		return timeStampTicks+(mTimeStampTicksMaxValue*mCurrentTimeStampCycle);
+
+	/**
+	 * True when the sample most recently passed to {@link #unwrapTimeStamp(double)}
+	 * carried an invalid zero timestamp and was rejected rather than unwrapped. Its
+	 * sensor data is fine; only its timestamp is missing. Callers reading a file
+	 * should drop the record; a live stream has nothing better to do than carry the
+	 * previous timestamp forward for one packet.
+	 */
+	public boolean isLastTimestampRejected() {
+		return mLastTimestampRejected;
 	}
 
 	private void calculateTrialPacketLoss(double timestampUnwrappedMilliSecs) {
