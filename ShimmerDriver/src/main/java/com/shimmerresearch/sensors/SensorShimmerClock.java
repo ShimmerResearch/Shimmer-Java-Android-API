@@ -728,7 +728,8 @@ public class SensorShimmerClock extends AbstractSensor {
 	 */
 	protected double unwrapTimeStamp(double timeStampTicks){
 		TimestampUnwrap.Result result = TimestampUnwrap.unwrap(timeStampTicks,
-				getLastReceivedTimeStampTicksUnwrapped(), mCurrentTimeStampCycle, mTimeStampTicksMaxValue);
+				getLastReceivedTimeStampTicksUnwrapped(), mCurrentTimeStampCycle, mTimeStampTicksMaxValue,
+				getReorderWindowTicks());
 
 		mLastTimestampRejected = result.rejected;
 		mCurrentTimeStampCycle = result.cycle;
@@ -738,6 +739,23 @@ public class SensorShimmerClock extends AbstractSensor {
 		setLastReceivedTimeStampTicksUnwrapped(result.unwrapped);
 
 		return result.unwrapped;
+	}
+
+	/**
+	 * How far behind its predecessor a sample may sit and still be read as a
+	 * reordered packet rather than a counter roll-over. See
+	 * {@link TimestampUnwrap#reorderWindowTicks(double, int)} for why it is sized
+	 * in sample periods, and why an unknown rate must give zero rather than an
+	 * infinite window.
+	 * <p>
+	 * Derived on every sample rather than cached, so a rate written mid-session is
+	 * picked up by the next one and there is no stale window to reset.
+	 */
+	protected double getReorderWindowTicks(){
+		if(mShimmerDevice==null){
+			return 0.0;
+		}
+		return TimestampUnwrap.reorderWindowTicks(mShimmerDevice.getSamplingRateShimmer(), mTimeStampTicksMaxValue);
 	}
 
 	/**
