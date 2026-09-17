@@ -716,19 +716,28 @@ public class SensorShimmerClock extends AbstractSensor {
 	 * @return
 	 */
 	protected double unwrapTimeStamp(double timeStampTicks){
-		//first convert to continuous time stamp
-		double timestampUnwrappedTicks = calculateTimeStampUnwrapped(timeStampTicks);
-		
-		//Check if there was a roll-over
-		if (getLastReceivedTimeStampTicksUnwrapped()>timestampUnwrappedTicks){ 
-			mCurrentTimeStampCycle += 1;
-			//Recalculate timestamp
-			timestampUnwrappedTicks = calculateTimeStampUnwrapped(timeStampTicks);
-		}
+	    double expectedTicksPerSample = mShimmerDevice.getRtcClockFreq() / mShimmerDevice.getSamplingRateShimmer();
+	    double candidateUnwrapped = calculateTimeStampUnwrapped(timeStampTicks);
+	    double delta = candidateUnwrapped - getLastReceivedTimeStampTicksUnwrapped();
 
-		setLastReceivedTimeStampTicksUnwrapped(timestampUnwrappedTicks);
+	    if (delta < 0) {
+	        boolean looksLikeGenuineWrap = -delta > (mTimeStampTicksMaxValue - (10 * expectedTicksPerSample));
+	        if (looksLikeGenuineWrap) {
+	            mCurrentTimeStampCycle += 1;
+	            candidateUnwrapped = calculateTimeStampUnwrapped(timeStampTicks);
+	        } else {
+	            candidateUnwrapped = getLastReceivedTimeStampTicksUnwrapped() + expectedTicksPerSample;
+	            mCorruptedTimestampSampleCount++;
+	        }
+	    }
+	    setLastReceivedTimeStampTicksUnwrapped(candidateUnwrapped);
+	    return candidateUnwrapped;
+	}
+	
+	protected int mCorruptedTimestampSampleCount = 0;
 
-		return timestampUnwrappedTicks;
+	public int getCorruptedTimestampSampleCount() {
+	    return mCorruptedTimestampSampleCount;
 	}
 	
 	private double calculateTimeStampUnwrapped(double timeStampTicks) {

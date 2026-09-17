@@ -785,6 +785,13 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 	protected boolean mPastGSRFirstTime=true; 	// this is to fix a bug with SDLog v0.9
 
 	// ---------- GSR end ------------------
+	
+	protected int mCorruptedTimestampSampleCount = 0;
+
+	public int getCorruptedTimestampSampleCount() {
+	    return mCorruptedTimestampSampleCount;
+	}
+
     
 	public ObjectCluster setLSLTimeIfAvailable(ObjectCluster ojc) {
 		return ojc;
@@ -3828,21 +3835,24 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 	 * @return
 	 */
 	protected double unwrapTimeStamp(double timeStampTicks){
-		//first convert to continuous time stamp
-		double timestampUnwrappedTicks = calculateTimeStampUnwrapped(timeStampTicks);
-		
-		//Check if there was a roll-over
-		if (getLastReceivedTimeStampTicksUnwrapped()>timestampUnwrappedTicks){ 
-			mCurrentTimeStampCycle += 1;
-			//Recalculate timestamp
-			timestampUnwrappedTicks = calculateTimeStampUnwrapped(timeStampTicks);
-		}
+	    double expectedTicksPerSample = getRtcClockFreq() / getSamplingRateShimmer();
+	    double candidateUnwrapped = calculateTimeStampUnwrapped(timeStampTicks);
+	    double delta = candidateUnwrapped - getLastReceivedTimeStampTicksUnwrapped();
 
-		setLastReceivedTimeStampTicksUnwrapped(timestampUnwrappedTicks);
-
-		return timestampUnwrappedTicks;
+	    if (delta < 0) {
+	        boolean looksLikeGenuineWrap = -delta > (mTimeStampTicksMaxValue - (10 * expectedTicksPerSample));
+	        if (looksLikeGenuineWrap) {
+	            mCurrentTimeStampCycle += 1;
+	            candidateUnwrapped = calculateTimeStampUnwrapped(timeStampTicks);
+	        } else {
+	            candidateUnwrapped = getLastReceivedTimeStampTicksUnwrapped() + expectedTicksPerSample;
+	            mCorruptedTimestampSampleCount++;
+	        }
+	    }
+	    setLastReceivedTimeStampTicksUnwrapped(candidateUnwrapped);
+	    return candidateUnwrapped;
 	}
-
+	
 	private double calculateTimeStampUnwrapped(double timeStampTicks) {
 		return timeStampTicks+(mTimeStampTicksMaxValue*mCurrentTimeStampCycle);
 	}
