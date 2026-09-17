@@ -18,15 +18,27 @@ public class API_00009_TimestampUnwrapTest {
 	/** 32768 ticks per second; 65 ticks per sample at the customer's 504.123 Hz. */
 	private static final double TICKS_PER_SECOND = 32768.0;
 	private static final int PERIOD_TICKS = 65;
+	/** Eight sample periods at 504.123 Hz - the reorder window at that rate. */
+	private static final double WINDOW_504HZ = 8 * PERIOD_TICKS;
 
 	/** Feeds a series of raw values through the unwrapper, as a caller would. */
 	private static class Unwrapper {
 		double lastUnwrapped = 0;
 		double cycle = 0;
 		boolean lastRejected = false;
+		final double window;
+
+		/** Reorder detection off, which is what a caller with no rate gets. */
+		Unwrapper() {
+			this(0.0);
+		}
+
+		Unwrapper(double window) {
+			this.window = window;
+		}
 
 		double feed(double rawTicks, int maxTicks) {
-			TimestampUnwrap.Result r = TimestampUnwrap.unwrap(rawTicks, lastUnwrapped, cycle, maxTicks);
+			TimestampUnwrap.Result r = TimestampUnwrap.unwrap(rawTicks, lastUnwrapped, cycle, maxTicks, window);
 			lastRejected = r.rejected;
 			cycle = r.cycle;
 			lastUnwrapped = r.unwrapped;
@@ -186,5 +198,131 @@ public class API_00009_TimestampUnwrapTest {
 		assertFalse("a value of 1 is not the invalid marker", u.lastRejected);
 		assertEquals("so it is read as a wrap, as before", 1.0, u.cycle, 0.0);
 		assertEquals(MAX_3_BYTE + 1, after, 0.0);
+	}
+
+	/**
+	 * Two adjacent packets delivered the wrong way round. Each is placed where it
+	 * was taken, so the output is deliberately not monotonic - and, the point of
+	 * this, no modulo is added.
+	 */
+	@Test
+	public void testReorderedPacketIsPlacedWhereItWasTaken() {
+		Unwrapper u = new Unwrapper(WINDOW_504HZ);
+		u.feed(1000, MAX_3_BYTE);
+		u.feed(1000 + 2 * PERIOD_TICKS, MAX_3_BYTE);
+		double late = u.feed(1000 + PERIOD_TICKS, MAX_3_BYTE);
+
+		assertFalse("a reordered packet is not an invalid one", u.lastRejected);
+		assertEquals("no wrap counted", 0.0, u.cycle, 0.0);
+		assertEquals("placed at its own sample time, below its predecessor",
+				1000 + PERIOD_TICKS, late, 0.0);
+		assertEquals("and the next packet carries on", 1000 + 3 * PERIOD_TICKS,
+				u.feed(1000 + 3 * PERIOD_TICKS, MAX_3_BYTE), 0.0);
+	}
+
+	/** The same value twice: hold the timeline, do not count a wrap. */
+	@Test
+	public void testDuplicatePacketHoldsTheTimeline() {
+		Unwrapper u = new Unwrapper(WINDOW_504HZ);
+		u.feed(1000, MAX_3_BYTE);
+		u.feed(1065, MAX_3_BYTE);
+		double again = u.feed(1065, MAX_3_BYTE);
+
+		assertFalse(u.lastRejected);
+		assertEquals("held", 1065, again, 0.0);
+		assertEquals("no wrap counted", 0.0, u.cycle, 0.0);
+	}
+
+	/**
+	 * A packet arriving late from <em>before</em> a roll-over. This is the case a
+	 * rule comparing unwrapped values rather than modular distances gets wrong: the
+	 * late packet's candidate sits nearly a whole modulo ahead, so it is accepted,
+	 * and the sample after it is then read as a second wrap. Two 512 s errors from
+	 * one out-of-order packet.
+	 */
+	@Test
+	public void testPacketArrivingLateFromBeforeAWrapIsNotASecondWrap() {
+		Unwrapper u = new Unwrapper(WINDOW_504HZ);
+		u.feed(MAX_3_BYTE - 10, MAX_3_BYTE);
+		double afterWrap = u.feed(5, MAX_3_BYTE);
+		double late = u.feed(MAX_3_BYTE - 10, MAX_3_BYTE);
+		double next = u.feed(70, MAX_3_BYTE);
+
+		assertEquals("the wrap itself", MAX_3_BYTE + 5, afterWrap, 0.0);
+		assertEquals("the late packet belongs before the boundary", MAX_3_BYTE - 10, late, 0.0);
+		assertEquals("and the stream resumes after it", MAX_3_BYTE + 70, next, 0.0);
+		assertEquals("exactly one wrap across the whole sequence", 1.0, u.cycle, 0.0);
+	}
+
+	/**
+	 * A roll-over preceded by a long dropout. Forward motion is the default, so
+	 * however much was lost beforehand the wrap is still a wrap. A rule that treats
+	 * an unexplained backward step as corruption instead loses it.
+	 */
+	@Test
+	public void testWrapPrecededByHeavyLossIsStillAWrap() {
+		Unwrapper u = new Unwrapper(WINDOW_504HZ);
+		u.feed(16000000, MAX_3_BYTE);
+		double afterWrap = u.feed(100, MAX_3_BYTE);
+
+		assertFalse(u.lastRejected);
+		assertEquals("one wrap counted", 1.0, u.cycle, 0.0);
+		assertEquals(MAX_3_BYTE + 100, afterWrap, 0.0);
+	}
+
+	/**
+	 * With no rate the window is zero, so a swapped pair reads as a roll-over -
+	 * worse than knowing the rate, and identical to what older hosts did. What must
+	 * not happen is an infinite window, which would make every backward step a
+	 * reorder and lose every wrap.
+	 */
+	@Test
+	public void testAnUnknownRateDisablesReorderDetectionRatherThanBreakingWraps() {
+		assertEquals("unknown rate gives no window", 0.0,
+				TimestampUnwrap.reorderWindowTicks(0.0, MAX_3_BYTE), 0.0);
+		assertEquals("and a division that overflowed to infinity is still no window", 0.0,
+				TimestampUnwrap.reorderWindowTicks(Double.POSITIVE_INFINITY, MAX_3_BYTE), 0.0);
+
+		Unwrapper u = new Unwrapper();
+		u.feed(1000, MAX_3_BYTE);
+		u.feed(1130, MAX_3_BYTE);
+		double swapped = u.feed(1065, MAX_3_BYTE);
+
+		assertEquals("read as a wrap, as it always was", 1.0, u.cycle, 0.0);
+		assertEquals(MAX_3_BYTE + 1065, swapped, 0.0);
+	}
+
+	/**
+	 * The window is eight sample periods, clamped so it can never reach a fraction
+	 * of the modulo at which no backward step could be a wrap.
+	 */
+	@Test
+	public void testWindowIsEightSamplePeriodsAndClamped() {
+		assertEquals("504.123 Hz on the 3-byte counter", WINDOW_504HZ,
+				TimestampUnwrap.reorderWindowTicks(TICKS_PER_SECOND / PERIOD_TICKS, MAX_3_BYTE), 1e-9);
+		assertEquals("51.2 Hz on the 2-byte counter", 5120.0,
+				TimestampUnwrap.reorderWindowTicks(51.2, MAX_2_BYTE), 1e-9);
+		assertEquals("1 Hz on the 2-byte counter is clamped to modulo/8", MAX_2_BYTE / 8.0,
+				TimestampUnwrap.reorderWindowTicks(1.0, MAX_2_BYTE), 0.0);
+	}
+
+	/**
+	 * A 1.8 second dropout across the 2 second counter - an ordinary Bluetooth gap.
+	 * A window sized as a fraction of the modulo reads this as a reordered packet
+	 * and silently loses the wrap; eight sample periods does not.
+	 */
+	@Test
+	public void testWrapSpanningDropoutOnTheTwoByteCounterIsNotAReorder() {
+		double window = TimestampUnwrap.reorderWindowTicks(51.2, MAX_2_BYTE);
+		int lost = (int) (1.8 * TICKS_PER_SECOND);
+		int before = 60000;
+		int landing = (before + lost) % MAX_2_BYTE;
+
+		Unwrapper u = new Unwrapper(window);
+		u.feed(before, MAX_2_BYTE);
+		double after = u.feed(landing, MAX_2_BYTE);
+
+		assertEquals("one wrap counted", 1.0, u.cycle, 0.0);
+		assertEquals("the gap is preserved at its true length", before + lost, after, 0.0);
 	}
 }
