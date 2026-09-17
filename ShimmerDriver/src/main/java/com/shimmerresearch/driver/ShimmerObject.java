@@ -630,6 +630,11 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 	//-------- Timestamp related start --------
 	protected double mLastReceivedTimeStampTicksUnwrapped=0;
 	protected double mCurrentTimeStampCycle=0;
+	/** False only before the first sample of a stream. The pair above cannot say
+	 *  it on their own: (0, 0) is the reset state and also a state the unwrap can
+	 *  reach, when a reordered packet lands exactly on the counter's origin. See
+	 *  {@link TimestampUnwrap#unwrap(double, double, double, int, double, boolean)}. */
+	protected boolean mHasPreviousTimeStamp=false;
 	protected long mInitialTimeStampTicksSd = 0;
 	@Deprecated //not needed any more
 	protected double mLastReceivedCalibratedTimeStamp=-1; 
@@ -3841,7 +3846,7 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 	protected double unwrapTimeStamp(double timeStampTicks){
 		TimestampUnwrap.Result result = TimestampUnwrap.unwrap(timeStampTicks,
 				getLastReceivedTimeStampTicksUnwrapped(), mCurrentTimeStampCycle, mTimeStampTicksMaxValue,
-				getReorderWindowTicks());
+				getReorderWindowTicks(), mHasPreviousTimeStamp);
 
 		mLastTimestampRejected = result.rejected;
 		mCurrentTimeStampCycle = result.cycle;
@@ -3928,6 +3933,10 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 		mStreamingStartTimeMilliSecs = -1;
 		
 		setCurrentTimeStampCycle(0);
+		//Last, because the setter above marks a predecessor as present - which is
+		//what a caller seeding state across files wants, and the opposite of what
+		//a reset means.
+		mHasPreviousTimeStamp = false;
 		//Belongs with the unwrap state reset above: it describes the last sample
 		//unwrapped against that state, so leaving it set would carry a rejection
 		//into a recording that has not started yet.
@@ -4777,6 +4786,10 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 	
 	public void setLastReceivedTimeStampTicksUnwrapped(double lastReceivedTimeStampTicksUnwrapped){
 		mLastReceivedTimeStampTicksUnwrapped = lastReceivedTimeStampTicksUnwrapped;
+		//Being told the previous sample's value IS a predecessor - that is what
+		//callers chaining legacy SD files across a trial are doing. A reset says
+		//so explicitly afterwards; see resetCalibratedTimeStamp().
+		mHasPreviousTimeStamp = true;
 	}
 
 	public void updateTimestampByteLength(){

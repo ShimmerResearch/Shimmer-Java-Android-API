@@ -33,6 +33,9 @@ public class SensorShimmerClock extends AbstractSensor {
 	//--------- Sensor specific variables start --------------
 	protected double mLastReceivedTimeStampTicksUnwrapped=0;
 	protected double mCurrentTimeStampCycle=0;
+	/** False only before the first sample of a stream. See
+	 *  {@link com.shimmerresearch.driver.ShimmerObject#mHasPreviousTimeStamp}. */
+	protected boolean mHasPreviousTimeStamp=false;
 	protected long mInitialTimeStampTicksSd = 0;
 	@Deprecated //not needed any more
 	protected double mLastReceivedCalibratedTimeStamp=-1; 
@@ -729,7 +732,7 @@ public class SensorShimmerClock extends AbstractSensor {
 	protected double unwrapTimeStamp(double timeStampTicks){
 		TimestampUnwrap.Result result = TimestampUnwrap.unwrap(timeStampTicks,
 				getLastReceivedTimeStampTicksUnwrapped(), mCurrentTimeStampCycle, mTimeStampTicksMaxValue,
-				getReorderWindowTicks());
+				getReorderWindowTicks(), mHasPreviousTimeStamp);
 
 		mLastTimestampRejected = result.rejected;
 		mCurrentTimeStampCycle = result.cycle;
@@ -852,6 +855,8 @@ public class SensorShimmerClock extends AbstractSensor {
 		mStreamingStartTimeMilliSecs = -1;
 		
 		mCurrentTimeStampCycle = 0;
+		//Last, because the setter above marks a predecessor as present.
+		mHasPreviousTimeStamp = false;
 		//Belongs with the unwrap state reset above: it describes the last sample
 		//unwrapped against that state, so leaving it set would carry a rejection
 		//into a recording that has not started yet.
@@ -867,6 +872,9 @@ public class SensorShimmerClock extends AbstractSensor {
 	
 	public void setLastReceivedTimeStampTicksUnwrapped(double lastReceivedTimeStampTicksUnwrapped){
 		mLastReceivedTimeStampTicksUnwrapped = lastReceivedTimeStampTicksUnwrapped;
+		//Being told the previous sample's value IS a predecessor; a reset says
+		//otherwise explicitly afterwards.
+		mHasPreviousTimeStamp = true;
 	}
 
 	/**

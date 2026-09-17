@@ -25,6 +25,7 @@ public class API_00009_TimestampUnwrapTest {
 	private static class Unwrapper {
 		double lastUnwrapped = 0;
 		double cycle = 0;
+		boolean hasPrevious = false;
 		boolean lastRejected = false;
 		final double window;
 
@@ -38,7 +39,11 @@ public class API_00009_TimestampUnwrapTest {
 		}
 
 		double feed(double rawTicks, int maxTicks) {
-			TimestampUnwrap.Result r = TimestampUnwrap.unwrap(rawTicks, lastUnwrapped, cycle, maxTicks, window);
+			//The six-argument form: a stream knows whether it has seen a sample, and
+			//(0, 0) cannot say so on its own once a reorder can land on the origin.
+			TimestampUnwrap.Result r = TimestampUnwrap.unwrap(rawTicks, lastUnwrapped, cycle, maxTicks,
+					window, hasPrevious);
+			hasPrevious = true;
 			lastRejected = r.rejected;
 			cycle = r.cycle;
 			lastUnwrapped = r.unwrapped;
@@ -324,5 +329,48 @@ public class API_00009_TimestampUnwrapTest {
 
 		assertEquals("one wrap counted", 1.0, u.cycle, 0.0);
 		assertEquals("the gap is preserved at its true length", before + lost, after, 0.0);
+	}
+
+	/**
+	 * A reorder can land exactly on the counter's origin, which puts a host that
+	 * stores (unwrapped, cycle) back into the state it uses for "no sample yet".
+	 * The next packet is then read as a first sample and passed through, so one
+	 * arriving from just before the origin is placed a whole modulo late.
+	 *
+	 * Telling the unwrap outright is the fix. The sequence is also the shared
+	 * vector reorder-onto-origin-then-earlier-packet-24bit, so the other host
+	 * APIs are held to the same answer.
+	 */
+	@Test
+	public void testAReorderOntoTheOriginDoesNotLookLikeAFreshStream() {
+		double window = TimestampUnwrap.reorderWindowTicks(32768.0 / 65, MAX_3_BYTE);
+
+		Unwrapper u = new Unwrapper(window);
+		u.feed(520, MAX_3_BYTE);
+		assertEquals("the reorder lands on the origin", 0.0, u.feed(0, MAX_3_BYTE), 0.0);
+		assertEquals("and is not rejected - it is a reorder, not an unstamped record",
+				false, u.lastRejected);
+
+		double earlier = u.feed(MAX_3_BYTE - 16, MAX_3_BYTE);
+		assertEquals("a packet from just before the origin sits 16 ticks below it",
+				-16.0, earlier, 0.0);
+		assertEquals("which is one cycle down, and that is a real state", -1.0, u.cycle, 0.0);
+	}
+
+	/**
+	 * What the five-argument overload does with the same sequence, stated so the
+	 * compatibility boundary is deliberate rather than discovered. It infers
+	 * "no previous sample" from (0, 0) and therefore gets this one wrong; it is
+	 * kept only for callers written before the distinction existed.
+	 */
+	@Test
+	public void testTheFiveArgumentOverloadStillInfersItFromZeroZero() {
+		double window = TimestampUnwrap.reorderWindowTicks(32768.0 / 65, MAX_3_BYTE);
+
+		TimestampUnwrap.Result r = TimestampUnwrap.unwrap(MAX_3_BYTE - 16, 0.0, 0.0, MAX_3_BYTE,
+				window);
+
+		assertEquals("passed through as a first sample", MAX_3_BYTE - 16, r.unwrapped, 0.0);
+		assertEquals("no cycle counted", 0.0, r.cycle, 0.0);
 	}
 }

@@ -78,7 +78,8 @@ public class API_00010_TimestampUnwrapVectorsTest {
 			"reorder-window-boundary-exclusive-24bit",
 			"low-rate-clamp-16bit",
 			"high-rate-reorder-24bit",
-			"reorder-beyond-eight-periods-is-a-wrap-24bit");
+			"reorder-beyond-eight-periods-is-a-wrap-24bit",
+			"reorder-onto-origin-then-earlier-packet-24bit");
 
 	private static JsonObject loadVectors() throws Exception {
 		InputStream stream = API_00010_TimestampUnwrapVectorsTest.class.getResourceAsStream(VECTORS_RESOURCE);
@@ -95,6 +96,7 @@ public class API_00010_TimestampUnwrapVectorsTest {
 	private static class Unwrapper {
 		double lastUnwrapped = 0;
 		double cycle = 0;
+		boolean hasPrevious = false;
 		boolean lastRejected = false;
 		final double window;
 
@@ -103,7 +105,11 @@ public class API_00010_TimestampUnwrapVectorsTest {
 		}
 
 		double feed(double rawTicks, int maxTicks) {
-			TimestampUnwrap.Result r = TimestampUnwrap.unwrap(rawTicks, lastUnwrapped, cycle, maxTicks, window);
+			//The six-argument form: a stream knows whether it has seen a sample, and
+			//(0, 0) cannot say so on its own once a reorder can land on the origin.
+			TimestampUnwrap.Result r = TimestampUnwrap.unwrap(rawTicks, lastUnwrapped, cycle, maxTicks,
+					window, hasPrevious);
+			hasPrevious = true;
 			lastRejected = r.rejected;
 			cycle = r.cycle;
 			lastUnwrapped = r.unwrapped;

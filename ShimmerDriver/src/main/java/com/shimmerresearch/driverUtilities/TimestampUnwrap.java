@@ -165,11 +165,40 @@ public final class TimestampUnwrap {
 	 */
 	public static Result unwrap(double rawTicks, double lastUnwrapped, double cycle, int maxTicks,
 			double reorderWindowTicks) {
-		if (lastUnwrapped == 0.0 && cycle == 0.0) {
-			// Nothing has been unwrapped yet, so there is no predecessor to measure
-			// against. Taking the reset state as a real sample at zero would let a
-			// first raw value near the top of the range read as a packet reordered
-			// across a boundary, placing a whole recording one modulo early.
+		// (0, 0) is the reset state AND a state the rule can reach, so this
+		// overload cannot always tell them apart - see the six-argument form.
+		// Kept for callers that predate the distinction and behaves as before.
+		return unwrap(rawTicks, lastUnwrapped, cycle, maxTicks, reorderWindowTicks,
+				!(lastUnwrapped == 0.0 && cycle == 0.0));
+	}
+
+	/**
+	 * As above, but told outright whether a previous sample exists.
+	 *
+	 * The five-argument form infers it from the state being (0, 0). That is the
+	 * reset state, and it is also a state the rule can produce: a reorder that
+	 * lands exactly on the counter's origin leaves lastUnwrapped = 0 and
+	 * cycle = 0 in the middle of a stream. The next packet is then read as a
+	 * first sample and passed through, so one arriving from just before the
+	 * origin is placed a whole modulo late rather than a few ticks behind. The
+	 * conformance vector {@code reorder-onto-origin-then-earlier-packet-24bit}
+	 * is exactly that sequence.
+	 *
+	 * Hosts that keep the previous RAW value instead of a cycle count - the web
+	 * SDK and pyshimmer - never had the ambiguity, which is why this is stated
+	 * as a separate flag rather than fixed by choosing a different reset value:
+	 * {@link #getLastReceivedTimeStampTicksUnwrapped()} is public and some
+	 * callers seed it across files.
+	 *
+	 * @param hasPreviousSample false only before the first sample of a stream
+	 */
+	public static Result unwrap(double rawTicks, double lastUnwrapped, double cycle, int maxTicks,
+			double reorderWindowTicks, boolean hasPreviousSample) {
+		if (!hasPreviousSample) {
+			// No predecessor to measure against. Taking the reset state as a real
+			// sample at zero would let a first raw value near the top of the range
+			// read as a packet reordered across a boundary, placing a whole
+			// recording one modulo early.
 			return new Result(rawTicks, 0.0, false);
 		}
 
