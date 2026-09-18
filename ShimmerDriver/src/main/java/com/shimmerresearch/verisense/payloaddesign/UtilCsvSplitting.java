@@ -166,6 +166,12 @@ public class UtilCsvSplitting {
 	 * It is the best that can be done without the rate, it keeps such recordings
 	 * in ONE CSV rather than one per block, and it is stateless: nothing is
 	 * learned from the data, so no amount of unhealthy data can move it.
+	 * <p>
+	 * What comes back is a plausible RATE range. The gap window built from it is
+	 * wider again on both sides - see {@link #seedSlowSensorGapWindow}, which also
+	 * explains why the MLX90632 edge emerging from
+	 * {@link FILE_GAP_TOLERANCE_MULTIPLIER#SLOW_SENSOR_MAX_INTER_BLOCK_GAP_RATIO}
+	 * cannot be retuned for the light sensor alone.
 	 *
 	 * @param verisenseDevice the device being parsed
 	 * @param slowSensorId the slow sensor data block id
@@ -268,21 +274,27 @@ public class UtilCsvSplitting {
 	}
 
 	/**
-	 * Set once a file has reported a missing light rate field, so the warning is
-	 * one line per recording rather than one per payload. Cleared with the limits
-	 * map, which {@code AsmBinaryFileParse} does at the start and end of a file.
+	 * Set once an unusable ambient-light rate field has been reported, so it is
+	 * one line rather than one per payload.
+	 * <p>
+	 * Once per CSV SET, not once per recording: it is cleared with the limits map,
+	 * and {@code AsmBinaryFileParse.writeAllStringBuildersToFiles()} clears that at
+	 * every CSV split - config change and time-based alike - as well as at the
+	 * start and end of a file. A recording split into four CSV sets can therefore
+	 * print this four times, which is the right granularity anyway: each set is a
+	 * separate CSV that somebody may open on its own.
 	 */
-	private static boolean hasWarnedLightRateFieldMissing = false;
+	private static boolean hasWarnedLightRateFieldUnusable = false;
 
 	public static void clearMapOfSamplingRateLimitsPerSensor() {
 		SAMPLING_RATE_LIMITS_PER_SENSOR.clear();
-		hasWarnedLightRateFieldMissing = false;
+		hasWarnedLightRateFieldUnusable = false;
 	}
 
 	/**
-	 * Reports, once per file, an ambient-light rate field this parser cannot use:
-	 * either a payload claiming firmware new enough to store the index yet leaving
-	 * it clear, or any payload holding a reserved index 7..15.
+	 * Reports, once per CSV set, an ambient-light rate field this parser cannot
+	 * use: either a payload claiming firmware new enough to store the index yet
+	 * leaving it clear, or any payload holding a reserved index 7..15.
 	 * <p>
 	 * This is the one failure the header-driven design cannot otherwise see. A
 	 * zero field is indistinguishable from an old recording, so the parser falls
@@ -303,7 +315,7 @@ public class UtilCsvSplitting {
 	 * @param verisenseDevice the device being parsed
 	 */
 	public static void warnIfLightRateFieldUnusable(VerisenseDevice verisenseDevice) {
-		if(hasWarnedLightRateFieldMissing) {
+		if(hasWarnedLightRateFieldUnusable) {
 			return;
 		}
 		SensorVD6283 sensorVd6283 = verisenseDevice.getSensorVD6283();
@@ -318,8 +330,14 @@ public class UtilCsvSplitting {
 			// payload design claims: on an old recording those bits should be clear,
 			// so a non-zero one is an anomaly in its own right and the version tells
 			// us nothing useful about it.
-			fault = "carries ambient light blocks whose rate field holds the reserved index "
-					+ sensorVd6283.getRateIndexRaw() + ", which no firmware rate table defines";
+			//
+			// Deliberately says nothing about the recording carrying light blocks. The
+			// caller in PayloadContentsDetailsV8orAbove only reaches here for a payload
+			// that does, but this method is public and does not check, so stating it
+			// would be a claim made on somebody else's behalf.
+			fault = "wrote the reserved index " + sensorVd6283.getRateIndexRaw()
+					+ " into the ambient-light rate field (payload header byte 30 bits 6:3),"
+					+ " which no firmware rate table defines";
 		} else if(verisenseDevice.isPayloadDesignV14orAbove()) {
 			fault = "stores the VD6283 sample rate in payload header byte 30 bits 6:3, but this"
 					+ " recording carries ambient light blocks with that field clear. This is a"
@@ -329,7 +347,7 @@ public class UtilCsvSplitting {
 			return;
 		}
 
-		hasWarnedLightRateFieldMissing = true;
+		hasWarnedLightRateFieldUnusable = true;
 		double[] fallbackRangeHz = getSlowSensorPlausibleRateRangeHz(verisenseDevice, DATABLOCK_SENSOR_ID.LIGHT);
 		System.out.println("WARNING!!! Firmware " + verisenseDevice.getFirmwareVersionParsed() + " "
 				+ fault + ". Falling back to the whole rate table, " + fallbackRangeHz[0] + " to "

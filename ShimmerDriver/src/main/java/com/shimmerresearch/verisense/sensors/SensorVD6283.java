@@ -160,6 +160,27 @@ public class SensorVD6283 extends AbstractSensor {
 			// has to be reportable as one - see RESERVED_INDEX.
 			return configValue==0? NOT_STORED:RESERVED_INDEX;
 		}
+
+		/**
+		 * Whether this is a rate the firmware could have been configured to, as
+		 * opposed to one of the two verdicts {@link #getForConfigValue} returns for
+		 * a field it could not decode.
+		 * <p>
+		 * The question is answered here rather than at each call site because it was
+		 * being asked in two places with two different answers: the driver tested
+		 * both sentinels, while the ASM_PC header patcher tested only NOT_STORED, so
+		 * adding RESERVED_INDEX let an undecodable index through the patcher and into
+		 * a regression dataset. One predicate, one place to update when a member is
+		 * added.
+		 * <p>
+		 * Both properties are tested because a real rate has both - a storable index
+		 * 1..6 and a non-zero frequency - and each verdict has neither. A member
+		 * carrying one without the other would be a mistake in this enum, and
+		 * unusable is the safe way to read a mistake.
+		 */
+		public boolean isStorable() {
+			return configValue>0 && freqHz>0;
+		}
 	}
 
 	/** Raw bits 6:3 of header byte 30, kept so diagnostics can name what was there. */
@@ -400,11 +421,17 @@ public class SensorVD6283 extends AbstractSensor {
 			rate = VD6283_RATE.getForConfigValue(rateIndexRaw);
 			exposureIndex = configBytes[PAYLOAD_CONFIG_BYTE_INDEX.LIGHT_EXPOSURE] & 0xFF;
 		} else if(commType == COMMUNICATION_TYPE.SD) {
-			// The light sensor is disabled in THIS payload. Clear the rate rather
-			// than letting the previous payload's value stand: unlike gain and
-			// exposure, which only affect calibration, the rate now drives block
-			// timing and CSV splitting, so a stale one would mis-time a later
-			// recording segment after a mid-file configuration change.
+			// The light sensor is not enabled in THIS payload, so there is no rate to
+			// read. Defence in depth only: today this cannot find a stale value to
+			// clear, because VerisenseDevice.configBytesParse calls
+			// sensorAndConfigMapsCreate() before any sensor config is parsed, and that
+			// replaces this object with a fresh one. Sensor state does NOT carry from
+			// payload to payload - do not reason as though it does.
+			//
+			// Kept rather than deleted because the invariant it leans on belongs to
+			// another class. Were instances ever reused across payloads, a stale rate
+			// would be worse than a stale gain or exposure: those only affect
+			// calibration, while the rate drives block timing and CSV splitting.
 			rateIndexRaw = 0;
 			rate = VD6283_RATE.NOT_STORED;
 		}
@@ -452,7 +479,7 @@ public class SensorVD6283 extends AbstractSensor {
 	 * can only return the exposure bound.
 	 */
 	public boolean isConfiguredRateKnown() {
-		return rate!=VD6283_RATE.NOT_STORED && rate!=VD6283_RATE.RESERVED_INDEX && rate.freqHz>0;
+		return rate.isStorable();
 	}
 
 	/**

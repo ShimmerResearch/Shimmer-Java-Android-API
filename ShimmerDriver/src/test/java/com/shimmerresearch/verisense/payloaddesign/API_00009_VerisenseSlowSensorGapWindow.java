@@ -782,4 +782,30 @@ public class API_00009_VerisenseSlowSensorGapWindow {
 		assertTrue(unknown.contains("Calculated = 0.993 Hz"));
 		assertTrue(unknown.contains("Gain = 2.50x") && unknown.contains("Slot1 = Visible"));
 	}
+
+	/**
+	 * {@code Configured} is the rate the device was asked for, NOT the
+	 * exposure-clamped one the parser times blocks with.
+	 * <p>
+	 * test022 cannot see the difference, and neither can any other test here: at
+	 * 1 Hz against the fixture exposure of 100 ms the clamped and unclamped values
+	 * are the same number. 20 Hz is where they part, since the chip cannot measure
+	 * faster than it integrates and the bound is 10 Hz. Someone reading the CSV to
+	 * check what the device was configured to do has to see 20, while
+	 * {@link SensorVD6283#getRateFreq()} goes on returning 10 for the block timing
+	 * and the gap window - test005 pins that side.
+	 */
+	@Test
+	public void test028_csvConfiguredValueIsTheRateAskedForNotTheClampedOne() {
+		VerisenseDevice device = setupLightDevice(6); // 20 Hz configured
+		assertEquals("the fixture must actually clamp, or this proves nothing",
+				10.0, device.getSensorVD6283().getRateFreq(), 1e-9);
+
+		String line = device.generateSensorConfigStrSingleSensor(SENSORS.VD6283, 9.912);
+		assertTrue("Configured must report the configured rate: " + line,
+				line.contains("Configured = 20.0 Hz"));
+		assertFalse("and must not report the exposure clamp instead: " + line,
+				line.contains("Configured = 10.0 Hz"));
+		assertTrue(line.contains("Calculated = 9.912 Hz"));
+	}
 }
