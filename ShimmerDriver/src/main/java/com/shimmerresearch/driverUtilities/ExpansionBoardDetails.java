@@ -100,8 +100,23 @@ public class ExpansionBoardDetails implements Serializable {
 		return ("SR" + mExpansionBoardId + "." + mExpansionBoardRev + "." + mExpansionBoardRevSpecial);
 	}
 	
+	/**
+	 * Checks whether these details represent a real, programmed expansion board.
+	 * 
+	 * <p>A Shimmer3 with no expansion board EEPROM fitted reads back as all 0x00
+	 * on older firmware and as all 0xFF from DEV-1019 onwards, so both triplets
+	 * are rejected here.
+	 * 
+	 * <p>Only an all-0xFF triplet is rejected - {@link HW_ID_SR_CODES#NONE} (255)
+	 * remains a legitimate SR number when paired with a real revision, e.g. the
+	 * SR255.1.0 synthesised for a Shimmer3 that is known to have no expansion
+	 * board.
+	 * 
+	 * @return true if the expansion board details are valid
+	 */
 	public boolean isExpansionBoardValid(){
 		if(!(mExpansionBoardId==0 && mExpansionBoardRev==0 && mExpansionBoardRevSpecial==0)
+				&& !(mExpansionBoardId==0xFF && mExpansionBoardRev==0xFF && mExpansionBoardRevSpecial==0xFF)
 				&& (mExpansionBoardId!=HW_ID_SR_CODES.UNKNOWN && mExpansionBoardRev!=HW_ID_SR_CODES.UNKNOWN && mExpansionBoardRevSpecial!=HW_ID_SR_CODES.UNKNOWN)
 				&& (mExpansionBoardId!=HW_ID_SR_CODES.LOG_FILE && mExpansionBoardRev!=HW_ID_SR_CODES.LOG_FILE && mExpansionBoardRevSpecial!=HW_ID_SR_CODES.LOG_FILE)){
 			return true;
