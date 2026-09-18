@@ -48,6 +48,7 @@ import com.shimmerresearch.driverUtilities.SensorDetails;
 import com.shimmerresearch.driverUtilities.ShimmerSDCardDetails;
 import com.shimmerresearch.driverUtilities.ShimmerVerDetails;
 import com.shimmerresearch.driverUtilities.ShimmerVerObject;
+import com.shimmerresearch.driverUtilities.TimestampUnwrap;
 import com.shimmerresearch.driverUtilities.UtilParseData;
 import com.shimmerresearch.driverUtilities.UtilShimmer;
 import com.shimmerresearch.exceptions.ShimmerException;
@@ -629,6 +630,11 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 	//-------- Timestamp related start --------
 	protected double mLastReceivedTimeStampTicksUnwrapped=0;
 	protected double mCurrentTimeStampCycle=0;
+	/** False only before the first sample of a stream. The pair above cannot say
+	 *  it on their own: (0, 0) is the reset state and also a state the unwrap can
+	 *  reach, when a reordered packet lands exactly on the counter's origin. See
+	 *  {@link TimestampUnwrap#unwrap(double, double, double, int, double, boolean)}. */
+	protected boolean mHasPreviousTimeStamp=false;
 	protected long mInitialTimeStampTicksSd = 0;
 	@Deprecated //not needed any more
 	protected double mLastReceivedCalibratedTimeStamp=-1; 
@@ -638,6 +644,9 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 	
 	protected int mTimeStampPacketByteSize = 2;
 	protected int mTimeStampTicksMaxValue = 65536;// 16777216 or 65536
+	/** Set per sample by unwrapTimeStamp; see isLastTimestampRejected(). Transient
+	 * because it describes the sample in hand, not the device's configuration. */
+	protected transient boolean mLastTimestampRejected = false;
 	
 	protected long mRTCDifferenceInTicks = 0; //this is in ticks
 	public int mRTCSetByBT = 1; // RTC source, = 1 because it comes from the BT
@@ -2830,7 +2839,11 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 		double timestampUnwrappedMilliSecs = timestampUnwrappedTicks/getRtcClockFreq()*1000;   // to convert into mS
 		
 		incrementPacketsReceivedCounters();
-		calculateTrialPacketLoss(timestampUnwrappedMilliSecs);
+		if(!isLastTimestampRejected()){
+			//A rejected sample carries the previous timestamp, so feeding it to the
+			//packet-loss estimate would show a zero-length gap that never happened.
+			calculateTrialPacketLoss(timestampUnwrappedMilliSecs);
+		}
 		
 		//TIMESTAMP
 		double timestampUnwrappedWithOffsetTicks = 0;
@@ -3822,29 +3835,64 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 
 	/**
 	 * Unwraps the timestamp based on the current recording (i.e., per file for
-	 * SD recordings not taking into account the initial file start time)
+	 * SD recordings not taking into account the initial file start time).
+	 * <p>
+	 * A sample can be rejected rather than unwrapped - see
+	 * {@link TimestampUnwrap} and {@link #isLastTimestampRejected()}.
 	 * 
 	 * @param timeStampTicks
 	 * @return
 	 */
 	protected double unwrapTimeStamp(double timeStampTicks){
-		//first convert to continuous time stamp
-		double timestampUnwrappedTicks = calculateTimeStampUnwrapped(timeStampTicks);
-		
-		//Check if there was a roll-over
-		if (getLastReceivedTimeStampTicksUnwrapped()>timestampUnwrappedTicks){ 
-			mCurrentTimeStampCycle += 1;
-			//Recalculate timestamp
-			timestampUnwrappedTicks = calculateTimeStampUnwrapped(timeStampTicks);
-		}
+		TimestampUnwrap.Result result = TimestampUnwrap.unwrap(timeStampTicks,
+				getLastReceivedTimeStampTicksUnwrapped(), mCurrentTimeStampCycle, mTimeStampTicksMaxValue,
+				getReorderWindowTicks(), mHasPreviousTimeStamp);
 
-		setLastReceivedTimeStampTicksUnwrapped(timestampUnwrappedTicks);
+		mLastTimestampRejected = result.rejected;
+		mCurrentTimeStampCycle = result.cycle;
+		//On a rejected sample this puts back the value it already held, which is
+		//what keeps the rejection from cascading: the next sample reads above it
+		//and is accepted normally.
+		setLastReceivedTimeStampTicksUnwrapped(result.unwrapped);
 
-		return timestampUnwrappedTicks;
+		return result.unwrapped;
 	}
 
-	private double calculateTimeStampUnwrapped(double timeStampTicks) {
-		return timeStampTicks+(mTimeStampTicksMaxValue*mCurrentTimeStampCycle);
+	/**
+	 * How far behind its predecessor a sample may sit and still be read as a
+	 * reordered packet rather than a counter roll-over. See
+	 * {@link TimestampUnwrap#reorderWindowTicks(double, int)}.
+	 * <p>
+	 * Derived on every sample rather than cached, so a rate written mid-session is
+	 * picked up by the next one and there is no stale window to reset.
+	 * {@link #getSamplingRateShimmer()} is safe to call here on both paths: the map
+	 * it reads is seeded for SD and Bluetooth at construction, an SD file's header
+	 * rate lands before the first record is parsed, and a Bluetooth rate lands
+	 * during connect.
+	 * <p>
+	 * Zero - reorder detection off - on Shimmer2 and Shimmer2R. Their tick domain
+	 * is not settled: this class divides their 16-bit counter by
+	 * {@link #getRtcClockFreq()} (32768) while the C# API divides by 1024, so a
+	 * window derived from the rate would be wrong in one of the two. Those devices
+	 * keep the behaviour they have always had; the invalid-zero rule never applied
+	 * to a 2-byte counter anyway.
+	 */
+	protected double getReorderWindowTicks(){
+		if(getHardwareVersion()==HW_ID.SHIMMER_2 || getHardwareVersion()==HW_ID.SHIMMER_2R){
+			return 0.0;
+		}
+		return TimestampUnwrap.reorderWindowTicks(getSamplingRateShimmer(), mTimeStampTicksMaxValue);
+	}
+
+	/**
+	 * True when the sample most recently passed to {@link #unwrapTimeStamp(double)}
+	 * carried an invalid zero timestamp and was rejected rather than unwrapped. Its
+	 * sensor data is fine; only its timestamp is missing. Callers reading a file
+	 * should drop the record; a live stream has nothing better to do than carry the
+	 * previous timestamp forward for one packet.
+	 */
+	public boolean isLastTimestampRejected() {
+		return mLastTimestampRejected;
 	}
 
 
@@ -3885,6 +3933,14 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 		mStreamingStartTimeMilliSecs = -1;
 		
 		setCurrentTimeStampCycle(0);
+		//Last, because the setter above marks a predecessor as present - which is
+		//what a caller seeding state across files wants, and the opposite of what
+		//a reset means.
+		mHasPreviousTimeStamp = false;
+		//Belongs with the unwrap state reset above: it describes the last sample
+		//unwrapped against that state, so leaving it set would carry a rejection
+		//into a recording that has not started yet.
+		mLastTimestampRejected = false;
 	}
 
 
@@ -4730,6 +4786,10 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 	
 	public void setLastReceivedTimeStampTicksUnwrapped(double lastReceivedTimeStampTicksUnwrapped){
 		mLastReceivedTimeStampTicksUnwrapped = lastReceivedTimeStampTicksUnwrapped;
+		//Being told the previous sample's value IS a predecessor - that is what
+		//callers chaining legacy SD files across a trial are doing. A reset says
+		//so explicitly afterwards; see resetCalibratedTimeStamp().
+		mHasPreviousTimeStamp = true;
 	}
 
 	public void updateTimestampByteLength(){

@@ -134,6 +134,12 @@ dependencies {
     // https://mvnrepository.com/artifact/org.mockito/mockito-all
     testImplementation group: 'org.mockito', name: 'mockito-all', version: '1.10.19'
 
+    // Reads the shared timestamp-unwrap conformance vectors in
+    // src/test/resources. Test-only, and a plain POM rather than Gradle module
+    // metadata, so it resolves under the Gradle version this project is on.
+    // https://mvnrepository.com/artifact/com.google.code.gson/gson
+    testImplementation group: 'com.google.code.gson', name: 'gson', version: '2.10.1'
+
     // https://mvnrepository.com/artifact/junit/junit
     testImplementation group: 'junit', name: 'junit', version: '4.+'
 
