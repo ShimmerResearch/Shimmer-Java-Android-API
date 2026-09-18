@@ -126,6 +126,12 @@ public class LiteProtocol extends AbstractCommsProtocol{
 	protected String mDirectoryName;
 	protected int numBytesToReadFromExpBoard=0;
 	private static final int MAX_CALIB_DUMP_MAX = 4096;
+	/* The generated LiteProtocolInstructionSet has no NACK entry, so the value
+	 * is declared here rather than read from InstructionsSet. Adding it to
+	 * grpcprotosrc/src/LiteProtocolInstructionSet.proto and regenerating would
+	 * be tidier, but that rewrites a large generated file committed in two
+	 * places for the sake of one constant. */
+	private static final int NACK_COMMAND_PROCESSED_VALUE = 0xFE;
 
 
 	/**
@@ -606,6 +612,12 @@ public class LiteProtocol extends AbstractCommsProtocol{
 						}
 						
 					}
+					/* The Shimmer refused the command. Without this branch the NACK
+					 * was discarded and the transaction stalled until the ACK timer
+					 * expired, which is treated as a lost connection. */
+					else if((((int)byteBuffer[0])&0xFF)==NACK_COMMAND_PROCESSED_VALUE) {
+						processNackFromCommand();
+					}
 				}
 			}
 		}
@@ -640,8 +652,16 @@ public class LiteProtocol extends AbstractCommsProtocol{
 				byteBuffer=readBytes(1);
 				mIamAlive = true;
 				
+				/* As in the ACK-wait path above, and matching ShimmerBluetooth: a
+				 * NACK can land here instead if the firmware only discovers it
+				 * cannot serve a GET while building the response. Checked before
+				 * isKnownResponseByte() so it is handled as a refusal rather than
+				 * falling through to the ACK/response timeout. */
+				if((((int)byteBuffer[0])&0xFF)==NACK_COMMAND_PROCESSED_VALUE){
+					processNackFromCommand();
+				}
 				//Check to see whether it is a response byte
-				if(isKnownResponseByte(byteBuffer[0])){
+				else if(isKnownResponseByte(byteBuffer[0])){
 					byte responseCommand = byteBuffer[0];
 					
 					if(mUseShimmerBluetoothApproach){
@@ -1294,6 +1314,49 @@ public class LiteProtocol extends AbstractCommsProtocol{
 	
 	public void eventLogAndStreamStatusChanged(int currentCommand){
 		mProtocolListener.eventLogAndStreamStatusChangedCallback(currentCommand);
+	}
+	
+	/**
+	 * Unwinds the in-flight transaction after the Shimmer answered a command
+	 * with NACK (0xFE) instead of ACK. The refused instruction is dropped so the
+	 * stack advances, and the connection is left up - a refusal means the device
+	 * declined this command, not that the link is gone.
+	 */
+	private void processNackFromCommand() {
+		stopTimerCheckForAckOrResp(); //cancel the ack timer
+		printLogDataForDebugging("NACK Received for Command: \t\t" + btCommandToString(mCurrentCommand));
+		
+		int refusedCommand = ((int)mCurrentCommand)&0xFF;
+		
+		/* Only the ACK-wait state still has the refused instruction queued: a
+		 * GET's instruction is removed as soon as its ACK arrives, so removing
+		 * one here as well would drop whatever was queued behind it. */
+		boolean instructionStillQueued = mWaitForAck;
+		
+		mWaitForAck=false;
+		mWaitForResponse=false;
+		
+		if(instructionStillQueued && getListofInstructions().size()>0){
+			getListofInstructions().remove(0);
+		}
+		getListofInstructions().removeAll(Collections.singleton(null));
+		
+		mTransactionCompleted=true;
+		setInstructionStackLock(false);
+		
+		eventCommandRefused(refusedCommand);
+	}
+	
+	/**
+	 * Called when the Shimmer refused a command with a NACK. The transaction has
+	 * already been unwound and the connection is still up. Concrete rather than
+	 * a new ProtocolListener callback so that existing implementers keep
+	 * compiling; override to surface the refusal to the application.
+	 *
+	 * @param command the command value that was refused
+	 */
+	protected void eventCommandRefused(int command) {
+		//Default: no application-level notification, the log line above stands
 	}
 
 	private void isNowStreaming() {
