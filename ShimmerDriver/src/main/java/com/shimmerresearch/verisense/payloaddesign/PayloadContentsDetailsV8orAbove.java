@@ -354,7 +354,7 @@ public class PayloadContentsDetailsV8orAbove extends PayloadContentsDetails {
 	 *
 	 * @param slowSensorId the slow sensor data block id
 	 */
-	// Package-private so API_00009 can drive this layer directly. It is the layer
+	// Package-private so API_00011 can drive this layer directly. It is the layer
 	// that decides WHETHER the seeder runs, and the guard that keeps first-
 	// generation payloads away from the sensor-class lookup, so testing only
 	// UtilCsvSplitting leaves it uncovered.

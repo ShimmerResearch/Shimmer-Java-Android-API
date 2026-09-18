@@ -54,7 +54,7 @@ import com.shimmerresearch.verisense.sensors.SensorVD6283.VD6283_RATE;
  * itself one of those gaps (DEV-974 Bug A), whereas a configured-rate window
  * reports it from the first boundary onwards.
  */
-public class API_00009_VerisenseSlowSensorGapWindow {
+public class API_00011_VerisenseSlowSensorGapWindow {
 
 	private static final int LIGHT_SAMPLES_PER_BLOCK = SensorVD6283.NUM_SAMPLES_PER_BLOCK;
 	private static final int SKIN_TEMP_SAMPLES_PER_BLOCK = SensorMLX90632.NUM_SAMPLES_PER_BLOCK;
