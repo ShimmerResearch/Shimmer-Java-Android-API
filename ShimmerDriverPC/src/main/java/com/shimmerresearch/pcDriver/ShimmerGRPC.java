@@ -541,16 +541,54 @@ public class ShimmerGRPC extends ShimmerBluetooth implements Serializable{
 
 	private void closeConnection() {
 	    try {
-	        if (mIOThread != null) {
-	            mIOThread.stop = true;
-	            mIOThread.interrupt();
-	            mIOThread.join();  // Wait until the thread terminates
+	        // closeConnection() is unsynchronized and can be entered concurrently - once from
+	        // connectionLost() running on the IOThread itself, and once from a user-triggered
+	        // disconnect() on another thread. Snapshot the fields into locals before touching
+	        // them so a concurrent caller nulling the field out mid-method can't turn a passed
+	        // null-check into an NPE further down (see ShimmerPC.closeConnection() for the
+	        // same fix).
+	        IOThread ioThread = mIOThread;
+	        if (ioThread != null) {
+	            ioThread.stop = true;
+	            // Skip the join when closeConnection() is reached from the IOThread itself -
+	            // a self-join can never succeed and would just burn the full timeout. The
+	            // interrupt() call moves inside this guard too: calling it unconditionally
+	            // would mark the *current* thread interrupted in the self-close case.
+	            if (Thread.currentThread() != ioThread) {
+	                // Interrupt before joining: run() now exits promptly on
+	                // Thread.currentThread().isInterrupted(), and any idle Thread.sleep()
+	                // it's waiting in will wake immediately - making shutdown faster and
+	                // more deterministic than waiting out the bounded join first.
+	                ioThread.interrupt();
+	                try {
+	                    ioThread.join(2000); // Bounded wait so this can't block indefinitely
+	                } catch (InterruptedException e) {
+	                    Thread.currentThread().interrupt();
+	                }
+	                if (ioThread.isAlive()) {
+	                    // Still not terminated after the interrupt + bounded join.
+	                    consolePrintLn("Warning: IOThread did not terminate within join timeout");
+	                }
+	            }
 	            mIOThread = null;
-	            
+
 	            if (mUseProcessingThread) {
-	                mPThread.stop = true;
-	                mPThread.interrupt();
-	                mPThread.join();
+	                ProcessingThread pThread = mPThread;
+	                if (pThread != null) {
+	                    pThread.stop = true;
+	                    if (Thread.currentThread() != pThread) {
+	                        // Interrupt before joining - see the IOThread teardown above.
+	                        pThread.interrupt();
+	                        try {
+	                            pThread.join(2000);
+	                        } catch (InterruptedException e) {
+	                            Thread.currentThread().interrupt();
+	                        }
+	                        if (pThread.isAlive()) {
+	                            consolePrintLn("Warning: ProcessingThread did not terminate within join timeout");
+	                        }
+	                    }
+	                }
 	                mPThread = null;
 	            }
 	        }
@@ -561,7 +599,7 @@ public class ShimmerGRPC extends ShimmerBluetooth implements Serializable{
 	    } catch (Exception ex) {
 	        consolePrintException(ex.getMessage(), ex.getStackTrace());
 	        setBluetoothRadioState(BT_STATE.DISCONNECTED);
-	    }			
+	    }
 	}
 	
 	//Need to override here because ShimmerDevice class uses a different map
