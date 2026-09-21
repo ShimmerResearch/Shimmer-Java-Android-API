@@ -1336,6 +1336,19 @@ public class LiteProtocol extends AbstractCommsProtocol{
 		mWaitForAck=false;
 		mWaitForResponse=false;
 		
+		/* Mirror the ACK path's progress report so that an operation containing a
+		 * refused command can still reach its end value, otherwise the progress
+		 * counter stalls and the operation never completes. Sent before the
+		 * instruction is removed and only while it is still queued, because the
+		 * counter is derived from the remaining stack size. */
+		if(instructionStillQueued
+				&& mCurrentCommand!=InstructionsGet.GET_STATUS_COMMAND_VALUE 
+				&& mCurrentCommand!=InstructionsSet.TEST_CONNECTION_COMMAND_VALUE 
+				&& mCurrentCommand!=InstructionsSet.SET_BLINK_LED_VALUE
+				&& mOperationUnderway){
+			sendProgressReport(new BluetoothProgressReportPerCmd(mCurrentCommand, getListofInstructions().size(), mMyBluetoothAddress, mComPort));
+		}
+		
 		if(instructionStillQueued && getListofInstructions().size()>0){
 			getListofInstructions().remove(0);
 		}

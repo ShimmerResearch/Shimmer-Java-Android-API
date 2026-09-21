@@ -1973,6 +1973,24 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 		mWaitForAck=false;
 		mWaitForResponse=false;
 		
+		/* Mirror the ACK path's progress report so that an operation containing a
+		 * refused command can still reach its end value.
+		 * BluetoothProgressReportPerDevice.updateProgress() derives the counter
+		 * from the remaining stack size, so this has to be sent before the
+		 * instruction is removed, and only while it is still queued - the
+		 * response-wait path already reported when its ACK arrived and reporting
+		 * twice would skip a count. Without it the counter never reaches
+		 * mProgressEndValue, finishOperation() never fires, and the application
+		 * stays in CONFIGURING/CONNECTING indefinitely. The same three
+		 * timer-driven commands are excluded as on the ACK path. */
+		if(instructionStillQueued
+				&& mCurrentCommand!=GET_STATUS_COMMAND 
+				&& mCurrentCommand!=TEST_CONNECTION_COMMAND 
+				&& mCurrentCommand!=SET_BLINK_LED 
+				&& mOperationUnderway){
+			sendProgressReport(new BluetoothProgressReportPerCmd(mCurrentCommand, getListofInstructions().size(), mMyBluetoothAddress, getComPort()));
+		}
+		
 		//Drop the refused instruction, as the ACK path does for its own command
 		if(instructionStillQueued && getListofInstructions().size()>0){
 			removeInstruction(0);
