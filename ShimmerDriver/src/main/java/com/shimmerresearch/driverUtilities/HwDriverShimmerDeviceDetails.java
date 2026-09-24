@@ -177,6 +177,14 @@ public class HwDriverShimmerDeviceDetails {
 		    "verisense",
 		};
 
+		/** A Verisense in NeuroLynQ mode says so in its USB product string, e.g.
+		 * "Verisense-NeuroLynQ-01-2511210195BC" (verisense-firmware hal_usb_cdc.c,
+		 * USB_PRODUCT_NAME_MODE_MARKER). It keeps the stock VID/PID, so this is the only
+		 * way a host can tell it from a stock unit (DEV-1047). */
+		public static final String[] VERISENSE_NEUROLYNQ = new String[] {
+		    "-NeuroLynQ-",
+		};
+
 		public static final String[] SHIMMER3R_DFU_DEVICE_BUS_DESCRITION = new String[] { "DFU in HS Mode" };
 
 		public static final class SERVICE_DESCRIPTION {
@@ -350,6 +358,14 @@ public class HwDriverShimmerDeviceDetails {
 		return SH_SEARCH.SERIAL_PORT.NORDIC_VEND_ID.equalsIgnoreCase(usbVendorId)
 				&& usbProductString!=null
 				&& UtilShimmer.stringContainsItemFromListUpperCaseCheck(usbProductString, SH_SEARCH.SPAN_NRF52840);
+	}
+
+	/** Whether a Verisense is in NeuroLynQ mode, from its USB product string (iProduct).
+	 * A NeuroLynQ-mode Verisense serves the ShimmerGQ $ dock protocol and not its native
+	 * one, so the two need different drivers. */
+	public static boolean isVerisenseNeuroLynQ(String usbProductString) {
+		return usbProductString!=null
+				&& UtilShimmer.stringContainsItemFromListUpperCaseCheck(usbProductString, SH_SEARCH.VERISENSE_NEUROLYNQ);
 	}
 	
 	public static DEVICE_TYPE getDeviceTypeFromLabel(String label){
