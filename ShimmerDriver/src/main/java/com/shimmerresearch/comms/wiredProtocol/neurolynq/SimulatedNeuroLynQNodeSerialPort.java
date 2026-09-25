@@ -101,6 +101,9 @@ public class SimulatedNeuroLynQNodeSerialPort extends AbstractSerialPortHal {
 	/** A burst's pages and END arrive in one read, as they do when the host's reader is held
 	 * up while the node sends */
 	public volatile boolean oneReadPerBurst = false;
+	/** A request is answered, and its answer parsed, before the host's write of it returns:
+	 * the most a node can outrun the host, and the window a host must not lose an answer in */
+	public volatile boolean answerBeforeTheWriteReturns = false;
 	/** A pause after each page of a burst, as a node takes to read the next from NAND; 0 none */
 	public volatile int pageDelayMs = 0;
 	/** Each END sent, by its status (END_STATUS), in order */
@@ -224,6 +227,15 @@ public class SimulatedNeuroLynQNodeSerialPort extends AbstractSerialPortHal {
 	@Override
 	public void txBytes(byte[] frame) throws ShimmerException {
 		final byte[] copy = frame.clone();
+		if (answerBeforeTheWriteReturns) {
+			answer(copy);
+			SerialPortListener listener = mListener;
+			int available = availableBytes();
+			if (listener != null && available > 0) {
+				listener.serialPortRxEvent(available);
+			}
+			return;
+		}
 		mQueued.incrementAndGet();
 		mDevice.execute(new Runnable() {
 			@Override
@@ -266,7 +278,8 @@ public class SimulatedNeuroLynQNodeSerialPort extends AbstractSerialPortHal {
 			while (!mStopped) {
 				int available;
 				synchronized (mRxLock) {
-					while (mRx.length == 0 && !mStopped) {
+					// Answered on the writer's thread instead, so nothing is parsed twice
+					while ((mRx.length == 0 || answerBeforeTheWriteReturns) && !mStopped) {
 						try {
 							mRxLock.wait(100);
 						} catch (InterruptedException e) {

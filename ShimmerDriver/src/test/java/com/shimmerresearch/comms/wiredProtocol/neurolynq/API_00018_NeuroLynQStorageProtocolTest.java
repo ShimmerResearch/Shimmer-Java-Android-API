@@ -57,7 +57,8 @@ public class API_00018_NeuroLynQStorageProtocolTest {
 		mNode = new SimulatedNeuroLynQNodeSerialPort();
 		mNode.addSession(5, 7, "trial1_1727000000", "NodeA-000", FILE_A, FILE_B);
 		mNode.addSession(6, 8, "trial1_1727000000", "NodeA-001", FILE_C);
-		mWired = new CommsProtocolWiredShimmerViaDock("SIM", "node", mNode);
+		// As a dock names a docked device, which a DockException takes apart
+		mWired = new CommsProtocolWiredShimmerViaDock("SIM", "Verisense.01.01", mNode);
 		mStorage = new NeuroLynQStorageProtocol(mWired);
 		mStorage.setReadStallMs(250);
 	}
@@ -274,6 +275,24 @@ public class API_00018_NeuroLynQStorageProtocolTest {
 	public void theNodeAnswersItsMacWhenItHasOne() throws Exception {
 		mNode.macId = new byte[] { 0x00, 0x06, 0x66, (byte) 0xAB, (byte) 0xCD, (byte) 0xEF };
 		assertEquals("000666ABCDEF", mWired.readMacId());
+	}
+
+	/**
+	 * A NACK back before the request's write has returned is not lost. The driver cleared
+	 * its last exception after sending, so a node that answered that fast looked like one
+	 * that never answered: a timeout 500 ms on, and a node without storage not seen as one.
+	 */
+	@Test
+	public void aNackFasterThanTheWriteIsNotLost() {
+		mNode.hasStorage = false;
+		mNode.answerBeforeTheWriteReturns = true;
+		try {
+			mStorage.info();
+			fail("no exception");
+		} catch (DockException de) {
+			assertEquals(ErrorCodesWiredProtocol.SHIMMERUART_COMM_ERR_RESPONSE_BAD_CMD, de.mErrorCodeLowLevel);
+			assertTrue(NeuroLynQStorageProtocol.isStorageAbsent(de));
+		}
 	}
 
 	@Test

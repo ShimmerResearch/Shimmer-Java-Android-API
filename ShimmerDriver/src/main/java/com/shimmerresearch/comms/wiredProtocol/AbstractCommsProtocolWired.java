@@ -377,9 +377,11 @@ public abstract class AbstractCommsProtocolWired extends BasicProcessWithCallBac
      */
 	protected byte[] shimmerUartCommandTxRx(UART_PACKET_CMD packetCmd, UartComponentPropertyDetails msgArg, byte[] payload) throws DockException {
 		mListOfUartRxPacketObjects.clear();
+		// Before the request goes, as the NoWait commands do: a NACK can be back and parsed
+		// before txPacket() returns, and clearing after it lost that NACK to a timeout
+		mThrownException = null;
 		
 		txPacket(packetCmd, msgArg, payload);
-		mThrownException = null;
 		return waitForResponse(packetCmd, msgArg);
     }
 
