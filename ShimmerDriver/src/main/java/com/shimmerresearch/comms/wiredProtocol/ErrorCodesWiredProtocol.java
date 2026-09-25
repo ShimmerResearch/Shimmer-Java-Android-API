@@ -32,6 +32,14 @@ public class ErrorCodesWiredProtocol extends AbstractErrorCodes {
 	public final static int SHIMMERUART_CMD_ERR_BT_FW_VERSION_INFO_GET = (ERROR_CODES_ID*1000) + 37;
 	public final static int SHIMMERUART_CMD_ERR_ENTER_BOOTLOADER_SET =  (ERROR_CODES_ID*1000) + 38;
 
+	// A NeuroLynQ node's storage component (DEV-1061)
+	public final static int SHIMMERUART_CMD_ERR_STORAGE_INFO_GET = 		(ERROR_CODES_ID*1000) + 40;
+	public final static int SHIMMERUART_CMD_ERR_STORAGE_SESSION_GET = 	(ERROR_CODES_ID*1000) + 41;
+	public final static int SHIMMERUART_CMD_ERR_STORAGE_FILES_GET = 		(ERROR_CODES_ID*1000) + 42;
+	public final static int SHIMMERUART_CMD_ERR_STORAGE_READ = 			(ERROR_CODES_ID*1000) + 43;
+	public final static int SHIMMERUART_CMD_ERR_STORAGE_ERASE_SET = 		(ERROR_CODES_ID*1000) + 44;
+	public final static int SHIMMERUART_CMD_ERR_STORAGE_FORMAT_SET = 	(ERROR_CODES_ID*1000) + 45;
+
 	//SR7 (802.15.4 radio) related errors
 	public final static int SHIMMERUART_CMD_ERR_RADIO_802154_SET_SETTINGS = 			(ERROR_CODES_ID*1000) + 33;
 	public final static int SHIMMERUART_CMD_ERR_RADIO_802154_GET_SETTINGS = 			(ERROR_CODES_ID*1000) + 34;
@@ -78,6 +86,13 @@ public class ErrorCodesWiredProtocol extends AbstractErrorCodes {
 
     	aMap.put(SHIMMERUART_CMD_ERR_BT_FW_VERSION_INFO_GET, "Error reading BT FW version info");
     	aMap.put(SHIMMERUART_CMD_ERR_ENTER_BOOTLOADER_SET, "Error writing enter bootloader command");
+
+    	aMap.put(SHIMMERUART_CMD_ERR_STORAGE_INFO_GET, "Error reading the node's storage information");
+    	aMap.put(SHIMMERUART_CMD_ERR_STORAGE_SESSION_GET, "Error reading a session from the node's storage");
+    	aMap.put(SHIMMERUART_CMD_ERR_STORAGE_FILES_GET, "Error reading a session's files from the node's storage");
+    	aMap.put(SHIMMERUART_CMD_ERR_STORAGE_READ, "Error reading a file from the node's storage");
+    	aMap.put(SHIMMERUART_CMD_ERR_STORAGE_ERASE_SET, "Error erasing sessions from the node's storage");
+    	aMap.put(SHIMMERUART_CMD_ERR_STORAGE_FORMAT_SET, "Error formatting the node's storage");
 
     	//SR7 (802.15.4 radio) related errors
     	aMap.put(SHIMMERUART_CMD_ERR_RADIO_802154_GET_SETTINGS, "Error reading 802.15.4 radio settings");

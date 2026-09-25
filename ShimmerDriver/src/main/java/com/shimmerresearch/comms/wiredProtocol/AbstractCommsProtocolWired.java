@@ -6,6 +6,8 @@ import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 
 import org.apache.commons.lang3.ArrayUtils;
 
@@ -58,6 +60,12 @@ public abstract class AbstractCommsProtocolWired extends BasicProcessWithCallBac
 //	private List<UartRxPacketObject> mListOfUartRxPacketObjects = new ArrayList<UartRxPacketObject>();
 	private List<UartRxPacketObject> mListOfUartRxPacketObjects = Collections.synchronizedList(new ArrayList<UartRxPacketObject>());
 	public DockException mThrownException = null;
+	/** A READ burst being collected (readBurst()): its packets, or the DockException the reader
+	 * hit on one, go here as they arrive rather than to mListOfUartRxPacketObjects */
+	private volatile LinkedBlockingQueue<Object> mBurstQueue = null;
+	private volatile byte mBurstComponent;
+	private volatile byte mBurstDataProperty;
+	private volatile byte mBurstEndProperty;
 //	private UartRxCallback mUartRxCallback = null;
 	private boolean mSendCallbackRxOverride = false;
 
@@ -726,6 +734,10 @@ public abstract class AbstractCommsProtocolWired extends BasicProcessWithCallBac
     				parseSinglePacket(packet, timestampMs);
 				} catch (DockException de) {
 					mThrownException = de;
+					LinkedBlockingQueue<Object> burst = mBurstQueue;
+					if(burst!=null){
+						burst.offer(de);
+					}
 					
 					if(currentPacketCmd!=null && currentMsgArg!=null){
 						System.out.println(mUniqueId + "\tProblem parsing received packet while waiting for:");
@@ -787,7 +799,11 @@ public abstract class AbstractCommsProtocolWired extends BasicProcessWithCallBac
 				throw de;
 			}
 
-			if(mSendCallbackRxOverride){
+			LinkedBlockingQueue<Object> burst = mBurstQueue;
+			if(burst!=null && isBurstPacket(uRPO)){
+				burst.offer(uRPO);
+			}
+			else if(mSendCallbackRxOverride){
 				wrapMsgSpanAndSend(MsgDock.MSG_ID_SHIMMERUART_PACKET_RX, uRPO);
 			}
 			else {
@@ -805,6 +821,86 @@ public abstract class AbstractCommsProtocolWired extends BasicProcessWithCallBac
 		}
 	} 
 	
+	private boolean isBurstPacket(UartRxPacketObject uRPO) {
+		return uRPO.mUartCommandByte == UartPacketDetails.UART_PACKET_CMD.DATA_RESPONSE.toCmdByte()
+				&& uRPO.mUartComponentByte == mBurstComponent
+				&& (uRPO.mUartPropertyByte == mBurstDataProperty || uRPO.mUartPropertyByte == mBurstEndProperty);
+	}
+
+	/** What a READ burst brought: its packets in order, the end frame last if it came */
+	public static final class ReadBurst {
+		public final List<UartRxPacketObject> packets;
+		/** The end frame arrived; otherwise the burst stalled or ran out of time */
+		public final boolean ended;
+		/** Frames lost to a `$` CRC that did not check: their bytes are to be asked for again */
+		public final int crcErrors;
+
+		public ReadBurst(List<UartRxPacketObject> packets, boolean ended, int crcErrors) {
+			this.packets = Collections.unmodifiableList(packets);
+			this.ended = ended;
+			this.crcErrors = crcErrors;
+		}
+	}
+
+	/**
+	 * Send a READ and collect the burst that answers it: every data frame with the
+	 * request's component and property, until the one with {@code endProperty}, nothing
+	 * for {@code stallMs}, or {@code totalMs} gone (DEV-1061, a NeuroLynQ node's storage).
+	 * The frames go to a queue as the reader parses them, not to the list other requests
+	 * poll every 100 ms, so a burst is read as fast as it arrives. A frame whose CRC fails
+	 * is counted and lost; a NACK throws, as it does for any request.
+	 */
+	public ReadBurst readBurst(UartComponentPropertyDetails request, byte[] payload, byte endProperty,
+			long stallMs, long totalMs, int errorCode) throws DockException {
+		if(!mLeavePortOpen) openSafely();
+		LinkedBlockingQueue<Object> queue = new LinkedBlockingQueue<Object>();
+		List<UartRxPacketObject> packets = new ArrayList<UartRxPacketObject>();
+		int crcErrors = 0;
+		boolean ended = false;
+		mListOfUartRxPacketObjects.clear();
+		mThrownException = null;
+		mBurstComponent = request.mComponentByte;
+		mBurstDataProperty = request.mPropertyByte;
+		mBurstEndProperty = endProperty;
+		mBurstQueue = queue;
+		try {
+			txPacket(UartPacketDetails.UART_PACKET_CMD.READ, request, payload);
+			long deadline = System.currentTimeMillis() + totalMs;
+			for(;;) {
+				long wait = Math.min(stallMs, deadline - System.currentTimeMillis());
+				if(wait <= 0) {
+					break;
+				}
+				Object next = queue.poll(wait, TimeUnit.MILLISECONDS);
+				if(next == null) {
+					break;
+				}
+				if(next instanceof DockException) {
+					DockException de = (DockException) next;
+					if(de.mErrorCodeLowLevel == ErrorCodesWiredProtocol.SHIMMERUART_COMM_ERR_CRC) {
+						crcErrors++;
+						continue;
+					}
+					de.mErrorCode = errorCode;
+					throw de;
+				}
+				UartRxPacketObject uRPO = (UartRxPacketObject) next;
+				packets.add(uRPO);
+				if(uRPO.mUartPropertyByte == endProperty) {
+					ended = true;
+					break;
+				}
+			}
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			throw new DockException(mComPort, errorCode, ErrorCodesWiredProtocol.SHIMMERUART_COMM_ERR_TIMEOUT, mUniqueId);
+		} finally {
+			mBurstQueue = null;
+			if(!mLeavePortOpen) closeSafely();
+		}
+		return new ReadBurst(packets, ended, crcErrors);
+	}
+
 	/** remove first and add remaining bytes to start of next serial port read 
 	 * @return */
 	private byte[] removeFirstByteFromArray(byte[] rxBuf){

@@ -65,7 +65,9 @@ public class UartPacketDetails {
 		BEACON				((byte)0x08),
 		RADIO_802154		((byte)0x09),
 		RADIO_BLUETOOTH		((byte)0x0A),
-		TEST				((byte)0x0B);
+		TEST				((byte)0x0B),
+		/** A NeuroLynQ node's session storage (DEV-1061). A GQ answers it BAD_CMD. */
+		STORAGE			((byte)0x0C);
 		
 	    private final byte command;
 
@@ -93,6 +95,9 @@ public class UartPacketDetails {
 	public static List<ShimmerVerObject> listOfCompatibleVersionInfoGq = Arrays.asList(svoGqBle, svoGq802154NR, svoGq802154LR, svoGq802154Shimmer2r);
 	public static List<ShimmerVerObject> listOfCompatibleVersionInfoTest = Arrays.asList(svoS3Test, svoS3RTest);
 	public static List<ShimmerVerObject> listOfCompatibleVersionInfoUsbDfu = Arrays.asList(svoS3RUsbComms);
+	/** A NeuroLynQ node: Verisense hardware running the GQ 802.15.4 firmware (DEV-1061) */
+	public static ShimmerVerObject svoNeuroLynQNode = new ShimmerVerObject(ShimmerVerDetails.ANY_VERSION,FW_ID.GQ_802154,ShimmerVerDetails.ANY_VERSION,ShimmerVerDetails.ANY_VERSION,ShimmerVerDetails.ANY_VERSION,ShimmerVerDetails.ANY_VERSION);
+	public static List<ShimmerVerObject> listOfCompatibleVersionInfoNeuroLynQNode = Arrays.asList(svoNeuroLynQNode);
 	
 	/** Class listing all of the components and property combinations that can be used with the Shimmer UART commands */
 	public static class UART_COMPONENT_AND_PROPERTY {
@@ -152,6 +157,27 @@ public class UartPacketDetails {
 			public static final UartComponentPropertyDetails VER          = new UartComponentPropertyDetails(UART_COMPONENT.RADIO_BLUETOOTH, 0x03, PERMISSION.READ_ONLY, null, "BT_FW_VER");
 		}
 		
+		/**
+		 * A NeuroLynQ node's session storage (DEV-1061): verisense-firmware
+		 * docs/VERISENSE_NEUROLYNQ_STORAGE.md section 7, and neurolynq.NeuroLynQStorageCodec for the bytes.
+		 */
+		public static class STORAGE {
+			/** 36 bytes: state, geometry, capacity, sessions */
+			public static final UartComponentPropertyDetails INFO             = new UartComponentPropertyDetails(UART_COMPONENT.STORAGE, 0x00, PERMISSION.READ_ONLY, listOfCompatibleVersionInfoNeuroLynQNode, "STORAGE_INFO");
+			/** GET idx u16: one session, oldest first */
+			public static final UartComponentPropertyDetails SESSION          = new UartComponentPropertyDetails(UART_COMPONENT.STORAGE, 0x01, PERMISSION.READ_ONLY, listOfCompatibleVersionInfoNeuroLynQNode, "STORAGE_SESSION");
+			/** GET handle u16, first u8, max u8: up to 40 {file, size} */
+			public static final UartComponentPropertyDetails FILES            = new UartComponentPropertyDetails(UART_COMPONENT.STORAGE, 0x02, PERMISSION.READ_ONLY, listOfCompatibleVersionInfoNeuroLynQNode, "STORAGE_FILES");
+			/** GET handle, file, offset u32, len u32: answered by a burst of these, then END */
+			public static final UartComponentPropertyDetails READ             = new UartComponentPropertyDetails(UART_COMPONENT.STORAGE, 0x03, PERMISSION.READ_ONLY, listOfCompatibleVersionInfoNeuroLynQNode, "STORAGE_READ");
+			/** The frame that ends a READ burst. Never requested. */
+			public static final UartComponentPropertyDetails END              = new UartComponentPropertyDetails(UART_COMPONENT.STORAGE, 0x04, PERMISSION.READ_ONLY, listOfCompatibleVersionInfoNeuroLynQNode, "STORAGE_END");
+			/** SET scope u8, handle u16, 'ERAS' */
+			public static final UartComponentPropertyDetails ERASE            = new UartComponentPropertyDetails(UART_COMPONENT.STORAGE, 0x05, PERMISSION.WRITE_ONLY, listOfCompatibleVersionInfoNeuroLynQNode, "STORAGE_ERASE");
+			/** SET mode u8, 'FRMT': ACKed at once, progress in INFO */
+			public static final UartComponentPropertyDetails FORMAT           = new UartComponentPropertyDetails(UART_COMPONENT.STORAGE, 0x06, PERMISSION.WRITE_ONLY, listOfCompatibleVersionInfoNeuroLynQNode, "STORAGE_FORMAT");
+		}
+
 		public static class DEVICE_TEST {
 			public static final UartComponentPropertyDetails MAIN_TEST          = new UartComponentPropertyDetails(UART_COMPONENT.TEST, 0x00, PERMISSION.WRITE_ONLY, listOfCompatibleVersionInfoTest, "Main Test");
 			public static final UartComponentPropertyDetails LED_TEST          = new UartComponentPropertyDetails(UART_COMPONENT.TEST, 0x01, PERMISSION.WRITE_ONLY, listOfCompatibleVersionInfoTest, "LED Test");
