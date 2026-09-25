@@ -15,6 +15,8 @@ import java.util.zip.CRC32;
 import com.shimmerresearch.comms.serialPortInterface.AbstractSerialPortHal;
 import com.shimmerresearch.comms.serialPortInterface.SerialPortListener;
 import com.shimmerresearch.comms.wiredProtocol.ShimmerCrc;
+import com.shimmerresearch.comms.wiredProtocol.UartComponentPropertyDetails;
+import com.shimmerresearch.comms.wiredProtocol.UartPacketDetails.UART_COMPONENT_AND_PROPERTY;
 import com.shimmerresearch.comms.wiredProtocol.UartPacketDetails.UART_COMPONENT;
 import com.shimmerresearch.comms.wiredProtocol.UartPacketDetails.UART_PACKET_CMD;
 import com.shimmerresearch.comms.wiredProtocol.neurolynq.NeuroLynQStorageCodec.END_STATUS;
@@ -50,6 +52,7 @@ public class SimulatedNeuroLynQNodeSerialPort extends AbstractSerialPortHal {
 	public static final int PAGE_PAYLOAD_BYTES = 4080;
 
 	private static final byte COMPONENT = UART_COMPONENT.STORAGE.toCmdByte();
+	private static final UartComponentPropertyDetails MAC = UART_COMPONENT_AND_PROPERTY.MAIN_PROCESSOR.MAC;
 	private static final byte PROP_INFO = 0x00;
 	private static final byte PROP_SESSION = 0x01;
 	private static final byte PROP_FILES = 0x02;
@@ -79,6 +82,9 @@ public class SimulatedNeuroLynQNodeSerialPort extends AbstractSerialPortHal {
 
 	/** False: the component is unknown, as on a GQ or a node without storage */
 	public volatile boolean hasStorage = true;
+	/** The node's MAC, answered to the dock's MAC read as a node answers it; null, BAD_CMD.
+	 * A dock reads it before and after a CLEAR, and refuses a node it cannot identify. */
+	public volatile byte[] macId = null;
 	public volatile int state = STATE.READY;
 	/** Data frames, counted over every burst from 0, that are not sent */
 	public final Set<Integer> dropFrames = new HashSet<Integer>();
@@ -306,11 +312,15 @@ public class SimulatedNeuroLynQNodeSerialPort extends AbstractSerialPortHal {
 	}
 
 	private static byte[] response(byte property, byte[] payload) {
+		return response(COMPONENT, property, payload);
+	}
+
+	private static byte[] response(byte component, byte property, byte[] payload) {
 		byte[] body = new byte[5 + payload.length];
 		body[0] = '$';
 		body[1] = UART_PACKET_CMD.DATA_RESPONSE.toCmdByte();
 		body[2] = (byte) (2 + payload.length);
-		body[3] = COMPONENT;
+		body[3] = component;
 		body[4] = property;
 		System.arraycopy(payload, 0, body, 5, payload.length);
 		return withCrc(body);
@@ -330,6 +340,12 @@ public class SimulatedNeuroLynQNodeSerialPort extends AbstractSerialPortHal {
 		}
 		byte cmd = frame[1];
 		int len = (frame.length >= 7) ? (frame[2] & 0xFF) : 0;
+		byte[] mac = macId;
+		if (mac != null && len == 2 && cmd == UART_PACKET_CMD.READ.toCmdByte()
+				&& frame[3] == MAC.mComponentByte && frame[4] == MAC.mPropertyByte) {
+			deliver(response(MAC.mComponentByte, MAC.mPropertyByte, mac));
+			return;
+		}
 		if (len < 2 || frame[3] != COMPONENT || !hasStorage) {
 			deliver(shortResponse(UART_PACKET_CMD.BAD_CMD_RESPONSE));
 			return;

@@ -269,6 +269,13 @@ public class API_00018_NeuroLynQStorageProtocolTest {
 		}
 	}
 
+	/** A dock reads a node's MAC around a CLEAR, so the simulated node answers it as a node does */
+	@Test
+	public void theNodeAnswersItsMacWhenItHasOne() throws Exception {
+		mNode.macId = new byte[] { 0x00, 0x06, 0x66, (byte) 0xAB, (byte) 0xCD, (byte) 0xEF };
+		assertEquals("000666ABCDEF", mWired.readMacId());
+	}
+
 	@Test
 	public void aNackIsNotAbsence() {
 		try {
