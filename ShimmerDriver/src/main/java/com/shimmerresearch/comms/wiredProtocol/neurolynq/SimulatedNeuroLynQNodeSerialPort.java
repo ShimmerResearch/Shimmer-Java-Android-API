@@ -90,6 +90,9 @@ public class SimulatedNeuroLynQNodeSerialPort extends AbstractSerialPortHal {
 	public volatile int nackAfterFrames = -1;
 	/** Each page's bytes arrive in reads of this size, split across frames; 0 a page at a time */
 	public volatile int chunkBytes = 0;
+	/** A burst's pages and END arrive in one read, as they do when the host's reader is held
+	 * up while the node sends */
+	public volatile boolean oneReadPerBurst = false;
 	/** Requests seen, in order: the first argument byte of each READ's offset is in the log */
 	public final List<String> requests = new ArrayList<String>();
 
@@ -433,13 +436,15 @@ public class SimulatedNeuroLynQNodeSerialPort extends AbstractSerialPortHal {
 		long sent = 0;
 		int framesThisBurst = 0;
 		long at = offset;
+		ByteArrayOutputStream held = oneReadPerBurst ? new ByteArrayOutputStream() : null;
 		while (at < limit) {
 			long pageEnd = Math.min(limit, (at / PAGE_PAYLOAD_BYTES + 1) * PAGE_PAYLOAD_BYTES);
 			ByteArrayOutputStream page = new ByteArrayOutputStream();
 			while (at < pageEnd) {
 				if (nackAfterFrames >= 0 && framesThisBurst == nackAfterFrames) {
-					deliverChunked(page.toByteArray());
-					deliver(shortResponse(UART_PACKET_CMD.BAD_ARG_RESPONSE));
+					emit(held, page.toByteArray());
+					emit(held, shortResponse(UART_PACKET_CMD.BAD_ARG_RESPONSE));
+					release(held);
 					return;
 				}
 				int n = (int) Math.min(NeuroLynQStorageCodec.READ_DATA_MAX, pageEnd - at);
@@ -458,9 +463,10 @@ public class SimulatedNeuroLynQNodeSerialPort extends AbstractSerialPortHal {
 					page.write(frame, 0, frame.length);
 				}
 			}
-			deliverChunked(page.toByteArray());
+			emit(held, page.toByteArray());
 		}
 		if (loseEnds.contains(burst)) {
+			release(held);
 			return;
 		}
 		ReadEnd end = new ReadEnd();
@@ -471,7 +477,23 @@ public class SimulatedNeuroLynQNodeSerialPort extends AbstractSerialPortHal {
 		end.fileSize = bytes.length;
 		end.crc32 = wrongCrcEnds.contains(burst) ? (crc.getValue() ^ 1L) : crc.getValue();
 		end.status = (offset + length > bytes.length) ? END_STATUS.EOF : END_STATUS.OK;
-		deliver(response(PROP_END, NeuroLynQStorageCodec.buildReadEnd(end)));
+		emit(held, response(PROP_END, NeuroLynQStorageCodec.buildReadEnd(end)));
+		release(held);
+	}
+
+	/** A burst's bytes to the port now, or kept for one read at its end */
+	private void emit(ByteArrayOutputStream held, byte[] bytes) {
+		if (held != null) {
+			held.write(bytes, 0, bytes.length);
+		} else {
+			deliverChunked(bytes);
+		}
+	}
+
+	private void release(ByteArrayOutputStream held) {
+		if (held != null && held.size() > 0) {
+			deliver(held.toByteArray());
+		}
 	}
 
 	private void answerSet(byte prop, byte[] args) {

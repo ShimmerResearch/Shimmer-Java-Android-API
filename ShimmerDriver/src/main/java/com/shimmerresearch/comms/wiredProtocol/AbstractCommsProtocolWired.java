@@ -643,8 +643,24 @@ public abstract class AbstractCommsProtocolWired extends BasicProcessWithCallBac
         }
 	}
 
-	//TODO not setup to handle streaming via dock connector -> add additional capability?
+	/**
+	 * Every packet in a read, one a pass. A loop and not a call per packet: a read can
+	 * hold thousands - a NeuroLynQ node's READ burst sends 4 KB a page, and a read taken
+	 * after the reader has been held up holds all that arrived meanwhile - and a call per
+	 * packet, or per byte of noise, ran the reader's thread out of stack (DEV-1061).
+	 */
 	private void processRxBuf(byte[] rxBuf) throws ShimmerException {
+		byte[] next = rxBuf;
+		while(next.length>0){
+			processFirstPacket(next);
+			// What is left of the read after that packet
+			next = carriedRxBuf;
+			carriedRxBuf = new byte[]{};
+		}
+	}
+
+	//TODO not setup to handle streaming via dock connector -> add additional capability?
+	private void processFirstPacket(byte[] rxBuf) throws ShimmerException {
 		
 		byte headerByte = rxBuf[0];
     	if(headerByte==UartPacketDetails.PACKET_HEADER.toCharArray()[0]){
@@ -758,14 +774,7 @@ public abstract class AbstractCommsProtocolWired extends BasicProcessWithCallBac
     		//remove first and add remaining bytes to start of next serial port read
     		carriedRxBuf = removeFirstByteFromArray(rxBuf);
     	}
-		
-		// Attempt to re-process any remaining bytes
-		if(carriedRxBuf.length>0){
-			byte[] tempBuf = carriedRxBuf; 
-			carriedRxBuf = new byte[]{};
-			processRxBuf(tempBuf);
-		}
-
+		// Any bytes left in carriedRxBuf are processRxBuf()'s next pass
 	}
 
 	/** */

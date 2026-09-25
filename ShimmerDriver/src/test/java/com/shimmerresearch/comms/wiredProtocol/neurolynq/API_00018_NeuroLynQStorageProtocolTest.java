@@ -163,6 +163,21 @@ public class API_00018_NeuroLynQStorageProtocolTest {
 		}
 	}
 
+	/**
+	 * A whole window's burst in one read - the reader held up while the node sent it - is
+	 * parsed frame by frame. The parser called itself once a frame, and a read of a couple
+	 * of thousand ran its thread out of stack: the port said nothing more after that.
+	 */
+	@Test
+	public void aReadHoldingAWholeBurstParses() throws Exception {
+		byte[] big = file((int) NeuroLynQStorageProtocol.READ_WINDOW_BYTES, 5);
+		mNode.addSession(7, 9, "trial1_1727000000", "NodeA-002", big);
+		mNode.oneReadPerBurst = true;
+		assertArrayEquals(big, mStorage.readFile(7, 0, big.length, null));
+		assertEquals(1, readCount());
+		assertEquals(3, mStorage.info().sessions);
+	}
+
 	@Test
 	public void sessionsAreErasedAndTheNodeFormatted() throws Exception {
 		mStorage.erase(ERASE_SCOPE.ONE, 5);
