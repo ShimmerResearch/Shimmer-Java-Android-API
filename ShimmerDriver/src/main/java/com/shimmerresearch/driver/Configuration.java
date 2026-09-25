@@ -791,7 +791,9 @@ public class Configuration {
 			public static final int HOST_REAL_TIME_CLOCK_SYNC = 153;
 			
 			public static final int SHIMMER_ECG_TO_HR_FW = 150;
-			
+			/** A NeuroLynQ node's PPG, see SensorPPGNeuroLynQ */
+			public static final int NEUROLYNQ_PPG = 154;
+
 			// Third party devices @ 1000+
 			public static final int THIRD_PARTY_NONIN = 1000;
 			public static final int HOST_KEYBOARD_LISTENER = 1001;
@@ -1427,6 +1429,10 @@ public class Configuration {
 
 			public static final List<ShimmerVerObject> listOfCompatibleVersionInfoExgEcgGq = Arrays.asList(
 					svoShimmerGq802154Lr, svoShimmerGq802154Nr, svoShimmer2rGq, svoVerisenseNeuroLynQ);
+
+			/** A NeuroLynQ node alone: what it has and a GQ does not, such as PPG */
+			public static final List<ShimmerVerObject> listOfCompatibleVersionInfoNeuroLynQNode = Arrays.asList(
+					svoVerisenseNeuroLynQ);
 
 			public static final List<ShimmerVerObject> listOfCompatibleVersionInfoExgTest = Arrays.asList(
 					svoExgSdLog, svoExgBtStream, svoExgLogAndStream,  

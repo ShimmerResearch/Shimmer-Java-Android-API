@@ -68,6 +68,7 @@ import com.shimmerresearch.sensors.SensorECGToHRFw;
 import com.shimmerresearch.sensors.SensorEXG;
 import com.shimmerresearch.sensors.SensorGSR;
 import com.shimmerresearch.sensors.SensorPPG;
+import com.shimmerresearch.sensors.SensorPPGNeuroLynQ;
 import com.shimmerresearch.sensors.SensorShimmerClock;
 import com.shimmerresearch.sensors.adxl371.SensorADXL371;
 import com.shimmerresearch.sensors.AbstractSensor.SENSORS;
@@ -251,7 +252,11 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 		public final static int EXG2_16BIT 		= 1<<19;
 		public final static int BMPX80 			= 1<<18;
 		public final static int MPL_TEMPERATURE = 1<<17;
-		// 1<<16
+		/** A NeuroLynQ node's PPG: 1 to 3 24-bit counts per record, between GSR and heart rate,
+		 * one for each channel header byte 15 enables - bit 0 green, 1 IR, 2 red, in that
+		 * order (verisense-firmware docs/VERISENSE_NEUROLYNQ_STORAGE.md sections 3.1-3.2). No GQ or
+		 * Shimmer3 sets the bit, and on them byte 15 is not a mask. */
+		public final static int NEUROLYNQ_PPG 	= 1<<16;
 		public final static long MPL_QUAT_6DOF 	= (long)1<<31; // needs to be cast to a long otherwise would overflow
 		public final static int MPL_QUAT_9DOF 	= 1<<30;
 		public final static int MPL_EULER_6DOF 	= 1<<29;
@@ -931,7 +936,9 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 		Vector3d gyroscope = new Vector3d();
 		
 		if (getHardwareVersion()==HW_ID.SHIMMER_SR30 || getHardwareVersion()==HW_ID.SHIMMER_3  || getHardwareVersion()==HW_ID.SHIMMER_3R  
-				|| getHardwareVersion()==HW_ID.SHIMMER_GQ_802154_LR || getHardwareVersion()==HW_ID.SHIMMER_GQ_802154_NR || getHardwareVersion()==HW_ID.SHIMMER_2R_GQ){
+				|| getHardwareVersion()==HW_ID.SHIMMER_GQ_802154_LR || getHardwareVersion()==HW_ID.SHIMMER_GQ_802154_NR || getHardwareVersion()==HW_ID.SHIMMER_2R_GQ
+				// A NeuroLynQ node's files are a GQ's under its own hardware ID
+				|| mShimmerVerObject.isVerisenseNeuroLynQ()){
 			
 			parseTimestampShimmer3(fwType, objectCluster, uncalibratedData, uncalibratedDataUnits, calibratedData, calibratedDataUnits, sensorNames, newPacketInt);
 			
@@ -2332,6 +2339,23 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 				objectCluster.addDataToMap(Shimmer3.ObjectClusterSensorName.MOTIONANDORIENT,CHANNEL_TYPE.UNCAL.toString(),CHANNEL_UNITS.NO_UNITS,uncalibratedData[iMotOrient]);
 			}
 			
+			//A NeuroLynQ node's PPG: raw counts, for each channel its header's mask enables
+			if ((fwType == COMMUNICATION_TYPE.SD) && (mEnabledSensors & SDLogHeader.NEUROLYNQ_PPG) > 0){
+				for (String ppgChannel : SensorPPGNeuroLynQ.ObjectClusterSensorName.IN_RECORD_ORDER) {
+					int sigIndex = getSignalIndex(ppgChannel);
+					if (sigIndex < 0) {
+						continue;
+					}
+					double counts = (double)newPacketInt[sigIndex];
+					objectCluster.addDataToMap(ppgChannel,CHANNEL_TYPE.UNCAL.toString(),CHANNEL_UNITS.NO_UNITS,counts);
+					objectCluster.addDataToMap(ppgChannel,CHANNEL_TYPE.CAL.toString(),CHANNEL_UNITS.NO_UNITS,counts);
+					uncalibratedData[sigIndex] = counts;
+					uncalibratedDataUnits[sigIndex] = CHANNEL_UNITS.NO_UNITS;
+					calibratedData[sigIndex] = counts;
+					calibratedDataUnits[sigIndex] = CHANNEL_UNITS.NO_UNITS;
+				}
+			}
+
 			if ((fwType == COMMUNICATION_TYPE.SD) && (mEnabledSensors & SDLogHeader.ECG_TO_HR_FW) > 0){
 				int sigIndex = getSignalIndex(Shimmer3.ObjectClusterSensorName.ECG_TO_HR_FW);
 				
@@ -5509,6 +5533,10 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 //			addSensorClass(SENSORS.CLOCK, new ShimmerClock(this));
 			addSensorClass(SENSORS.GSR, new SensorGSR(mShimmerVerObject));
 			addSensorClass(SENSORS.ECG_TO_HR, new SensorECGToHRFw(mShimmerVerObject));
+			//A GQ has no PPG; a NeuroLynQ node may, and its heart rate is the PPG's
+			if(mShimmerVerObject.isVerisenseNeuroLynQ()){
+				addSensorClass(SENSORS.PPG_NEUROLYNQ, new SensorPPGNeuroLynQ(mShimmerVerObject));
+			}
 //			addSensorClass(SENSORS.EXG, new SensorEXG(this));
 		} else if(isShimmerGen3()){
 			if(isSupportedNoImuSensors()){
