@@ -86,7 +86,15 @@ public class SensorGSRVerisense extends SensorGSR {
 			150.0, 		//Range 1
 			562.0, 		//Range 2
 			1740.0}; 	//Range 3
-	public static final int VERISENSE_PULSE_PLUS_GSR_UNCAL_LIMIT_RANGE3 = 1134;
+	/**
+	 * Range-3 codes below this are raised to it before calibration so that an open circuit reads
+	 * as open. It has to be the first code above the 0.5 V amplifier reference that
+	 * {@link SensorGSR#calibrateGsrDataToKOhmsUsingAmplifierEq} divides by: 0.5 V is code 1137.5 at
+	 * this front end's 1.8 V full scale, so 1138, as 683 is at the Shimmer3's 3.0 V. Anything lower
+	 * decodes to a negative resistance, which the auto-range nudge floors at 8 kOhm, reading an open
+	 * circuit as 125 uS. It was 1134, the last code below 0.4986 V, until DEV-1067.
+	 */
+	public static final int VERISENSE_PULSE_PLUS_GSR_UNCAL_LIMIT_RANGE3 = 1138;
 
 	//--------- Sensor info start --------------
 	public static final SensorDetailsRef SENSOR_GSR_VERISENSE = new SensorDetailsRef(
