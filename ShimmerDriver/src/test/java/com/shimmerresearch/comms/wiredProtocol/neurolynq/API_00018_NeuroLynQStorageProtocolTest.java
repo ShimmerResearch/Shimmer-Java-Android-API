@@ -3,10 +3,12 @@ package com.shimmerresearch.comms.wiredProtocol.neurolynq;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Random;
 
@@ -164,6 +166,34 @@ public class API_00018_NeuroLynQStorageProtocolTest {
 	}
 
 	/**
+	 * A cancel lands between windows: the one already asked for is never cut short. The
+	 * next request on the link is answered, whatever of the burst is still arriving: a
+	 * response is matched by its component and property, and a READ frame is neither.
+	 */
+	@Test
+	public void aCancelledReadStopsAtTheNextWindow() throws Exception {
+		byte[] big = file((int) NeuroLynQStorageProtocol.READ_WINDOW_BYTES + 5000, 4);
+		mNode.addSession(7, 9, "trial1_1727000000", "NodeA-002", big);
+		final List<Long> progress = new ArrayList<Long>();
+		try {
+			mStorage.readFile(7, 0, big.length, (read, size) -> {
+				progress.add(read);
+				mStorage.cancel();
+			});
+			fail("no exception");
+		} catch (NeuroLynQStorageProtocol.ReadCancelledException expected) {
+			assertEquals(1, readCount());
+			assertEquals(1, progress.size());
+			assertTrue(progress.get(0) < big.length);
+		}
+		assertTrue(mStorage.isCancelled());
+
+		NeuroLynQStorageProtocol again = new NeuroLynQStorageProtocol(mWired);
+		assertEquals(3, again.info().sessions);
+		assertArrayEquals(FILE_B, again.readFile(5, 1, FILE_B.length, null));
+	}
+
+	/**
 	 * A whole window's burst in one read - the reader held up while the node sent it - is
 	 * parsed frame by frame. The parser called itself once a frame, and a read of a couple
 	 * of thousand ran its thread out of stack: the port said nothing more after that.
@@ -176,6 +206,36 @@ public class API_00018_NeuroLynQStorageProtocolTest {
 		assertArrayEquals(big, mStorage.readFile(7, 0, big.length, null));
 		assertEquals(1, readCount());
 		assertEquals(3, mStorage.info().sessions);
+	}
+
+	/**
+	 * The host stopped waiting before the burst ended, and its next request is answered
+	 * all the same: the node ends a burst for a new request, with END ABORTED, and what of
+	 * the burst was already on its way is not taken for the answer. Unended, this burst
+	 * would outlast INFO's 500 ms.
+	 */
+	@Test
+	public void aRequestEndsABurstInProgress() throws Exception {
+		byte[] big = file((int) NeuroLynQStorageProtocol.READ_WINDOW_BYTES, 6);
+		mNode.addSession(7, 9, "trial1_1727000000", "NodeA-002", big);
+		mNode.pageDelayMs = 10;
+		mStorage.setReadStallMs(1);
+		NeuroLynQStorageProtocol.ReadWindow w = mStorage.readWindow(7, 0, 0, big.length);
+		assertNull("the host stopped waiting before the burst ended", w.end);
+		assertEquals(3, new NeuroLynQStorageProtocol(mWired).info().sessions);
+		assertEquals(Arrays.asList(NeuroLynQStorageCodec.END_STATUS.ABORTED), mNode.endStatuses);
+	}
+
+	/** Cancelled before it starts, a read sends nothing */
+	@Test
+	public void aReadCancelledFirstSendsNothing() throws Exception {
+		mStorage.cancel();
+		try {
+			mStorage.readFile(5, 0, FILE_A.length, null);
+			fail("no exception");
+		} catch (NeuroLynQStorageProtocol.ReadCancelledException expected) {
+			assertEquals(0, readCount());
+		}
 	}
 
 	@Test

@@ -56,6 +56,15 @@ public class NeuroLynQStorageProtocol {
 		}
 	}
 
+	/** Thrown by {@link NeuroLynQStorageProtocol#readFile readFile()} once {@link #cancel()} is called */
+	public static class ReadCancelledException extends StorageReadException {
+		private static final long serialVersionUID = 1L;
+
+		public ReadCancelledException(String message) {
+			super(message, -1);
+		}
+	}
+
 	/** One READ's worth: what arrived in order, and how the node ended it */
 	public static final class ReadWindow {
 		public byte[] data = new byte[0];
@@ -69,6 +78,7 @@ public class NeuroLynQStorageProtocol {
 
 	private final AbstractCommsProtocolWired mWired;
 	private long mReadStallMs = READ_STALL_MS;
+	private volatile boolean mCancelled = false;
 
 	public NeuroLynQStorageProtocol(AbstractCommsProtocolWired wired) {
 		mWired = wired;
@@ -76,6 +86,21 @@ public class NeuroLynQStorageProtocol {
 
 	public void setReadStallMs(long readStallMs) {
 		mReadStallMs = readStallMs;
+	}
+
+	/**
+	 * Stop {@link #readFile readFile()} before its next window, which is under two seconds
+	 * away at the link's rate: it throws {@link ReadCancelledException}. A window is never
+	 * cut short, so the burst it asked for is over before anything else is sent, and the
+	 * link is left as a finished read leaves it. An instance stays cancelled; read again
+	 * with a new one.
+	 */
+	public void cancel() {
+		mCancelled = true;
+	}
+
+	public boolean isCancelled() {
+		return mCancelled;
 	}
 
 	/** INFO answered BAD_CMD: the device has no storage component, and nothing to download */
@@ -199,6 +224,10 @@ public class NeuroLynQStorageProtocol {
 		long have = 0;
 		int stalls = 0;
 		while (have < size) {
+			if (mCancelled) {
+				throw new ReadCancelledException("session " + handle + " file " + file + ": cancelled at " + have
+						+ " of " + size + " bytes");
+			}
 			ReadWindow w = readWindow(handle, file, have, Math.min(READ_WINDOW_BYTES, size - have));
 			if (w.end != null && w.end.fileSize != size) {
 				throw new StorageReadException("session " + handle + " file " + file + ": the node sizes it "

@@ -2,12 +2,14 @@ package com.shimmerresearch.comms.wiredProtocol.neurolynq;
 
 import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.zip.CRC32;
 
 import com.shimmerresearch.comms.serialPortInterface.AbstractSerialPortHal;
@@ -93,11 +95,17 @@ public class SimulatedNeuroLynQNodeSerialPort extends AbstractSerialPortHal {
 	/** A burst's pages and END arrive in one read, as they do when the host's reader is held
 	 * up while the node sends */
 	public volatile boolean oneReadPerBurst = false;
+	/** A pause after each page of a burst, as a node takes to read the next from NAND; 0 none */
+	public volatile int pageDelayMs = 0;
+	/** Each END sent, by its status (END_STATUS), in order */
+	public final List<Integer> endStatuses = Collections.synchronizedList(new ArrayList<Integer>());
 	/** Requests seen, in order: the first argument byte of each READ's offset is in the log */
 	public final List<String> requests = new ArrayList<String>();
 
 	private int mFramesSent = 0;
 	private int mBursts = 0;
+	/** Requests sent and not yet taken up by the device's thread: one ends a burst in progress */
+	private final AtomicInteger mQueued = new AtomicInteger();
 
 	public SimSession addSession(int handle, int dbSession, String trialFolder, String sessionFolder, byte[]... files) {
 		SimSession s = new SimSession();
@@ -210,9 +218,11 @@ public class SimulatedNeuroLynQNodeSerialPort extends AbstractSerialPortHal {
 	@Override
 	public void txBytes(byte[] frame) throws ShimmerException {
 		final byte[] copy = frame.clone();
+		mQueued.incrementAndGet();
 		mDevice.execute(new Runnable() {
 			@Override
 			public void run() {
+				mQueued.decrementAndGet();
 				answer(copy);
 			}
 		});
@@ -428,7 +438,11 @@ public class SimulatedNeuroLynQNodeSerialPort extends AbstractSerialPortHal {
 		}
 	}
 
-	/** A READ's burst: a page's frames at a time, then END, as gq_dock_storage.c sends it */
+	/**
+	 * A READ's burst: a page's frames at a time, then END, as gq_dock_storage.c sends it. A
+	 * request arriving meanwhile ends it at the next page, with END ABORTED, before that
+	 * request is answered (gq_dock_link.c; storage spec section 7).
+	 */
 	private void burst(int handle, int file, byte[] bytes, long offset, long length) {
 		int burst = mBursts++;
 		long limit = Math.min(bytes.length, offset + length);
@@ -436,8 +450,13 @@ public class SimulatedNeuroLynQNodeSerialPort extends AbstractSerialPortHal {
 		long sent = 0;
 		int framesThisBurst = 0;
 		long at = offset;
+		boolean aborted = false;
 		ByteArrayOutputStream held = oneReadPerBurst ? new ByteArrayOutputStream() : null;
 		while (at < limit) {
+			if (mQueued.get() > 0) {
+				aborted = true;
+				break;
+			}
 			long pageEnd = Math.min(limit, (at / PAGE_PAYLOAD_BYTES + 1) * PAGE_PAYLOAD_BYTES);
 			ByteArrayOutputStream page = new ByteArrayOutputStream();
 			while (at < pageEnd) {
@@ -464,6 +483,14 @@ public class SimulatedNeuroLynQNodeSerialPort extends AbstractSerialPortHal {
 				}
 			}
 			emit(held, page.toByteArray());
+			if (pageDelayMs > 0) {
+				try {
+					Thread.sleep(pageDelayMs);
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+					return;
+				}
+			}
 		}
 		if (loseEnds.contains(burst)) {
 			release(held);
@@ -476,7 +503,8 @@ public class SimulatedNeuroLynQNodeSerialPort extends AbstractSerialPortHal {
 		end.bytesSent = sent;
 		end.fileSize = bytes.length;
 		end.crc32 = wrongCrcEnds.contains(burst) ? (crc.getValue() ^ 1L) : crc.getValue();
-		end.status = (offset + length > bytes.length) ? END_STATUS.EOF : END_STATUS.OK;
+		end.status = aborted ? END_STATUS.ABORTED : (offset + length > bytes.length) ? END_STATUS.EOF : END_STATUS.OK;
+		endStatuses.add(end.status);
 		emit(held, response(PROP_END, NeuroLynQStorageCodec.buildReadEnd(end)));
 		release(held);
 	}
