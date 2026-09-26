@@ -2134,7 +2134,8 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 					if(currentGSRRange==3 && gsrAdcValueUnCal<SensorGSR.GSR_UNCAL_LIMIT_RANGE3) {
 						gsrAdcValueUnCal = SensorGSR.GSR_UNCAL_LIMIT_RANGE3;
 					}
-					gsrResistanceKOhms = SensorGSR.calibrateGsrDataToKOhmsUsingAmplifierEq(gsrAdcValueUnCal, currentGSRRange, MICROCONTROLLER_ADC_PROPERTIES.SHIMMER2R3_3V0, SensorGSR.SHIMMER3_GSR_REF_RESISTORS_KOHMS);
+					//An open circuit reads as open on ranges 0-2 too, where only the resistance changes (DEV-1070)
+					gsrResistanceKOhms = SensorGSR.calibrateGsrDataToKOhmsWithOpenCircuitLimit(gsrAdcValueUnCal, currentGSRRange, SensorGSR.GSR_UNCAL_LIMIT_RANGE3, MICROCONTROLLER_ADC_PROPERTIES.SHIMMER2R3_3V0, SensorGSR.SHIMMER3_GSR_REF_RESISTORS_KOHMS);
 					gsrResistanceKOhms = SensorGSR.nudgeGsrResistance(gsrResistanceKOhms, getGSRRange(), SensorGSR.SHIMMER3_GSR_RESISTANCE_MIN_MAX_KOHMS);
 					gsrConductanceUSiemens = (1.0/gsrResistanceKOhms)*1000;
 					
