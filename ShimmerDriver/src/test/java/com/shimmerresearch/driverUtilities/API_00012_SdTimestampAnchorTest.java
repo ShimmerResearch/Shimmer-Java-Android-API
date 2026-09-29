@@ -102,6 +102,32 @@ public class API_00012_SdTimestampAnchorTest {
 	}
 
 	/**
+	 * Checks one real file split: each file's first packet lands on its own
+	 * counter value, the split is one sample period, and pinning each file to its
+	 * header - the previous rule - gives the step the Consensys export showed.
+	 *
+	 * @param oldStepTicks the previous rule's step beyond one sample period, i.e.
+	 *            the difference between the two files' leads
+	 */
+	private static void assertRealSplit(long headerA, long firstRawA, long firstCounterA, long lastCounterA,
+			long headerB, long firstRawB, long firstCounterB, long oldStepTicks) {
+		double offA = SdTimestampAnchor.firstTsOffsetFromInitialTsTicks(headerA, firstRawA, MAX_3_BYTE);
+		double offB = SdTimestampAnchor.firstTsOffsetFromInitialTsTicks(headerB, firstRawB, MAX_3_BYTE);
+		assertEquals(firstCounterA, placed(headerA, firstRawA, offA), 0);
+		assertEquals(firstCounterB, placed(headerB, firstRawB, offB), 0);
+
+		// Unwrapped within file A: the first raw value plus the ticks elapsed.
+		double unwrappedLastA = firstRawA + (lastCounterA - firstCounterA);
+		double endA = placed(headerA, unwrappedLastA, offA);
+		assertEquals(lastCounterA, endA, 0);
+		assertEquals(PERIOD_TICKS, placed(headerB, firstRawB, offB) - endA, 0);
+
+		// The previous rule reproduced the export's step.
+		double oldStep = placed(headerB, firstRawB, firstRawB) - placed(headerA, unwrappedLastA, firstRawA);
+		assertEquals(PERIOD_TICKS + oldStepTicks, oldStep, 0);
+	}
+
+	/**
 	 * Header and packet values read from the raw 000 and 001 files of the
 	 * Shimmer3R recording DEV-1095 was raised on (CE2F, 1024 Hz, 2026-09-25).
 	 * File 000's first packet predates its header by 5332 ticks (162.72 ms), file
@@ -111,28 +137,20 @@ public class API_00012_SdTimestampAnchorTest {
 	 */
 	@Test
 	public void realShimmer3rRecordingSplitsByOnePeriod() {
-		long header000 = 391630116578L;
-		long firstRaw000 = 16335374L; // 5332 ticks below the header's low bits
-		long firstCounter000 = 391630111246L;
-		long lastCounter000 = 391748082222L; // 3,675,280 records later
-		long header001 = 391748082383L;
-		long firstRaw001 = 88654L;
-		long firstCounter001 = 391748082254L;
+		assertRealSplit(391630116578L, 16335374L, 391630111246L, 391748082222L, // 000: 3,675,280 records
+				391748082383L, 88654L, 391748082254L, -5203);
+	}
 
-		double off000 = SdTimestampAnchor.firstTsOffsetFromInitialTsTicks(header000, firstRaw000, MAX_3_BYTE);
-		double off001 = SdTimestampAnchor.firstTsOffsetFromInitialTsTicks(header001, firstRaw001, MAX_3_BYTE);
-		assertEquals(firstCounter000, placed(header000, firstRaw000, off000), 0);
-		assertEquals(firstCounter001, placed(header001, firstRaw001, off001), 0);
-
-		// Unwrapped within file 000: the first raw value plus the ticks elapsed.
-		double end000 = placed(header000, firstRaw000 + (lastCounter000 - firstCounter000), off000);
-		assertEquals(lastCounter000, end000, 0);
-		assertEquals(PERIOD_TICKS, placed(header001, firstRaw001, off001) - end000, 0);
-
-		// The previous rule reproduced the export's step.
-		double oldEnd000 = placed(header000, firstRaw000 + (lastCounter000 - firstCounter000), firstRaw000);
-		double oldStart001 = placed(header001, firstRaw001, firstRaw001);
-		assertEquals(PERIOD_TICKS - 5203, oldStart001 - oldEnd000, 0);
+	/**
+	 * The 041 and 042 files of the same recording: leads of 214 ticks (6.53 ms)
+	 * and 131 (4.00 ms). The previous rule's step was only -83 ticks, which the
+	 * export showed as timestamps going back 1.556 ms, about 27 ms before the
+	 * post-split stall. Anchored, this split is one sample period too.
+	 */
+	@Test
+	public void realShimmer3rSplitWithSmallLeadDifference() {
+		assertRealSplit(396466711492L, 4319982L, 396466711278L, 396584676654L,
+				396584676817L, 4844878L, 396584676686L, -83);
 	}
 
 	@Test
