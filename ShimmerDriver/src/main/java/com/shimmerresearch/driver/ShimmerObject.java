@@ -45,6 +45,7 @@ import com.shimmerresearch.driverUtilities.ExpansionBoardDetails;
 import com.shimmerresearch.driverUtilities.SensorDetailsRef;
 import com.shimmerresearch.driverUtilities.SensorGroupingDetails;
 import com.shimmerresearch.driverUtilities.SensorDetails;
+import com.shimmerresearch.driverUtilities.SdTimestampAnchor;
 import com.shimmerresearch.driverUtilities.ShimmerSDCardDetails;
 import com.shimmerresearch.driverUtilities.ShimmerVerDetails;
 import com.shimmerresearch.driverUtilities.ShimmerVerObject;
@@ -653,13 +654,13 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 
 	protected boolean mFirstTime = true;
 	
-	/** This variable was originally implemented because the
-	 * initial time in the SD header (i.e., the time when the header
-	 * was created) wasn't equal to the first timestamp in the
-	 * subsequent data packets (i.e., the lower 3 bytes of the
-	 * initial timestamp). This problem has since been addressed in
-	 * firmware whereby the header is updated with the timestamp
-	 * from the first packet. Therefore this variable is redundant. */
+	/** Subtracted, with the header's initial timestamp added, from each
+	 * unwrapped SD timestamp so that the file's records land on their own
+	 * counter time. It is not redundant: the SD header holds the RTC at the
+	 * time the file was created, not the first packet's timestamp - the
+	 * firmware captures the latter but never writes it back - so it is set by
+	 * {@link SdTimestampAnchor#firstTsOffsetFromInitialTsTicks} from the
+	 * header's low bits and the first packet's raw timestamp (DEV-1095). */
 	protected double mFirstTsOffsetFromInitialTsTicks = 0;
 	public int OFFSET_LENGTH = 9;
 	//-------- Timestamp related end --------
@@ -2821,17 +2822,19 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 		objectCluster.addDataToMap(Shimmer3.ObjectClusterSensorName.SHIMMER_CLOCK,CHANNEL_TYPE.UNCAL.toString(),CHANNEL_UNITS.CLOCK_UNIT,shimmerTimestampTicks);
 		objectCluster.addDataToMap(Shimmer3.ObjectClusterSensorName.SHIMMER_CLOCK,CHANNEL_TYPE.CAL.toString(),CHANNEL_UNITS.CLOCK_UNIT,shimmerTimestampTicks);
 		if(mFirstTime && fwType==COMMUNICATION_TYPE.SD){
-			//this is to make sure the Raw starts from zero for SD data. See comment for mFirstTsOffsetFromInitialTsTicks. 
-			mFirstTsOffsetFromInitialTsTicks = shimmerTimestampTicks;
-			
-			//This is to circumvent a bug with old StroKare firmware. Resolved in firmware v1.0.1 
+			//This is to circumvent a bug with old StroKare firmware. Resolved in firmware v1.0.1
 			if(getFirmwareIdentifier()==FW_ID.STROKARE
 					&& !isThisVerCompatibleWith(FW_ID.STROKARE, 1, 0, 1)){
 				long initialTsTicksOriginal = getInitialTimeStampTicksSd();
 				long initialTsTicksNew = (long) ((initialTsTicksOriginal&0xFFFF000000L)+shimmerTimestampTicks);
 				setInitialTimeStampTicksSd(initialTsTicksNew);
 			}
-			
+
+			//Anchors the file on the first packet's own counter time rather than on
+			//the header's file-creation time. See comment for mFirstTsOffsetFromInitialTsTicks.
+			mFirstTsOffsetFromInitialTsTicks = SdTimestampAnchor.firstTsOffsetFromInitialTsTicks(
+					getInitialTimeStampTicksSd(), shimmerTimestampTicks, mTimeStampTicksMaxValue);
+
 			mFirstTime = false;
 		}
 
