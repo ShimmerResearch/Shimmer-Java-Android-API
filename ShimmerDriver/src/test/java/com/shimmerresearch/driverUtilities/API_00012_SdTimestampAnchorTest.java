@@ -101,6 +101,40 @@ public class API_00012_SdTimestampAnchorTest {
 		assertEquals(PERIOD_TICKS - (5800 - 577), oldStart001 - oldEnd000, 0);
 	}
 
+	/**
+	 * Header and packet values read from the raw 000 and 001 files of the
+	 * Shimmer3R recording DEV-1095 was raised on (CE2F, 1024 Hz, 2026-09-25).
+	 * File 000's first packet predates its header by 5332 ticks (162.72 ms), file
+	 * 001's by 129 (3.94 ms); pinned to their headers, the files stepped back
+	 * 5203 ticks (158.78 ms), exactly the step seen in the Consensys export.
+	 * Anchored, the split is one sample period.
+	 */
+	@Test
+	public void realShimmer3rRecordingSplitsByOnePeriod() {
+		long header000 = 391630116578L;
+		long firstRaw000 = 16335374L; // 5332 ticks below the header's low bits
+		long firstCounter000 = 391630111246L;
+		long lastCounter000 = 391748082222L; // 3,675,280 records later
+		long header001 = 391748082383L;
+		long firstRaw001 = 88654L;
+		long firstCounter001 = 391748082254L;
+
+		double off000 = SdTimestampAnchor.firstTsOffsetFromInitialTsTicks(header000, firstRaw000, MAX_3_BYTE);
+		double off001 = SdTimestampAnchor.firstTsOffsetFromInitialTsTicks(header001, firstRaw001, MAX_3_BYTE);
+		assertEquals(firstCounter000, placed(header000, firstRaw000, off000), 0);
+		assertEquals(firstCounter001, placed(header001, firstRaw001, off001), 0);
+
+		// Unwrapped within file 000: the first raw value plus the ticks elapsed.
+		double end000 = placed(header000, firstRaw000 + (lastCounter000 - firstCounter000), off000);
+		assertEquals(lastCounter000, end000, 0);
+		assertEquals(PERIOD_TICKS, placed(header001, firstRaw001, off001) - end000, 0);
+
+		// The previous rule reproduced the export's step.
+		double oldEnd000 = placed(header000, firstRaw000 + (lastCounter000 - firstCounter000), firstRaw000);
+		double oldStart001 = placed(header001, firstRaw001, firstRaw001);
+		assertEquals(PERIOD_TICKS - 5203, oldStart001 - oldEnd000, 0);
+	}
+
 	@Test
 	public void strokareCorrectedHeaderStillPinsExactly() {
 		// The old-StroKare workaround rewrites the header's low bits to the first
