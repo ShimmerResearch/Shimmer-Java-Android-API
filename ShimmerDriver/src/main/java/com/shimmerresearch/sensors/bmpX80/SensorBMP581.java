@@ -224,8 +224,8 @@ public class SensorBMP581 extends SensorBMPX80 {
 			}
 			if (channelDetails.mObjectClusterName.equals(ObjectClusterSensorName.TEMPERATURE_BMP581)) {
 				double raw = ((FormatCluster) ObjectCluster.returnFormatCluster(objectCluster.getCollectionOfFormatClusters(ObjectClusterSensorName.TEMPERATURE_BMP581), channelDetails.mChannelFormatDerivedFromShimmerDataPacket.toString())).mData;
-				// BMP581 temperature is pre-compensated: raw/65536 = deg C
-				double calTemp = raw / 65536.0;
+				// BMP581 temperature is pre-compensated and signed: s24(raw)/65536 = deg C
+				double calTemp = CalibDetailsBmp581.signExtend24(raw) / 65536.0;
 				objectCluster.addCalData(channelDetails, calTemp, objectCluster.getIndexKeeper() - 1);
 				objectCluster.incrementIndexKeeper();
 			}
