@@ -109,7 +109,15 @@ public class CalibDetailsBmp390 extends CalibDetailsBmpX80 {
 	@Override
 	public double[] calibratePressureSensorData(double UP, double UT) {
 		Bmp3CalibCoefficients calibCoefficientsPerSensor = calibCoefficientsBySensor.get(mSensorMacID);
-		
+		if(calibCoefficientsPerSensor==null){
+			// No coefficients for this sensor: parseCalParamByteArray() skips an
+			// all-0x00/0xFF block (e.g. an unwritten SD header), and streaming can
+			// sample before the 0xA7 reply arrives. Unlike the BMP180/BMP280 there
+			// are no published default coefficients to fall back on, so report the
+			// values as not calibrated rather than invent them (DEV-1125).
+			return new double[]{Double.NaN, Double.NaN};
+		}
+
 		byte rslt = Bmp3Constants.BMP3_OK;
 
         double uncompTemp = UT;
