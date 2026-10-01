@@ -58,29 +58,32 @@ public class API_00019_GsrBelowReferenceReadsOpen {
 
 	private enum FrontEnd {
 		SHIMMER3(MICROCONTROLLER_ADC_PROPERTIES.SHIMMER2R3_3V0, SensorGSR.SHIMMER3_GSR_REF_RESISTORS_KOHMS,
-				SensorGSR.GSR_UNCAL_LIMIT_RANGE3),
+				SensorGSR.GSR_UNCAL_LIMIT_RANGE3, SensorGSR.GSR_AMPLIFIER_REF_VOLTAGE),
 		VERISENSE_GSR_PLUS(MICROCONTROLLER_ADC_PROPERTIES.VERISENSE_3V0, SensorGSR.SHIMMER3_GSR_REF_RESISTORS_KOHMS,
-				SensorGSR.GSR_UNCAL_LIMIT_RANGE3),
+				SensorGSR.GSR_UNCAL_LIMIT_RANGE3, SensorGSR.GSR_AMPLIFIER_REF_VOLTAGE),
 		VERISENSE_GEN2(MICROCONTROLLER_ADC_PROPERTIES.VERISENSE_1V8,
 				SensorGSRVerisense.VERISENSE_PULSE_PLUS_GSR_REF_RESISTORS_KOHMS,
-				SensorGSRVerisense.VERISENSE_PULSE_PLUS_GSR_UNCAL_LIMIT_RANGE3);
+				SensorGSRVerisense.VERISENSE_PULSE_PLUS_GSR_UNCAL_LIMIT_RANGE3,
+				SensorGSRVerisense.VERISENSE_PULSE_PLUS_GSR_AMPLIFIER_REF_VOLTAGE);
 
 		final MICROCONTROLLER_ADC_PROPERTIES adc;
 		final double[] refResistorsKohms;
 		final int limit;
+		final double refVoltage;
 
-		FrontEnd(MICROCONTROLLER_ADC_PROPERTIES adc, double[] refResistorsKohms, int limit) {
+		FrontEnd(MICROCONTROLLER_ADC_PROPERTIES adc, double[] refResistorsKohms, int limit, double refVoltage) {
 			this.adc = adc;
 			this.refResistorsKohms = refResistorsKohms;
 			this.limit = limit;
+			this.refVoltage = refVoltage;
 		}
 
 		double equation(int code, int range) {
-			return SensorGSR.calibrateGsrDataToKOhmsUsingAmplifierEq(code, range, adc, refResistorsKohms);
+			return SensorGSR.calibrateGsrDataToKOhmsUsingAmplifierEq(code, range, adc, refResistorsKohms, refVoltage);
 		}
 
 		double withOpenCircuitLimit(int code, int range) {
-			return SensorGSR.calibrateGsrDataToKOhmsWithOpenCircuitLimit(code, range, limit, adc, refResistorsKohms);
+			return SensorGSR.calibrateGsrDataToKOhmsWithOpenCircuitLimit(code, range, limit, adc, refResistorsKohms, refVoltage);
 		}
 
 		double openCircuitKohms() {
@@ -104,19 +107,22 @@ public class API_00019_GsrBelowReferenceReadsOpen {
 	}
 
 	/**
-	 * The limit is the first code above the 0.5 V reference on every front end, so the rule moves
-	 * exactly the codes that the equation decoded to a negative resistance, which are the samples
-	 * that ASM-2156's 8 kOhm floor already moved. Every other code decodes as it always has.
+	 * The rule moves only codes that were an open circuit already. On the Shimmer3, the ShimmerGQ and
+	 * the SR62 the limit is the first code above the 0.5 V reference, so these are exactly the codes
+	 * that decoded to a negative resistance, the samples ASM-2156's 8 kOhm floor already moved. On
+	 * gen-2 the reference is 0.4986 V (code 1134.3) and the limit 1138, so codes 1135-1137 move too;
+	 * they decode above the top of range 3 on every range. Every other code decodes as it always has.
 	 */
 	@Test
-	public void test002_onlyCodesTheEquationDecodedNegativeChange() {
+	public void test002_onlyCodesThatWereAlreadyOpenChange() {
 		for (FrontEnd frontEnd : FrontEnd.values()) {
 			for (int range = 0; range <= 3; range++) {
 				for (int code = 0; code <= 4095; code++) {
 					String context = frontEnd + " range " + range + " code " + code;
 					double equation = frontEnd.equation(code, range);
 					if (code < frontEnd.limit) {
-						assertTrue(context + " decodes to " + equation + " kOhm", equation < 0);
+						assertTrue(context + " decodes to " + equation + " kOhm",
+								equation < 0 || equation > WINDOWS_KOHMS[3][1]);
 					} else {
 						assertTrue(context + " decodes to " + equation + " kOhm", equation > 0);
 						assertEquals(context, equation, frontEnd.withOpenCircuitLimit(code, range), 0.0);

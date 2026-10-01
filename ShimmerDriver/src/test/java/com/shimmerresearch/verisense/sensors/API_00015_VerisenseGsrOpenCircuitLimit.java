@@ -1,5 +1,6 @@
 package com.shimmerresearch.verisense.sensors;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
@@ -12,6 +13,7 @@ import com.shimmerresearch.driverUtilities.ChannelDetails.CHANNEL_TYPE;
 import com.shimmerresearch.driverUtilities.ExpansionBoardDetails;
 import com.shimmerresearch.driverUtilities.SensorDetails;
 import com.shimmerresearch.driverUtilities.ShimmerVerDetails.HW_ID;
+import com.shimmerresearch.sensors.SensorADC;
 import com.shimmerresearch.sensors.SensorADC.MICROCONTROLLER_ADC_PROPERTIES;
 import com.shimmerresearch.sensors.SensorGSR;
 import com.shimmerresearch.sensors.SensorGSR.ObjectClusterSensorName;
@@ -25,10 +27,11 @@ import com.shimmerresearch.verisense.sensors.SensorGSRVerisense.GSR_RANGE;
  * With nothing across the electrodes the amplifier's gain falls to one and its output settles on
  * the reference, so the ADC reads a few codes either side of it. The decode raises every range-3
  * code below {@link SensorGSRVerisense#VERISENSE_PULSE_PLUS_GSR_UNCAL_LIMIT_RANGE3} to that limit,
- * which only works if the limit is itself above the reference. It was 1134, below the 0.5 V this
- * decode divides by (code 1137.5 at 1.8 V), so codes 1134 to 1137 decoded to a negative
- * resistance: auto-range floored it at 8 kOhm, the highest conductance the device can report, and
- * fixed range 3 pinned it to 680 kOhm, the bottom of the range. On an SR68-9 with the electrodes
+ * which only works if the limit is itself above the reference. It was 1134, below the reference
+ * (0.4986 V, code 1134.3 at 1.8 V; this decode divided by 0.5 V, code 1137.5, until the reference
+ * was corrected), so the clamped codes decoded to a negative resistance: auto-range floored it at
+ * 8 kOhm, the highest conductance the device can report, and fixed range 3 pinned it to 680 kOhm,
+ * the bottom of the range. On an SR68-9 with the electrodes
  * open (DEV-793 dataset B6, ASM_PC Test_056) the range-3 codes peak at 1126-1136, so most of an
  * open-circuit recording read 125 uS.
  * <p>
@@ -65,14 +68,50 @@ public class API_00015_VerisenseGsrOpenCircuitLimit {
 	}
 
 	/**
-	 * The limit is exactly the first code above the reference: one lower and the clamp produces
-	 * negative resistances again, any higher and it overwrites codes that decode properly.
+	 * The limit has to clear the amplifier reference, or the clamp produces negative resistances
+	 * again, as the old limit of 1134 did. It is the first code above 0.5 V, the value the C# API and
+	 * the web SDK use too; the codes between the reference and the limit are an open circuit anyway.
 	 */
 	@Test
-	public void test005_limitIsTheFirstCodeAboveTheAmplifierReference() {
+	public void test005_limitClearsTheAmplifierReference() {
 		int limit = SensorGSRVerisense.VERISENSE_PULSE_PLUS_GSR_UNCAL_LIMIT_RANGE3;
 		assertTrue(calibrateRange3(limit) > 0);
-		assertTrue(calibrateRange3(limit - 1) < 0);
+		assertTrue(calibrateRange3(1134) < 0);
+		assertTrue(volts(limit) > 0.5 && volts(limit - 1) < 0.5);
+		for (int code = limit - 3; code < limit; code++) {
+			assertTrue("code " + code, calibrateRange3(code) > RANGE_3_MAX_KOHMS);
+		}
+	}
+
+	/** A 261k/100k divider off the 1.8 V rail: the value the C# API and the web SDK round to 0.4986 V. */
+	@Test
+	public void test006_amplifierReferenceIsTheDividerVoltage() {
+		assertEquals(0.4986, SensorGSRVerisense.VERISENSE_PULSE_PLUS_GSR_AMPLIFIER_REF_VOLTAGE, 0.00005);
+		assertEquals(SensorGSRVerisense.VERISENSE_PULSE_PLUS_GSR_AMPLIFIER_REF_VOLTAGE,
+				createSensorGsr(HW_ID.VERISENSE_PULSE_PLUS, 9).getCurrentGsrAmplifierRefVoltage(), 0.0);
+		assertEquals(SensorGSRVerisense.VERISENSE_PULSE_PLUS_GSR_AMPLIFIER_REF_VOLTAGE,
+				createSensorGsr(HW_ID.VERISENSE_IMU, 5).getCurrentGsrAmplifierRefVoltage(), 0.0);
+		assertEquals(SensorGSR.GSR_AMPLIFIER_REF_VOLTAGE,
+				createSensorGsr(HW_ID.VERISENSE_GSR_PLUS, 1).getCurrentGsrAmplifierRefVoltage(), 0.0);
+	}
+
+	/**
+	 * A real 2.7 MOhm load on an SR68-9 (DEV-793 dataset B4d, median code about 1850 on range 3)
+	 * decodes as the C# API and the web SDK decode it, 2758 kOhm, and closer to the load than the old
+	 * 0.5 V reference put it (2778 kOhm).
+	 */
+	@Test
+	public void test007_realLoadDecodesAsTheOtherApisDo() {
+		SensorGSRVerisense sensorGsr = createSensorGsr(HW_ID.VERISENSE_PULSE_PLUS, 9);
+		sensorGsr.setGsrRange(GSR_RANGE.AUTO_RANGE);
+		double kOhms = decodeRange3Sample(sensorGsr, 1850)
+				.getFormatClusterValue(ObjectClusterSensorName.GSR_RESISTANCE, CHANNEL_TYPE.CAL.toString());
+
+		double otherApis = SensorGSRVerisense.VERISENSE_PULSE_PLUS_GSR_REF_RESISTORS_KOHMS[RANGE_3] / (volts(1850) / 0.4986 - 1.0);
+		assertEquals(otherApis, kOhms, otherApis * 1e-4);
+		double oldReference = SensorGSR.calibrateGsrDataToKOhmsUsingAmplifierEq(1850, RANGE_3,
+				MICROCONTROLLER_ADC_PROPERTIES.VERISENSE_1V8, SensorGSRVerisense.VERISENSE_PULSE_PLUS_GSR_REF_RESISTORS_KOHMS);
+		assertTrue(kOhms + " vs " + oldReference, Math.abs(kOhms - 2700.0) < Math.abs(oldReference - 2700.0));
 	}
 
 	private static void assertOpenCircuitReadsOpen(int hwId, int hwRev, GSR_RANGE gsrRange) {
@@ -114,6 +153,11 @@ public class API_00015_VerisenseGsrOpenCircuitLimit {
 	private static double calibrateRange3(int code) {
 		return SensorGSR.calibrateGsrDataToKOhmsUsingAmplifierEq(code, RANGE_3,
 				MICROCONTROLLER_ADC_PROPERTIES.VERISENSE_1V8,
-				SensorGSRVerisense.VERISENSE_PULSE_PLUS_GSR_REF_RESISTORS_KOHMS);
+				SensorGSRVerisense.VERISENSE_PULSE_PLUS_GSR_REF_RESISTORS_KOHMS,
+				SensorGSRVerisense.VERISENSE_PULSE_PLUS_GSR_AMPLIFIER_REF_VOLTAGE);
+	}
+
+	private static double volts(int code) {
+		return SensorADC.calibrateAdcChannelToVolts(code, MICROCONTROLLER_ADC_PROPERTIES.VERISENSE_1V8);
 	}
 }

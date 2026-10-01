@@ -41,7 +41,16 @@ public class SensorGSR extends AbstractSensor {
 	private double[] currentGsrRefResistorsKohms = SHIMMER3_GSR_REF_RESISTORS_KOHMS;
 	private double[][] currentGsrResistanceKohmsMinMax = SHIMMER3_GSR_RESISTANCE_MIN_MAX_KOHMS;
 	private int currentGsrUncalLimitRange3 = GSR_UNCAL_LIMIT_RANGE3;
-	
+	private double currentGsrAmplifierRefVoltage = GSR_AMPLIFIER_REF_VOLTAGE;
+
+	/**
+	 * The voltage on the GSR amplifier's non-inverting input, which the amplifier equation divides
+	 * by: 0.5 V on the Shimmer3, the ShimmerGQ and the Verisense GSR+ (SR62). The Verisense Pulse+
+	 * (SR68) and SR61-5/6 front end has its own:
+	 * {@code SensorGSRVerisense.VERISENSE_PULSE_PLUS_GSR_AMPLIFIER_REF_VOLTAGE}.
+	 */
+	public static final double GSR_AMPLIFIER_REF_VOLTAGE = 0.5;
+
 	public static final double[] SHIMMER3_GSR_REF_RESISTORS_KOHMS = new double[] {
 			40.2, 		//Range 0
 			287.0, 		//Range 1
@@ -361,7 +370,7 @@ public class SensorGSR extends AbstractSensor {
 //					gsrAdcValueUnCal = SensorGSR.nudgeGsrADC(gsrAdcValueUnCal, currentGSRRange);
 
 					//...and on ranges 0-2 too, where only the resistance changes (DEV-1070)
-					gsrResistanceKOhms = SensorGSR.calibrateGsrDataToKOhmsWithOpenCircuitLimit(gsrAdcValueUnCal, currentGSRRange, currentGsrUncalLimitRange3, microcontrollerAdcProperties, currentGsrRefResistorsKohms);
+					gsrResistanceKOhms = SensorGSR.calibrateGsrDataToKOhmsWithOpenCircuitLimit(gsrAdcValueUnCal, currentGSRRange, currentGsrUncalLimitRange3, microcontrollerAdcProperties, currentGsrRefResistorsKohms, currentGsrAmplifierRefVoltage);
 					gsrResistanceKOhms = SensorGSR.nudgeGsrResistance(gsrResistanceKOhms, getGSRRange(), currentGsrResistanceKohmsMinMax);
 					gsrConductanceUSiemens = SensorGSR.convertkOhmToUSiemens(gsrResistanceKOhms);
 //				} else {
@@ -602,17 +611,27 @@ public class SensorGSR extends AbstractSensor {
 		return gsrCalibratedData;  
 	}
 
-	/** Based on circuit theory of the GSR non-inverting amplifier.  
-	 * 
+	/** Based on circuit theory of the GSR non-inverting amplifier, with the 0.5 V reference of the
+	 * Shimmer3, the ShimmerGQ and the Verisense GSR+ (SR62).
+	 *
 	 * @param gsrUncalibratedData
 	 * @param range
-	 * @param microcontrollerAdcProperties 
+	 * @param microcontrollerAdcProperties
 	 * @return
 	 */
 	public static double calibrateGsrDataToKOhmsUsingAmplifierEq(double gsrUncalibratedData, int range, MICROCONTROLLER_ADC_PROPERTIES microcontrollerAdcProperties, double[] gsrRefResistorsKohms){
+		return calibrateGsrDataToKOhmsUsingAmplifierEq(gsrUncalibratedData, range, microcontrollerAdcProperties, gsrRefResistorsKohms, GSR_AMPLIFIER_REF_VOLTAGE);
+	}
+
+	/** Based on circuit theory of the GSR non-inverting amplifier: R = Rf / (V / Vref - 1).
+	 *
+	 * @param gsrAmplifierRefVoltage the front end's amplifier reference: {@link #GSR_AMPLIFIER_REF_VOLTAGE},
+	 *        or {@code SensorGSRVerisense.VERISENSE_PULSE_PLUS_GSR_AMPLIFIER_REF_VOLTAGE} on gen-2
+	 */
+	public static double calibrateGsrDataToKOhmsUsingAmplifierEq(double gsrUncalibratedData, int range, MICROCONTROLLER_ADC_PROPERTIES microcontrollerAdcProperties, double[] gsrRefResistorsKohms, double gsrAmplifierRefVoltage){
 		double rFeedback = gsrRefResistorsKohms[range];
 		double volts = SensorADC.calibrateAdcChannelToVolts(gsrUncalibratedData, microcontrollerAdcProperties);
-		double rSource = rFeedback/((volts/0.5)-1.0);
+		double rSource = rFeedback/((volts/gsrAmplifierRefVoltage)-1.0);
 		return rSource;
 	}
 
@@ -622,7 +641,7 @@ public class SensorGSR extends AbstractSensor {
 	 * <p>
 	 * The amplifier equation has no positive solution at or below the amplifier's reference: no skin
 	 * resistance can pull the output under it, so a code there means the electrodes are open. Range 3
-	 * has long raised such a code to its open-circuit limit, the first code above the reference, so
+	 * has long raised such a code to its open-circuit limit, a code just above the reference, so
 	 * that an open circuit decodes as thousands of MOhm. Ranges 0-2 did not, and in auto-range they
 	 * see these codes too. When the electrodes come off, the device climbs one range at a time, and
 	 * the firmware repeats the sample that triggered each switch through the 80 ms settling time,
@@ -641,10 +660,18 @@ public class SensorGSR extends AbstractSensor {
 	 *        or {@code SensorGSRVerisense.VERISENSE_PULSE_PLUS_GSR_UNCAL_LIMIT_RANGE3} on gen-2
 	 */
 	public static double calibrateGsrDataToKOhmsWithOpenCircuitLimit(double gsrUncalibratedData, int range, int gsrUncalLimitRange3, MICROCONTROLLER_ADC_PROPERTIES microcontrollerAdcProperties, double[] gsrRefResistorsKohms){
+		return calibrateGsrDataToKOhmsWithOpenCircuitLimit(gsrUncalibratedData, range, gsrUncalLimitRange3, microcontrollerAdcProperties, gsrRefResistorsKohms, GSR_AMPLIFIER_REF_VOLTAGE);
+	}
+
+	/**
+	 * {@link #calibrateGsrDataToKOhmsWithOpenCircuitLimit(double, int, int, MICROCONTROLLER_ADC_PROPERTIES, double[])}
+	 * with the front end's own amplifier reference.
+	 */
+	public static double calibrateGsrDataToKOhmsWithOpenCircuitLimit(double gsrUncalibratedData, int range, int gsrUncalLimitRange3, MICROCONTROLLER_ADC_PROPERTIES microcontrollerAdcProperties, double[] gsrRefResistorsKohms, double gsrAmplifierRefVoltage){
 		if(gsrUncalibratedData<gsrUncalLimitRange3) {
-			return calibrateGsrDataToKOhmsUsingAmplifierEq(gsrUncalLimitRange3, 3, microcontrollerAdcProperties, gsrRefResistorsKohms);
+			return calibrateGsrDataToKOhmsUsingAmplifierEq(gsrUncalLimitRange3, 3, microcontrollerAdcProperties, gsrRefResistorsKohms, gsrAmplifierRefVoltage);
 		}
-		return calibrateGsrDataToKOhmsUsingAmplifierEq(gsrUncalibratedData, range, microcontrollerAdcProperties, gsrRefResistorsKohms);
+		return calibrateGsrDataToKOhmsUsingAmplifierEq(gsrUncalibratedData, range, microcontrollerAdcProperties, gsrRefResistorsKohms, gsrAmplifierRefVoltage);
 	}
 
 	/**TODO test method no functioning properly yet
@@ -652,6 +679,13 @@ public class SensorGSR extends AbstractSensor {
 	 * @return
 	 */
 	public static int uncalibrateGsrDataTokOhmsUsingAmplifierEq(double gsrkOhms, MICROCONTROLLER_ADC_PROPERTIES microcontrollerAdcProperties, double[] gsrRefResistorsKohms, double[][] gsrResistanceKohmsMinMax){
+		return uncalibrateGsrDataTokOhmsUsingAmplifierEq(gsrkOhms, microcontrollerAdcProperties, gsrRefResistorsKohms, gsrResistanceKohmsMinMax, GSR_AMPLIFIER_REF_VOLTAGE);
+	}
+
+	/**{@link #uncalibrateGsrDataTokOhmsUsingAmplifierEq(double, MICROCONTROLLER_ADC_PROPERTIES, double[], double[][])}
+	 * with the front end's own amplifier reference.
+	 */
+	public static int uncalibrateGsrDataTokOhmsUsingAmplifierEq(double gsrkOhms, MICROCONTROLLER_ADC_PROPERTIES microcontrollerAdcProperties, double[] gsrRefResistorsKohms, double[][] gsrResistanceKohmsMinMax, double gsrAmplifierRefVoltage){
 		int range = 0;
 		for(int i=0;i<gsrResistanceKohmsMinMax.length;i++) {
 			double[] minMax = gsrResistanceKohmsMinMax[i];
@@ -663,7 +697,7 @@ public class SensorGSR extends AbstractSensor {
 		}
 
 		double rFeedback = gsrRefResistorsKohms[range];
-		double volts = ((rFeedback / gsrkOhms) + 1.0) * 0.5;
+		double volts = ((rFeedback / gsrkOhms) + 1.0) * gsrAmplifierRefVoltage;
 		
 		int gsrUncalibratedData = SensorADC.uncalibrateAdcChannelFromVolts(volts, microcontrollerAdcProperties);
 		//Add range
@@ -775,6 +809,15 @@ public class SensorGSR extends AbstractSensor {
 
 	public void setCurrentGsrUncalLimitRange3(int currentGsrUncalLimitRange3) {
 		this.currentGsrUncalLimitRange3 = currentGsrUncalLimitRange3;
+	}
+
+	public double getCurrentGsrAmplifierRefVoltage() {
+		return currentGsrAmplifierRefVoltage;
+	}
+
+
+	public void setCurrentGsrAmplifierRefVoltage(double currentGsrAmplifierRefVoltage) {
+		this.currentGsrAmplifierRefVoltage = currentGsrAmplifierRefVoltage;
 	}
 
 //	@Deprecated
