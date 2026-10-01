@@ -120,6 +120,16 @@ public class ConfigByteLayoutShimmerGq802154 extends ConfigByteLayout implements
 
 	public int lengthRadioConfig = 7;
 
+	/**
+	 * A NeuroLynQ node's PPG channels: bit 0 green, 1 IR, 2 red (SensorPPGNeuroLynQ.MASK_*).
+	 * The byte after the radio settings, which no GQ reads; a node reads it when a session
+	 * opens and writes it into each file's header byte 15 (verisense-firmware
+	 * gq_file_header.c, IM_PPG_MASK). 0xFF, a byte never written, and 0 both mean green
+	 * only, so an image built from zeros configures a node green only.
+	 */
+	public int idxNeuroLynQPpgMask =              128+128+7; // 1byte
+	public int maskNeuroLynQPpgMask =             0x07;
+
 	
 	/**
 	 * Hold the Shimmer3's microcontroller information memory layout. This
@@ -236,6 +246,7 @@ public class ConfigByteLayoutShimmerGq802154 extends ConfigByteLayout implements
 		mapOfByteDescriptions.put(idxSrRadioMyAddress+1, "RadioMyAddress_LSB");
 		mapOfByteDescriptions.put(idxSrRadioResponseWindow, "RadioResponseWindow_MSB");
 		mapOfByteDescriptions.put(idxSrRadioResponseWindow+1, "RadioResponseWindow_LSB");
+		mapOfByteDescriptions.put(idxNeuroLynQPpgMask, "NeuroLynQPpgMask");
 		
 		return mapOfByteDescriptions;
 	}

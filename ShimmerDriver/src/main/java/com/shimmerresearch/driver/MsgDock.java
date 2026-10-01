@@ -76,6 +76,10 @@ public class MsgDock {
 	public final static int MSG_ID_DOCK_JOB_STARTED_PER_DOCK = 56;
 	public final static int MSG_ID_DOCK_JOB_SUCCESS_PER_DOCK = 57;
 	public final static int MSG_ID_DOCK_JOB_FAIL_PER_DOCK = 58;
+
+	/** A NeuroLynQ node's sessions coming off it during an SD scan, as it has no card:
+	 * {@link #mBytesDone} of {@link #mBytesTotal} (DEV-1061) */
+	public final static int MSG_ID_DOCK_NODE_DOWNLOAD_PROGRESS = 60;
 	
 	public final static int MSG_ID_DOCKMANAGER_INITIALIZED_SUCCESS = 91;
 	public final static int MSG_ID_DOCKMANAGER_INITIALIZED_FAIL = 92;
@@ -242,6 +246,7 @@ public class MsgDock {
         aMap.put(MSG_ID_DOCK_JOB_STARTED_PER_DOCK, "MSG_ID_DOCK_JOB_STARTED_PER_DOCK");
         aMap.put(MSG_ID_DOCK_JOB_SUCCESS_PER_DOCK, "MSG_ID_DOCK_JOB_SUCCESS_PER_DOCK");
         aMap.put(MSG_ID_DOCK_JOB_FAIL_PER_DOCK, "MSG_ID_DOCK_JOB_FAIL_PER_DOCK");
+        aMap.put(MSG_ID_DOCK_NODE_DOWNLOAD_PROGRESS, "MSG_ID_DOCK_NODE_DOWNLOAD_PROGRESS");
         
         aMap.put(MSG_ID_DOCKMANAGER_INITIALIZED_SUCCESS, "MSG_ID_DOCKMANAGER_INITIALIZED_SUCCESS");
         aMap.put(MSG_ID_DOCKMANAGER_INITIALIZED_FAIL, "MSG_ID_DOCKMANAGER_INITIALIZED_FAIL");
@@ -346,6 +351,9 @@ public class MsgDock {
 	public int mFwImageTotalSize = 0;
 	public int mFwImageWriteProgress = 0;
 	public float mFwImageWriteSpeed = 0;
+	/** A NeuroLynQ node's download (MSG_ID_DOCK_NODE_DOWNLOAD_PROGRESS): bytes read so far, and in all */
+	public long mBytesDone = 0;
+	public long mBytesTotal = 0;
 	public String mMessage = "";
 	public double mValue;
 	/** Just used for Shimmer4 BSL programming as each stage takes longer no needs more GUI feedback */

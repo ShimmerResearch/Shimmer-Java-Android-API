@@ -285,7 +285,9 @@ public class ShimmerVerObject implements Serializable {
 					|| UtilShimmer.compareVersions(mHardwareVersion,mFirmwareIdentifier,mFirmwareVersionMajor,mFirmwareVersionMinor,mFirmwareVersionInternal,HW_ID.SHIMMER_3,FW_ID.LOGANDSTREAM,0,5,4)
 					|| UtilShimmer.compareVersions(mHardwareVersion,mFirmwareIdentifier,mFirmwareVersionMajor,mFirmwareVersionMinor,mFirmwareVersionInternal,HW_ID.SHIMMER_3,FW_ID.SDLOG,0,11,5)
 					|| mHardwareVersion==HW_ID.SHIMMER_GQ_802154_NR 
-					|| mHardwareVersion==HW_ID.SHIMMER_GQ_802154_LR){
+					|| mHardwareVersion==HW_ID.SHIMMER_GQ_802154_LR
+					// A NeuroLynQ node logs a GQ's file, whose records carry 3-byte timestamps
+					|| isVerisenseNeuroLynQ()){
 				mFirmwareVersionCode = 6;
 			}
 			else if(UtilShimmer.compareVersions(mHardwareVersion,mFirmwareIdentifier,mFirmwareVersionMajor,mFirmwareVersionMinor,mFirmwareVersionInternal,HW_ID.SHIMMER_3,FW_ID.BTSTREAM,0,5,0)
@@ -520,6 +522,31 @@ public class ShimmerVerObject implements Serializable {
 			return true;
 		}
 		return false;
+	}
+
+	/**
+	 * As {@link #isSupportedSdDataImport(int)}, and a NeuroLynQ node too: it logs GQ files
+	 * under its own hardware ID, 61 to 68, which only the firmware ID tells apart from a
+	 * stock Verisense's (DEV-1061).
+	 */
+	public static boolean isSupportedSdDataImport(int hwVer, int fwId) {
+		return isSupportedSdDataImport(hwVer) || isVerisenseNeuroLynQ(hwVer, fwId);
+	}
+
+	/**
+	 * Whether the host may try to download logged sessions from the device over its dock
+	 * link, as a NeuroLynQ node's are: it has no SD card, and holds its sessions in NAND
+	 * behind the `$` storage component (verisense-firmware
+	 * docs/VERISENSE_NEUROLYNQ_STORAGE.md section 7). A node whose firmware predates storage
+	 * reports the same version, so this says only that it may: the storage INFO request
+	 * answering BAD_CMD is what says it cannot.
+	 */
+	public boolean isSupportedNodeStorageDownload() {
+		return isSupportedNodeStorageDownload(getHardwareVersion(), getFirmwareIdentifier());
+	}
+
+	public static boolean isSupportedNodeStorageDownload(int hwVer, int fwId) {
+		return isVerisenseNeuroLynQ(hwVer, fwId);
 	}
 
 
