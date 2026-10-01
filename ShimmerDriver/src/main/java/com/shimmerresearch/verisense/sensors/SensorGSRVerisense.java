@@ -87,8 +87,9 @@ public class SensorGSRVerisense extends SensorGSR {
 			562.0, 		//Range 2
 			1740.0}; 	//Range 3
 	/**
-	 * Range-3 codes below this are raised to it before calibration so that an open circuit reads
-	 * as open. It has to be the first code above the 0.5 V amplifier reference that
+	 * Codes below this, on any range, decode as range 3 at it so that an open circuit reads as open
+	 * ({@link SensorGSR#calibrateGsrDataToKOhmsWithOpenCircuitLimit}; range 3 only until DEV-1070).
+	 * It has to be the first code above the 0.5 V amplifier reference that
 	 * {@link SensorGSR#calibrateGsrDataToKOhmsUsingAmplifierEq} divides by: 0.5 V is code 1137.5 at
 	 * this front end's 1.8 V full scale, so 1138, as 683 is at the Shimmer3's 3.0 V. Anything lower
 	 * decodes to a negative resistance, which the auto-range nudge floors at 8 kOhm, reading an open

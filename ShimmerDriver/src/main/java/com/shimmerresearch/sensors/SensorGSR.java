@@ -52,7 +52,13 @@ public class SensorGSR extends AbstractSensor {
 			{63.0, 220.0}, 		//Range 1
 			{220.0, 680.0}, 	//Range 2
 			{680.0, 4700.0}}; 	//Range 3
-	public static final int GSR_UNCAL_LIMIT_RANGE3 = 683; 	
+	/**
+	 * The first code above the 0.5 V amplifier reference at the Shimmer3's 3.0 V full scale (0.5 V is
+	 * code 682.5). A code below it, on any range, is an open circuit and decodes as range 3 at this
+	 * limit: see {@link #calibrateGsrDataToKOhmsWithOpenCircuitLimit}. Also used by the ShimmerGQ and
+	 * the Verisense GSR+ (SR62).
+	 */
+	public static final int GSR_UNCAL_LIMIT_RANGE3 = 683;
 	
 	public class GuiLabelConfig{
 		public static final String GSR_RANGE = "GSR Range";
@@ -354,7 +360,8 @@ public class SensorGSR extends AbstractSensor {
 					}
 //					gsrAdcValueUnCal = SensorGSR.nudgeGsrADC(gsrAdcValueUnCal, currentGSRRange);
 
-					gsrResistanceKOhms = SensorGSR.calibrateGsrDataToKOhmsUsingAmplifierEq(gsrAdcValueUnCal, currentGSRRange, microcontrollerAdcProperties, currentGsrRefResistorsKohms);
+					//...and on ranges 0-2 too, where only the resistance changes (DEV-1070)
+					gsrResistanceKOhms = SensorGSR.calibrateGsrDataToKOhmsWithOpenCircuitLimit(gsrAdcValueUnCal, currentGSRRange, currentGsrUncalLimitRange3, microcontrollerAdcProperties, currentGsrRefResistorsKohms);
 					gsrResistanceKOhms = SensorGSR.nudgeGsrResistance(gsrResistanceKOhms, getGSRRange(), currentGsrResistanceKohmsMinMax);
 					gsrConductanceUSiemens = SensorGSR.convertkOhmToUSiemens(gsrResistanceKOhms);
 //				} else {
@@ -607,6 +614,37 @@ public class SensorGSR extends AbstractSensor {
 		double volts = SensorADC.calibrateAdcChannelToVolts(gsrUncalibratedData, microcontrollerAdcProperties);
 		double rSource = rFeedback/((volts/0.5)-1.0);
 		return rSource;
+	}
+
+	/**
+	 * {@link #calibrateGsrDataToKOhmsUsingAmplifierEq}, reading an open circuit as open on every
+	 * range (DEV-1070).
+	 * <p>
+	 * The amplifier equation has no positive solution at or below the amplifier's reference: no skin
+	 * resistance can pull the output under it, so a code there means the electrodes are open. Range 3
+	 * has long raised such a code to its open-circuit limit, the first code above the reference, so
+	 * that an open circuit decodes as thousands of MOhm. Ranges 0-2 did not, and in auto-range they
+	 * see these codes too. When the electrodes come off, the device climbs one range at a time, and
+	 * the firmware repeats the sample that triggered each switch through the 80 ms settling time,
+	 * tagged with the range it was measured on. On ranges 0-2 the equation gave those samples a
+	 * negative resistance, which {@link #nudgeGsrResistance} floors at 8 kOhm: the highest
+	 * conductance the device can report, for an open circuit.
+	 * <p>
+	 * So a code below the limit is decoded as range 3 at the limit, whatever range it was measured
+	 * on, and an open circuit reads the same on every range as the settled range 3 does. The 8 kOhm
+	 * floor can then no longer be reached, because range 0 at full scale already decodes to just
+	 * above it (8.04 kOhm). Codes at or above the limit decode on their own range, as before. The
+	 * test compares codes rather than volts, so it does not depend on which reference the equation
+	 * divides by.
+	 *
+	 * @param gsrUncalLimitRange3 the front end's range-3 open-circuit limit: {@link #GSR_UNCAL_LIMIT_RANGE3},
+	 *        or {@code SensorGSRVerisense.VERISENSE_PULSE_PLUS_GSR_UNCAL_LIMIT_RANGE3} on gen-2
+	 */
+	public static double calibrateGsrDataToKOhmsWithOpenCircuitLimit(double gsrUncalibratedData, int range, int gsrUncalLimitRange3, MICROCONTROLLER_ADC_PROPERTIES microcontrollerAdcProperties, double[] gsrRefResistorsKohms){
+		if(gsrUncalibratedData<gsrUncalLimitRange3) {
+			return calibrateGsrDataToKOhmsUsingAmplifierEq(gsrUncalLimitRange3, 3, microcontrollerAdcProperties, gsrRefResistorsKohms);
+		}
+		return calibrateGsrDataToKOhmsUsingAmplifierEq(gsrUncalibratedData, range, microcontrollerAdcProperties, gsrRefResistorsKohms);
 	}
 
 	/**TODO test method no functioning properly yet
