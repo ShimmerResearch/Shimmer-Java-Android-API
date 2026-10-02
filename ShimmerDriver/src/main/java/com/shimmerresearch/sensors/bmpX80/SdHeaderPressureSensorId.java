@@ -1,5 +1,7 @@
 package com.shimmerresearch.sensors.bmpX80;
 
+import java.io.Serializable;
+
 import com.shimmerresearch.driver.ShimmerObject.PRESSURE_SENSOR_ID;
 import com.shimmerresearch.driverUtilities.ShimmerVerDetails.FW_ID;
 import com.shimmerresearch.driverUtilities.ShimmerVerDetails.HW_ID;
@@ -24,7 +26,10 @@ import com.shimmerresearch.driverUtilities.UtilShimmer;
  * LogAndStream_Shimmer3 v1.01.006. The two version lines overlap, so the gate
  * checks the hardware version too.
  */
-public class SdHeaderPressureSensorId {
+public class SdHeaderPressureSensorId implements Serializable {
+
+	// ShimmerObject holds one, and ShimmerPC.deepClone() serialises the device
+	private static final long serialVersionUID = 1258143216796546316L;
 
 	public static final int SD_HEADER_INDEX = 224;
 

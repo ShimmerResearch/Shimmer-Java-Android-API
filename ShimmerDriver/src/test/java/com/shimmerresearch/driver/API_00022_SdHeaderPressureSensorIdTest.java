@@ -2,6 +2,11 @@ package com.shimmerresearch.driver;
 
 import static org.junit.Assert.*;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
+
 import org.junit.Test;
 
 import com.shimmerresearch.driver.ShimmerObject.PRESSURE_SENSOR_ID;
@@ -150,5 +155,27 @@ public class API_00022_SdHeaderPressureSensorIdTest {
 		// Other hardware
 		assertFalse(SdHeaderPressureSensorId.isSupported(new ShimmerVerObject(HW_ID.SHIMMER_4_SDK, FW_ID.LOGANDSTREAM, 1, 1, 18)));
 		assertFalse(SdHeaderPressureSensorId.isSupported(null));
+	}
+
+	private static SdHeaderPressureSensorId serialiseAndRead(SdHeaderPressureSensorId id) throws Exception {
+		ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+		try (ObjectOutputStream out = new ObjectOutputStream(bytes)) {
+			out.writeObject(id);
+		}
+		try (ObjectInputStream in = new ObjectInputStream(new ByteArrayInputStream(bytes.toByteArray()))) {
+			return (SdHeaderPressureSensorId) in.readObject();
+		}
+	}
+
+	/** ShimmerObject holds one, and ShimmerPC.deepClone() serialises the device */
+	@Test
+	public void survivesSerialisation() throws Exception {
+		assertKnown(serialiseAndRead(SdHeaderPressureSensorId.parse(S3R_GATE, 0x83)), PRESSURE_SENSOR_ID.BMP581, true);
+		assertUnknown(serialiseAndRead(SdHeaderPressureSensorId.parse(S3R_GATE, 0x04)));
+		assertAbsent(serialiseAndRead(SdHeaderPressureSensorId.parse(S3R_GATE, 0xFF)));
+		assertEquals(STATE.NOT_FITTED, serialiseAndRead(SdHeaderPressureSensorId.parse(S3_GATE, 0xFE)).getState());
+
+		SdHeaderPressureSensorId bmp280 = SdHeaderPressureSensorId.parse(S3_GATE, 0x01);
+		assertEquals(bmp280.toString(), serialiseAndRead(bmp280).toString());
 	}
 }

@@ -2058,6 +2058,12 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 					calibratedData[iUP]=bmp180caldata[0]/1000;
 					calibratedDataUnits[iUT]=CHANNEL_UNITS.DEGREES_CELSIUS;
 					calibratedDataUnits[iUP]=CHANNEL_UNITS.KPASCAL;
+				} else if (mEnableCalibration){
+					// The SD header names a sensor this parser cannot calibrate, or
+					// none fitted. The multimap has no CAL entry, so it reads NaN;
+					// leaving the arrays at 0 would look like a real reading.
+					calibratedData[iUT]=Double.NaN;
+					calibratedData[iUP]=Double.NaN;
 				}
 			}
 
