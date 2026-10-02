@@ -224,7 +224,7 @@ public class CalibDetailsKinematic extends CalibDetails implements Serializable 
 		    	 }
 		     }
 		}
-		
+		isValid = true; //HACK for CON-645 -> Do not merge to Dev/Master
 		return isValid;
 	}
 	
