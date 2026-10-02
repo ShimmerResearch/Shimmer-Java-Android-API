@@ -255,6 +255,25 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 		 * "1.04.024" is stale). The 36-byte total header = 4 (index+length) + 32 config.
 		 */
 		public static final ShimmerVerObject CCF_GEN2 = new ShimmerVerObject(FW_ID.UNKNOWN, 2, 0, 4);
+		/**
+		 * The VD6283 effective sample-rate index is mirrored into payload header
+		 * byte 30 bits 6:3. Header LENGTH is unchanged (still 32 bytes), so unlike
+		 * the other entries here this one does not affect where anything is read
+		 * from.
+		 * <p>
+		 * DIAGNOSTIC USE ONLY - no parsing decision keys on it. The rate field is
+		 * self-describing: earlier firmware always wrote zero into those bits, and
+		 * this firmware writes the EFFECTIVE index, which is never zero while light
+		 * blocks exist. So a parser can simply ask whether the field is set. This
+		 * constant exists to tell "old recording" apart from "new recording, but
+		 * the firmware failed to populate the field", which is a bug worth
+		 * reporting rather than silently tolerating.
+		 * <p>
+		 * PLACEHOLDER: confirm against the firmware release that ships the change
+		 * (expected v2.02.000, DEV-1011). Because nothing parses on it, a wrong
+		 * value here can only mis-word a warning.
+		 */
+		public static final ShimmerVerObject CCF_GEN2_LIGHT_RATE = new ShimmerVerObject(FW_ID.UNKNOWN, 2, 2, 0);
 	}
 
 	public static class FW_SPECIAL_VERSIONS {
@@ -724,6 +743,14 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 	}
 
 	/**
+	 * See {@link FW_CHANGES#CCF_GEN2_LIGHT_RATE} - diagnostic only, no parsing
+	 * decision keys on this.
+	 */
+	public boolean isPayloadDesignV14orAbove() {
+		return PayloadContentsDetails.isPayloadDesignV14orAbove(getShimmerVerObject());
+	}
+
+	/**
 	 * Whether a given Verisense hardware revision is second-generation
 	 * (SR68-9/10, SR61-5/6). Mirrors the TypeScript SDK
 	 * (shimmer-web-sdk: hardwareModels.ts {@code isVerisenseSecondGenerationHardware})
@@ -1062,21 +1089,33 @@ public class VerisenseDevice extends ShimmerDevice implements Serializable{
 			sb.append("}");
 		} else if(sensorClassKey==AbstractSensor.SENSORS.VD6283
 				&& isSensorEnabled(Configuration.Verisense.SENSOR_ID.VD6283)) {
-			// Second-generation ambient light. The configured sample rate isn't stored
-			// in the payload header, so only the calculated (achieved) rate is reported.
+			// Second-generation ambient light. From FW v2.02.000 the configured rate
+			// is in the payload header (byte 30 bits 6:3) and is reported like every
+			// other sensor; for earlier recordings it was stored nowhere, so only the
+			// calculated (achieved) rate can be given.
 			SensorVD6283 sensorVd6283 = getSensorVD6283();
 
-			sb.append(sensorClassKey.toString());
-			sb.append(" {Sampling Rate [");
-			sb.append(SENSOR_CONFIG_STRINGS.SAMPLING_RATE_CALCULATED);
-			if(!Double.isNaN(calculatedSamplingRate)) {
-				sb.append(UtilVerisenseDriver.formatDoubleToNdecimalPlaces(calculatedSamplingRate, 3));
-				sb.append(" ");
-				sb.append(CHANNEL_UNITS.FREQUENCY);
+			if(sensorVd6283.isConfiguredRateKnown()) {
+				// The CONFIGURED rate, not getRateFreq()'s exposure-clamped one. This is
+				// the field a user reads to check what they asked the device to do, so a
+				// 20 Hz configuration must not print as 10 Hz merely because the exposure
+				// cannot sustain it. The clamp still governs block timing and the gap
+				// window; Exposure is on this same line for anyone deriving the bound.
+				sb.append(generateCalcSamplingRateConfigStr(sensorClassKey, sensorVd6283.getRate().freqHz, calculatedSamplingRate));
 			} else {
-				sb.append(UtilVerisenseDriver.UNAVAILABLE);
+				sb.append(sensorClassKey.toString());
+				sb.append(" {Sampling Rate [");
+				sb.append(SENSOR_CONFIG_STRINGS.SAMPLING_RATE_CALCULATED);
+				if(!Double.isNaN(calculatedSamplingRate)) {
+					sb.append(UtilVerisenseDriver.formatDoubleToNdecimalPlaces(calculatedSamplingRate, 3));
+					sb.append(" ");
+					sb.append(CHANNEL_UNITS.FREQUENCY);
+				} else {
+					sb.append(UtilVerisenseDriver.UNAVAILABLE);
+				}
+				sb.append("]; ");
 			}
-			sb.append("]; Gain = ");
+			sb.append("Gain = ");
 			sb.append(UtilVerisenseDriver.formatDoubleToNdecimalPlaces(sensorVd6283.getGain(), 2));
 			sb.append("x; Exposure = ");
 			sb.append(UtilVerisenseDriver.formatDoubleToNdecimalPlaces(sensorVd6283.getExposureUs()/1000.0, 1));

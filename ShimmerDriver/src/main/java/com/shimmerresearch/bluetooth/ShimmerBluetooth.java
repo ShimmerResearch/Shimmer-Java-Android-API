@@ -1663,27 +1663,8 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 				printLogDataForDebugging("BMP280 CALIB Received:\t" + UtilShimmer.bytesToHexStringWithSpacesFormatted(pressureResoRes));
 			}
 		} else if(responseCommand==PRESSURE_CALIBRATION_COEFFICIENTS_RESPONSE){
-			byte[] pressureResoRes = null;
-			byte[] filteredByteArray = null;
-			if(mSensorBMPX80.mSensorType.equals(SENSORS.BMP390)){
-				pressureResoRes = new byte[23]; //21 bytes + 2
-				pressureResoRes = readBytes(23, responseCommand);
-				printLogDataForDebugging("BMP390 CALIB Received:\t" + UtilShimmer.bytesToHexStringWithSpacesFormatted(pressureResoRes));
-			}else if(mSensorBMPX80.mSensorType.equals(SENSORS.BMP280)){
-				pressureResoRes = new byte[26]; //24 bytes + 2
-				pressureResoRes = readBytes(26, responseCommand);
-				printLogDataForDebugging("BMP280 CALIB Received:\t" + UtilShimmer.bytesToHexStringWithSpacesFormatted(pressureResoRes));
-			}else if(mSensorBMPX80.mSensorType.equals(SENSORS.BMP180)){
-				pressureResoRes = new byte[24]; //22 bytes + 2
-				pressureResoRes = readBytes(24, responseCommand);
-				printLogDataForDebugging("BMP180 CALIB Received:\t" + UtilShimmer.bytesToHexStringWithSpacesFormatted(pressureResoRes));
-			}
-			
-			if(pressureResoRes!=null){
-				filteredByteArray = Arrays.copyOfRange(pressureResoRes, 2, pressureResoRes.length);
-				retrievePressureCalibrationParametersFromPacket(filteredByteArray,CALIB_READ_SOURCE.LEGACY_BT_COMMAND);
-			}
-		} 
+			processPressureCalibCoefficientsResponse();
+		}
 		else if(responseCommand==EXG_REGS_RESPONSE){
 			delayForBtResponse(300); // Wait to ensure the packet has been fully received
 			byte[] bufferAns = readBytes(11, responseCommand);
@@ -3388,11 +3369,92 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 				}
 			}
 		} else if (getHardwareVersion() == HW_ID.SHIMMER_3R) {
-			// BMP581 self-compensates and has no coefficients; its firmware NACKs
-			// GET_PRESSURE_CALIBRATION_COEFFICIENTS_COMMAND, so don't send it.
-			if (!isSupportedBmp581()) {
+			// LogAndStream_Shimmer3R v1.01.007+ answers with the fitted sensor's ID
+			// ([A6][01][03] for a BMP581), which confirms or overrides the
+			// SR-number rule. v1.01.006 is the one version that NACKs it on a
+			// BMP581, and without NACK handling an unanswered command times out
+			// and drops the connection - so skip it there and let the SR-number
+			// rule stand. The rule's firmware guard (>= v1.01.006) makes "rule
+			// says BMP581 and firmware < v1.01.007" exactly v1.01.006.
+			boolean isBmp581PerSrNumber = isSupportedBmp581(getShimmerVerObject(), getExpansionBoardDetails());
+			boolean isFwWithInBandPressureSensorId = getShimmerVerObject().compareVersions(FW_ID.LOGANDSTREAM, 1, 1, 7);
+			if (!isBmp581PerSrNumber || isFwWithInBandPressureSensorId) {
 				writeInstruction(GET_PRESSURE_CALIBRATION_COEFFICIENTS_COMMAND);
 			}
+		}
+	}
+
+	/**
+	 * Parses a PRESSURE_CALIBRATION_COEFFICIENTS_RESPONSE, laid out as
+	 * [0xA6][len = 1+n][sensorId][n coefficient bytes] (log-and-stream-common
+	 * Comms/shimmer_bt_uart.c). The response byte has already been read.
+	 * <p>
+	 * The length byte, not the sensor the driver assumed, decides how much is
+	 * read, so the stream stays in step whatever the Shimmer sends. The length
+	 * is then checked against the sensor ID, and a mismatch is rejected rather
+	 * than applied. On a Shimmer3R the sensor ID is authoritative: it overrides
+	 * the SR-number rule in either direction (see
+	 * {@link #setPressureSensorIdInBand(int)}). On a Shimmer3 the coefficients
+	 * are applied only if they are for the sensor class in use.
+	 */
+	protected void processPressureCalibCoefficientsResponse() {
+		byte[] length = readBytes(1, PRESSURE_CALIBRATION_COEFFICIENTS_RESPONSE);
+		if(length==null){
+			return;
+		}
+		int lengthToRead = length[0]&0xFF;
+		if(lengthToRead==0){
+			printLogDataForDebugging("PRESSURE_CALIBRATION_COEFFICIENTS_RESPONSE rejected: zero length, no sensor ID");
+			return;
+		}
+		byte[] payload = readBytes(lengthToRead, PRESSURE_CALIBRATION_COEFFICIENTS_RESPONSE);
+		if(payload==null){
+			return;
+		}
+
+		int sensorId = payload[0]&0xFF;
+		byte[] coefficients = Arrays.copyOfRange(payload, 1, payload.length);
+		String bytesReceived = UtilShimmer.bytesToHexStringWithSpacesFormatted(ArrayUtils.addAll(length, payload));
+
+		int expectedLength = getPressureCalibCoefficientByteLength(sensorId);
+		if(expectedLength<0 || coefficients.length!=expectedLength){
+			printLogDataForDebugging("PRESSURE_CALIBRATION_COEFFICIENTS_RESPONSE rejected: sensor ID " + sensorId + " with " + coefficients.length
+					+ " coefficient bytes, expected " + expectedLength + ":\t" + bytesReceived);
+			return;
+		}
+
+		SENSORS sensorReported = null;
+		switch(sensorId){
+			case PRESSURE_SENSOR_ID.BMP180:
+				sensorReported = SENSORS.BMP180;
+				break;
+			case PRESSURE_SENSOR_ID.BMP280:
+				sensorReported = SENSORS.BMP280;
+				break;
+			case PRESSURE_SENSOR_ID.BMP390:
+				sensorReported = SENSORS.BMP390;
+				break;
+			case PRESSURE_SENSOR_ID.BMP581:
+				sensorReported = SENSORS.BMP581;
+				break;
+		}
+		printLogDataForDebugging(sensorReported + " CALIB Received:\t" + bytesReceived);
+
+		if(getHardwareVersion()==HW_ID.SHIMMER_3R){
+			if(sensorId!=PRESSURE_SENSOR_ID.BMP390 && sensorId!=PRESSURE_SENSOR_ID.BMP581){
+				printLogDataForDebugging("PRESSURE_CALIBRATION_COEFFICIENTS_RESPONSE rejected: a Shimmer3R carries a BMP390 or BMP581, not a " + sensorReported);
+				return;
+			}
+			setPressureSensorIdInBand(sensorId);
+		}
+		else if(!mSensorBMPX80.mSensorType.equals(sensorReported)){
+			printLogDataForDebugging("PRESSURE_CALIBRATION_COEFFICIENTS_RESPONSE rejected: coefficients are for a " + sensorReported + " but the driver is using a " + mSensorBMPX80.mSensorType);
+			return;
+		}
+
+		// A BMP581 self-compensates, so it has no coefficients to apply
+		if(coefficients.length>0){
+			retrievePressureCalibrationParametersFromPacket(coefficients,CALIB_READ_SOURCE.LEGACY_BT_COMMAND);
 		}
 	}
 
