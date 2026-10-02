@@ -2626,6 +2626,9 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 		
 		if (isBtCrcModeSupported()) {
 			writeBtCommsCrcMode(DEFAULT_BT_CRC_MODE_IF_SUPPORTED);
+		} else if (DEFAULT_BT_CRC_MODE_IF_SUPPORTED!=BT_CRC_MODE.OFF && isBtCrcClearedWhenSensingStops()) {
+			printLogDataForDebugging("Link CRC left off: " + getFirmwareVersionParsed()
+					+ " on a Shimmer3R drops it whenever sensing stops; v1.0.11 and later keep it");
 		}
 		
 		if (RN4678_ERROR_DETECTION_ENABLED && isSupportedRn4678ErrorDetection()) {
@@ -5023,8 +5026,17 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 		return writeBtCommsCrcMode(BT_CRC_MODE.TWO_BYTE_CRC);
 	}
 
+	/**
+	 * Queues SET_CRC_COMMAND. Turning a CRC on is refused wherever
+	 * {@link #isBtCrcModeSupported()} is false. Turning it off is refused only by
+	 * firmware without the command.
+	 *
+	 * @param btCrcMode
+	 * @return false if nothing was queued
+	 */
 	public boolean writeBtCommsCrcMode(BT_CRC_MODE btCrcMode) {
-		if (getFirmwareVersionCode() >= 8) {
+		boolean isAllowed = btCrcMode==BT_CRC_MODE.OFF ? getFirmwareVersionCode() >= 8 : isBtCrcModeSupported();
+		if (isAllowed) {
 			writeInstruction(new byte[] { SET_CRC_COMMAND, (byte) (btCrcMode.ordinal()) });
 			return true;
 		}
@@ -5034,6 +5046,8 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 	/**
 	 * Sets the default mode that should be used when establishing a connection to
 	 * the Shimmer if the current firmware version supports the CRC feature.
+	 * Shimmer3R LogAndStream before v1.00.011 counts as not supporting it; see
+	 * {@link #isBtCrcModeSupported()}.
 	 * 
 	 * @param btCommsCrcMode
 	 */
@@ -5080,11 +5094,42 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 	/**
 	 * Response only valid if a connection has been established and the firmware
 	 * version has been read from the sensor.
+	 * <p>
+	 * False on Shimmer3R LogAndStream before v1.00.011 although it has
+	 * SET_CRC_COMMAND, because it drops the CRC whenever sensing stops; see
+	 * {@link #isBtCrcClearedWhenSensingStops()}.
 	 * 
 	 * @return
 	 */
 	public boolean isBtCrcModeSupported() {
-		return getFirmwareVersionCode() >= 8;
+		return getFirmwareVersionCode() >= 8 && !isBtCrcClearedWhenSensingStops();
+	}
+
+	/**
+	 * True for Shimmer3R LogAndStream before v1.00.011. Those releases turn the
+	 * Bluetooth link CRC off by themselves whenever sensing stops
+	 * (S4Sens_stopSensing, s4_sensing.c:354 at v1.00.010): after STOP_STREAMING,
+	 * STOP_SDBT or STOP_LOGGING, and when the user button or docking ends SD
+	 * logging, without telling the host. The stop's own ACK still carries the CRC
+	 * and every reply after it is bare, so a host still expecting the CRC loses
+	 * sync after every stop, including stops it did not ask for. c8016de3 removed
+	 * the clear: v1.00.011 and later clear it only at startup and on disconnect,
+	 * and no Shimmer3 release clears it at a stop.
+	 * <p>
+	 * Shimmer3 and Shimmer3R LogAndStream version numbers overlap, so this follows
+	 * the hardware the device reports. The Shimmer3R v1.00.008 side build for
+	 * older Consensys reports a Shimmer3 and is let through, as it is by the web
+	 * SDK's keepsLinkCrcWhenSensingStops().
+	 * <p>
+	 * Derived from the firmware source; not yet run against a Shimmer3R on
+	 * v1.00.010 or earlier.
+	 *
+	 * @return
+	 */
+	public boolean isBtCrcClearedWhenSensingStops() {
+		return getHardwareVersion()==HW_ID.SHIMMER_3R
+				&& getFirmwareIdentifier()==FW_ID.LOGANDSTREAM
+				&& !isThisVerCompatibleWith(HW_ID.SHIMMER_3R, FW_ID.LOGANDSTREAM, 1, 0, 11);
 	}
 
 	/**** DISABLE FUNCTIONS *****/
