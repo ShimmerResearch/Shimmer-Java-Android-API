@@ -255,6 +255,28 @@ public class LiteProtocol extends AbstractCommsProtocol{
 	private void stopIoThread() {
 		if(mIOThread!=null){
 			mIOThread.stop=true;
+			// Bounded wait for the thread to actually exit its loop before dropping the
+			// reference. Guard against the self-join case: killConnection() can reach here
+			// synchronously from within IOThread.run()'s catch block (error-driven teardown),
+			// and a thread joining itself would just burn the full timeout.
+			if(Thread.currentThread() != mIOThread){
+				// Interrupt before joining: run() now exits promptly on
+				// Thread.currentThread().isInterrupted(), and any idle Thread.sleep()/
+				// queue poll() it's waiting in will wake immediately - making shutdown
+				// faster and more deterministic than waiting out the bounded join first.
+				mIOThread.interrupt();
+				try {
+					mIOThread.join(2000);
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+				}
+				if (mIOThread.isAlive()) {
+					// Still not terminated after the interrupt + bounded join - most likely
+					// blocked in a non-interruptible native serial read. Just warn; a second
+					// interrupt() here wouldn't unblock it either.
+					printLogDataForDebugging("Warning: IOThread did not terminate within join timeout; it may be blocked in a non-interruptible read");
+				}
+			}
 			mIOThread = null;
 		}
 	}
@@ -262,40 +284,66 @@ public class LiteProtocol extends AbstractCommsProtocol{
 	
 	public class IOThread extends Thread {
 		byte[] byteBuffer = {0};
-		public boolean stop = false;
+		public volatile boolean stop = false;
 		
-		public synchronized void run() {
-			while (!stop) {
+		/*
+		 * Deliberately NOT synchronized: Thread.join() locks this same Thread
+		 * instance, so a synchronized run() would block external stopIoThread()
+		 * callers on monitor entry (with no timeout) until the loop exits.
+		 */
+		public void run() {
+			while (!stop && !Thread.currentThread().isInterrupted()) {
+				boolean didWork = false;
 				try {
 					// Process Instruction on stack. is an instruction running? if not proceed
 					if(!isInstructionStackLock()){
-						processNextInstruction();
+						if(processNextInstruction()){
+							didWork = true;
+						}
 					}
-				
+
 					if(isStreaming()){
 						processWhileStreaming();
+						didWork = true;
 					}
 					else if(bytesAvailableToBeRead()){
+						didWork = true;
 						if(mWaitForAck) {
 							processNotStreamingWaitForAck();
-						} 
+						}
 						else if(mWaitForResponse) {
 							processNotStreamingWaitForResp();
-						} 
-						
+						}
+
 						processBytesAvailableAndInstreamSupported();
 					}
 				} catch (ShimmerException dE) {
 //					stop=true;
-					
+
 					killConnection(dE);
 //					e.printStackTrace();
 					//TODO send event up the ladder
 				}
-			} 
-		} 
-		
-		private void processNextInstruction() throws ShimmerException {
+
+				if(!didWork){
+					// Nothing useful happened this iteration (idle, not streaming, no pending
+					// instructions/bytes) - avoid busy-spinning and pegging a CPU core.
+					try {
+						Thread.sleep(2);
+					} catch (InterruptedException e) {
+						Thread.currentThread().interrupt();
+					}
+				}
+			}
+		}
+
+		/**
+		 * @return true if an instruction was found and processed (i.e. useful work was done),
+		 * or if this call already idle-paced the loop with its own threadSleep(50) below -
+		 * in that case reporting true here stops run()'s outer idle-sleep from stacking an
+		 * additional wait on top of this one.
+		 */
+		private boolean processNextInstruction() throws ShimmerException {
 			// check instruction stack, are there any other instructions left to be executed?
 			if(!getListofInstructions().isEmpty()) {
 				if(getListofInstructions().get(0)==null) {
@@ -387,16 +435,29 @@ public class LiteProtocol extends AbstractCommsProtocol{
 							}
 						}*/
 					}
-					
-					
+
+
 					mTransactionCompleted=false;
-				}
-			} 
-			else {
-				if (!isStreaming() && !bytesAvailableToBeRead()){
-					threadSleep(50);
+					return true;
 				}
 			}
+			else {
+				if (!isStreaming() && !bytesAvailableToBeRead()){
+					// No instruction pending and nothing else to do - wait here rather than
+					// busy-spinning. Report "did work" (true) so the caller's own idle sleep
+					// in run() doesn't stack an extra wait on top of this one.
+					// Not threadSleep(): that helper swallows InterruptedException without
+					// restoring the interrupt flag, which would defeat run()'s
+					// !Thread.currentThread().isInterrupted() loop-exit check.
+					try {
+						Thread.sleep(50);
+					} catch (InterruptedException e) {
+						Thread.currentThread().interrupt();
+					}
+					return true;
+				}
+			}
+			return false;
 		}
 
 		private void processWhileStreaming() throws ShimmerException {
