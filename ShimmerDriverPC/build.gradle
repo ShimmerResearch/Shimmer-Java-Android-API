@@ -126,3 +126,30 @@ shadowJar {
 
     mergeServiceFiles()  // Merges service files (if any)
 }
+
+// --- Native BLE library (ShimmerBLENativeLib/) -------------------------------------------------
+// Opt-in: './gradlew buildNative' needs a Rust toolchain, so it is not part of 'build'. It builds
+// the library for this machine only and copies it to where NativeBleLoader looks on the classpath.
+// The macOS library can only be built on a Mac; otherwise take it from the 'Native BLE library'
+// GitHub Actions workflow and unzip it into src/main/resources/.
+def nativeOs = org.gradle.internal.os.OperatingSystem.current()
+def nativeArch = System.getProperty('os.arch') in ['aarch64', 'arm64'] ? 'arm64' : 'x64'
+def nativePlatform = (nativeOs.isWindows() ? 'windows' : nativeOs.isMacOsX() ? 'macos' : 'linux') + '-' + nativeArch
+def nativeLibFile = System.mapLibraryName('shimmerble')
+def nativeCrateDir = file('../ShimmerBLENativeLib')
+def cargoInHome = new File(System.getProperty('user.home'), '.cargo/bin/' + (nativeOs.isWindows() ? 'cargo.exe' : 'cargo'))
+
+task cargoBuildNative(type: Exec) {
+    group = 'native'
+    description = 'Runs cargo build --release in ShimmerBLENativeLib/'
+    workingDir nativeCrateDir
+    commandLine(cargoInHome.exists() ? cargoInHome.absolutePath : 'cargo', 'build', '--release')
+}
+
+task buildNative(type: Copy) {
+    group = 'native'
+    description = "Builds the native BLE library and copies it to src/main/resources/native/${nativePlatform}/"
+    dependsOn cargoBuildNative
+    from new File(nativeCrateDir, "target/release/${nativeLibFile}")
+    into "src/main/resources/native/${nativePlatform}"
+}

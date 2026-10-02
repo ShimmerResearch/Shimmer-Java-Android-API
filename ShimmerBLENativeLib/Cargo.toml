@@ -1,0 +1,30 @@
+[package]
+name = "shimmerble"
+version = "0.1.0"
+edition = "2021"
+description = "In-process BLE transport for the Shimmer Java driver: btleplug behind a small JNI API"
+publish = false
+
+[lib]
+name = "shimmerble"
+# cdylib is the library Java loads; rlib lets the blecli tool share the same engine.
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "blecli"
+path = "tools/blecli.rs"  # not src/bin/: the repo .gitignore ignores every bin/ folder
+
+[dependencies]
+# Pinned exactly: btleplug is pre-1.0, so any minor release may break the API.
+btleplug = "=0.13.3"
+futures = "0.3"
+# 0.21.1 rather than 0.22: 0.22 reworked thread attachment, which this design never uses
+# (Java pulls events; Rust never calls into the JVM from its own threads).
+jni = "=0.21.1"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
+uuid = "1"
+
+[profile.release]
+codegen-units = 1
+lto = true
+strip = true

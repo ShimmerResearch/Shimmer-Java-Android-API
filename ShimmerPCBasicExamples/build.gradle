@@ -59,3 +59,30 @@ dependencies {
     implementation name: 'ShimmerBiophysicalProcessingLibrary_Rev_0_11'
     implementation 'com.parse.bolts:bolts-tasks:1.4.0'
 }
+
+// --- Native BLE examples (DEV-1132) ------------------------------------------------------------
+// Need the native library: run ./gradlew buildNative in ../ShimmerDriverPC first, or pass
+// -Dshimmer.ble.lib=<path>. On macOS, run from Terminal and allow Terminal to use Bluetooth.
+tasks.withType(JavaExec).configureEach {
+    // Forward the library override to the launched JVM.
+    if (System.getProperty('shimmer.ble.lib')) {
+        systemProperty 'shimmer.ble.lib', System.getProperty('shimmer.ble.lib')
+    }
+}
+
+task runBleCapture(type: JavaExec) {
+    group = 'native ble'
+    description = 'Runs the Shimmer Capture-style BLE example (ShimmerBLECaptureExample)'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.shimmerresearch.simpleexamples.ShimmerBLECaptureExample'
+}
+
+// Example: ./gradlew runBleTest --args="--device Shimmer3R-2F31 --tests connect,stream"
+task runBleTest(type: JavaExec) {
+    group = 'native ble'
+    description = 'Runs the BLE hardware test app; --args="--help" lists the options'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.shimmerresearch.simpleexamples.bletest.BleHardwareTestApp'
+    // The connection-loss test asks the operator to switch the device off and on.
+    standardInput = System.in
+}

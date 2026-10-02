@@ -1,0 +1,70 @@
+# Builds the shimmerble native BLE library (ShimmerBLENativeLib/) for each desktop platform.
+#
+# The macOS library can only be built on a Mac (Apple's SDK licence), so this is where it comes
+# from. Each artifact unzips to native/<platform>/<library>, the layout NativeBleLoader expects:
+# unzip into ShimmerDriverPC/src/main/resources/ to bundle it with the driver.
+#
+# Hosted runners have no Bluetooth, so this builds and compiles the tests; hardware testing is manual.
+name: Native BLE library
+
+on:
+  push:
+    paths:
+      - 'ShimmerBLENativeLib/**'
+      - '.github/workflows/native-ble.yml'
+  pull_request:
+    paths:
+      - 'ShimmerBLENativeLib/**'
+      - '.github/workflows/native-ble.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            platform: windows-x64
+            lib: shimmerble.dll
+            cli: blecli.exe
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            platform: macos-arm64
+            lib: libshimmerble.dylib
+            cli: blecli
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: ShimmerBLENativeLib
+    steps:
+      - uses: actions/checkout@v4
+
+      # rust-toolchain.toml pins the compiler version; this installs exactly that one.
+      - name: Install the pinned toolchain
+        run: |
+          rustup toolchain install
+          rustup target add ${{ matrix.target }}
+          rustc --version
+
+      - name: Test
+        run: cargo test --release --target ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Stage
+        run: |
+          out="$GITHUB_WORKSPACE/dist"
+          mkdir -p "$out/native/${{ matrix.platform }}" "$out/tools/${{ matrix.platform }}"
+          cp "target/${{ matrix.target }}/release/${{ matrix.lib }}" "$out/native/${{ matrix.platform }}/"
+          cp "target/${{ matrix.target }}/release/${{ matrix.cli }}" "$out/tools/${{ matrix.platform }}/"
+          ls -lR "$out"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shimmerble-${{ matrix.platform }}
+          path: dist/
