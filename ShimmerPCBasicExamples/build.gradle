@@ -86,3 +86,12 @@ task runBleTest(type: JavaExec) {
     // The connection-loss test asks the operator to switch the device off and on.
     standardInput = System.in
 }
+
+// DEV-1134: the I/O-free Shimmer3R protocol state machine on a real device.
+// Example: ./gradlew runProtocolLive --args="Shimmer3R-2F31 10"
+task runProtocolLive(type: JavaExec) {
+    group = 'native ble'
+    description = 'Drives a real Shimmer3R with the DEV-1134 protocol state machine over native BLE'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.shimmerresearch.simpleexamples.bletest.Shimmer3RProtocolLiveTest'
+}

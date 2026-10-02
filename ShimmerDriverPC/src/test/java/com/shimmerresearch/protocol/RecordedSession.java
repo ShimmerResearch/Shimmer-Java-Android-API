@@ -63,6 +63,54 @@ public class RecordedSession {
 		return mEntries;
 	}
 
+	/** This session with every RX entry split into one-byte notifications, at the same time. */
+	public RecordedSession splitIntoSingleBytes() {
+		List<Entry> split = new ArrayList<Entry>();
+		for (Entry e : mEntries) {
+			if (e.direction == Direction.TX) {
+				split.add(e);
+				continue;
+			}
+			for (byte b : e.bytes) {
+				split.add(new Entry(e.timeMs, Direction.RX, new byte[] { b }));
+			}
+		}
+		return new RecordedSession(split);
+	}
+
+	/** This session with one byte of the {@code n}th RX entry (counting from 0) XOR-ed with 0xFF. */
+	public RecordedSession corruptRx(int n, int byteIndex) {
+		List<Entry> copy = new ArrayList<Entry>();
+		int rx = 0;
+		for (Entry e : mEntries) {
+			if (e.direction == Direction.RX && rx++ == n) {
+				byte[] bytes = e.bytes.clone();
+				bytes[byteIndex] ^= (byte) 0xFF;
+				copy.add(new Entry(e.timeMs, Direction.RX, bytes));
+			} else {
+				copy.add(e);
+			}
+		}
+		return new RecordedSession(copy);
+	}
+
+	/** Index (among RX entries) of the first RX entry after the TX entry that starts with {@code opcode}. */
+	public int firstRxAfter(byte opcode) {
+		boolean seen = false;
+		int rx = 0;
+		for (Entry e : mEntries) {
+			if (e.direction == Direction.TX && e.bytes.length > 0 && e.bytes[0] == opcode) {
+				seen = true;
+			} else if (e.direction == Direction.RX) {
+				if (seen) {
+					return rx;
+				}
+				rx++;
+			}
+		}
+		return -1;
+	}
+
 	/** Loads a session from the test classpath, e.g. "/protocol/shimmer3r_...bytes.log". */
 	public static RecordedSession load(String resource) throws IOException {
 		InputStream in = RecordedSession.class.getResourceAsStream(resource);

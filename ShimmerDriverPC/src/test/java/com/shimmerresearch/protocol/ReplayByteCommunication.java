@@ -1,7 +1,6 @@
 package com.shimmerresearch.protocol;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.Executors;
@@ -9,7 +8,6 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
-import com.shimmerresearch.protocol.RecordedSession.Direction;
 import com.shimmerresearch.protocol.RecordedSession.Entry;
 import com.shimmerresearch.shimmer3.communication.ByteCommunication;
 import com.shimmerresearch.verisense.communication.ByteCommunicationListener;
@@ -17,33 +15,28 @@ import com.shimmerresearch.verisense.communication.ByteCommunicationListener;
 import jssc.SerialPortTimeoutException;
 
 /**
- * Plays a {@link RecordedSession} back to a driver: each command the driver writes is answered
- * with the bytes the real device sent after that command in the recording.
+ * Plays a {@link RecordedSession} back to a driver through its serial-port interface: each
+ * command the driver writes is answered with the bytes the real device sent (see
+ * {@link SessionResponder}), each delayed after the write as it was in the recording.
  * <p>
- * Commands are matched in order first. A command that is not next in the recording (for instance
- * one sent by a timer that fired at a different moment) is answered from its first occurrence
- * anywhere in the recording, and a command never recorded is logged in {@link #getUnanswered()}
- * and left unanswered. SET_RWC (0x8F) carries the PC clock, so only its opcode is compared.
+ * Delivering a whole answer at once is not equivalent: drivers clear their input around
+ * commands, which on real hardware happens before later bytes arrive.
  */
 public class ReplayByteCommunication implements ByteCommunication {
 
-	private static final byte SET_RWC_COMMAND = (byte) 0x8F;
-
-	private final List<Entry> mEntries;
+	private final SessionResponder mResponder;
 	private final LinkedBlockingQueue<Byte> mInput = new LinkedBlockingQueue<Byte>();
 	private final List<byte[]> mWritten = Collections.synchronizedList(new ArrayList<byte[]>());
-	private final List<byte[]> mUnanswered = Collections.synchronizedList(new ArrayList<byte[]>());
 	// A single thread, so answers are delivered in the order they are due.
 	private final ScheduledExecutorService mScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
 		Thread t = new Thread(r, "replay-rx");
 		t.setDaemon(true);
 		return t;
 	});
-	private int mCursor = 0;
 	private volatile boolean mOpen = false;
 
 	public ReplayByteCommunication(RecordedSession session) {
-		mEntries = session.getEntries();
+		mResponder = new SessionResponder(session);
 	}
 
 	/** Every command the driver wrote, in order. */
@@ -55,59 +48,7 @@ public class ReplayByteCommunication implements ByteCommunication {
 
 	/** Commands that had no recorded answer. */
 	public List<byte[]> getUnanswered() {
-		synchronized (mUnanswered) {
-			return new ArrayList<byte[]>(mUnanswered);
-		}
-	}
-
-	static boolean sameCommand(byte[] recorded, byte[] written) {
-		if (recorded.length == 0 || written.length == 0 || recorded[0] != written[0]) {
-			return false;
-		}
-		return written[0] == SET_RWC_COMMAND || Arrays.equals(recorded, written);
-	}
-
-	@Override
-	public synchronized boolean writeBytes(byte[] buffer) {
-		mWritten.add(buffer.clone());
-		int next = nextTx(mCursor);
-		if (next >= 0 && sameCommand(mEntries.get(next).bytes, buffer)) {
-			mCursor = enqueueAnswer(next);
-			return true;
-		}
-		for (int i = 0; i < mEntries.size(); i++) {
-			Entry e = mEntries.get(i);
-			if (e.direction == Direction.TX && sameCommand(e.bytes, buffer)) {
-				enqueueAnswer(i);
-				return true;
-			}
-		}
-		mUnanswered.add(buffer.clone());
-		return true;
-	}
-
-	/**
-	 * Schedules the RX entries that follow the TX at {@code txIndex}, each delayed after the write
-	 * as it was in the recording, and returns the index after them. Delivering a whole answer at
-	 * once is not equivalent: drivers clear their input around commands, which on real hardware
-	 * happens before later bytes arrive.
-	 */
-	private int enqueueAnswer(int txIndex) {
-		long txMs = mEntries.get(txIndex).timeMs;
-		int i = txIndex + 1;
-		for (; i < mEntries.size() && mEntries.get(i).direction == Direction.RX; i++) {
-			final byte[] bytes = mEntries.get(i).bytes;
-			long delay = Math.max(0, mEntries.get(i).timeMs - txMs);
-			mScheduler.schedule(new Runnable() {
-				@Override
-				public void run() {
-					for (byte b : bytes) {
-						mInput.add(b);
-					}
-				}
-			}, delay, TimeUnit.MILLISECONDS);
-		}
-		return i;
+		return mResponder.getUnanswered();
 	}
 
 	/** Stops delivering scheduled answers. */
@@ -115,13 +56,22 @@ public class ReplayByteCommunication implements ByteCommunication {
 		mScheduler.shutdownNow();
 	}
 
-	private int nextTx(int from) {
-		for (int i = from; i < mEntries.size(); i++) {
-			if (mEntries.get(i).direction == Direction.TX) {
-				return i;
-			}
+	@Override
+	public boolean writeBytes(byte[] buffer) {
+		mWritten.add(buffer.clone());
+		SessionResponder.Answer answer = mResponder.answer(buffer);
+		if (answer == null) {
+			return true;
 		}
-		return -1;
+		for (Entry rx : answer.rx) {
+			final byte[] bytes = rx.bytes;
+			mScheduler.schedule(() -> {
+				for (byte b : bytes) {
+					mInput.add(b);
+				}
+			}, Math.max(0, rx.timeMs - answer.txTimeMs), TimeUnit.MILLISECONDS);
+		}
+		return true;
 	}
 
 	@Override
