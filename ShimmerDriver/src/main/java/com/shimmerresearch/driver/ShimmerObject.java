@@ -473,7 +473,17 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 
 	public static final byte GET_PRESSURE_CALIBRATION_COEFFICIENTS_COMMAND  = (byte) 0xA7;//BMP390
 	public static final byte PRESSURE_CALIBRATION_COEFFICIENTS_RESPONSE    = (byte) 0xA6;//BMP390
-	
+
+	/** The sensor ID byte in a PRESSURE_CALIBRATION_COEFFICIENTS_RESPONSE, which
+	 * is laid out as [0xA6][len = 1+n][sensorId][n coefficient bytes]
+	 * (log-and-stream-common Comms/shimmer_bt_uart.c). */
+	public static final class PRESSURE_SENSOR_ID {
+		public static final int BMP180 = 0;
+		public static final int BMP280 = 1;
+		public static final int BMP390 = 2;
+		public static final int BMP581 = 3;
+	}
+
 	public static final byte SET_PRESSURE_OVERSAMPLING_RATIO_COMMAND 	= (byte) 0x52;
 	public static final byte PRESSURE_OVERSAMPLING_RATIO_RESPONSE 		= (byte) 0x53;
 	public static final byte GET_PRESSURE_OVERSAMPLING_RATIO_COMMAND 	= (byte) 0x54;
@@ -680,7 +690,13 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 	protected SensorMPU9X50 mSensorMpu9x50 = new SensorMPU9150(this);
 	// Shimmer3 - Pressure/Temperature 
 	public SensorBMPX80 mSensorBMPX80 = new SensorBMP180(this);
-  
+	/** The pressure sensor a Shimmer3R reported in-band in its
+	 * PRESSURE_CALIBRATION_COEFFICIENTS_RESPONSE (a {@link PRESSURE_SENSOR_ID}),
+	 * or null if it hasn't. When set it overrides the SR-number rule in
+	 * {@link #isSupportedBmp581()}. Cleared whenever the expansion board details
+	 * change, so each connection starts from the SR-number rule again. */
+	protected Integer mPressureSensorIdInBand = null;
+
 	// Shimmer3r - Mag
 	private SensorLIS2MDL mSensorLIS2MDL = new SensorLIS2MDL(this);
 	// Shimmer3r - Alt Mag
@@ -10823,37 +10839,120 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 	 * SR number/revision and the firmware version that produces the new output
 	 * format.
 	 *
-	 * @return true if the connected Shimmer3R board revision and firmware version indicate BMP581 output support
+	 * <p>
+	 * If the Shimmer has reported its pressure sensor in-band (the sensor ID in
+	 * its PRESSURE_CALIBRATION_COEFFICIENTS_RESPONSE, LogAndStream_Shimmer3R
+	 * v1.01.007 onwards), that answer is used and overrides the SR-number rule
+	 * in either direction. Otherwise, e.g. when the firmware NACKs the command
+	 * or is too old to have it, the SR-number rule decides.
+	 *
+	 * @return true if the connected Shimmer3R reported a BMP581, or if its board revision and firmware version indicate BMP581 output support
 	 */
 	public boolean isSupportedBmp581() {
+		if(mPressureSensorIdInBand!=null && getHardwareVersion()==HW_ID.SHIMMER_3R){
+			return mPressureSensorIdInBand==PRESSURE_SENSOR_ID.BMP581;
+		}
 		return isSupportedBmp581(getShimmerVerObject(), getExpansionBoardDetails());
 	}
 
+	/** The SR-number rule alone, used when the Shimmer hasn't identified its
+	 * pressure sensor in-band and for SD log files (whose header carries no
+	 * sensor ID). It mirrors the firmware's own fallback,
+	 * ShimBrd_isBmp581PresentPerSrNumber() in log-and-stream-common
+	 * Boards/shimmer_boards.c, plus a firmware-version guard.
+	 *
+	 * @param svo the Shimmer's version details
+	 * @param ebd the Shimmer's expansion board details
+	 * @return true if a Shimmer3R with this board and firmware carries a BMP581
+	 */
 	public static boolean isSupportedBmp581(ShimmerVerObject svo, ExpansionBoardDetails ebd) {
 		if(svo==null || ebd==null || svo.getHardwareVersion()!=HW_ID.SHIMMER_3R){
 			return false;
 		}
 
-		// SR48 (GSR+): BMP581 spans two bands - 7.2..7.x AND 8.2 and above.
-		// 7.0/7.1 and 8.0/8.1 are BMP390, so a single lexicographic ">=" can't
-		// express it (8.0/8.1 fall between the two BMP581 bands).
-		boolean sr48Bmp581 =
-				(ebd.getExpansionBoardId()==HW_ID_SR_CODES.EXP_BRD_GSR_UNIFIED
-						&& ebd.getExpansionBoardRev()==7
-						&& ebd.getExpansionBoardRevSpecial()>=2)                  // SR48 7.2..7.x
-				|| ebd.isSrNumberGte(HW_ID_SR_CODES.EXP_BRD_GSR_UNIFIED, 8, 2);   // SR48 8.2 and above
-
+		// Fitted models (">=" applies to both rev fields): SR31-11-2, SR38-4-2,
+		// SR47-8-2, SR48-7-2, SR48-8-2, SR49-4-2. SR48 (GSR+) has two BMP581
+		// bands, 7.2..7.x and 8.2 onwards: 8.0/8.1 went back to the BMP390, so
+		// the rev-7 band is ">= 7.2 and not >= 8.0". An unprogrammed card (board
+		// ID 0x00 or 0xFF) matches none of these IDs.
 		boolean boardEligible =
-				   ebd.isSrNumberGte(HW_ID_SR_CODES.SHIMMER3,              11, 2)  // SR31 >= 11.2
-				|| ebd.isSrNumberGte(HW_ID_SR_CODES.EXP_BRD_EXG_UNIFIED,   8, 2)  // SR47 >= 8.2
-				|| sr48Bmp581                                                     // SR48 7.2..7.x and 8.2+
-				|| ebd.isSrNumberGte(HW_ID_SR_CODES.EXP_BRD_BR_AMP_UNIFIED, 4, 2); // SR49 >= 4.2
+				   ebd.isSrNumberGte(HW_ID_SR_CODES.SHIMMER3,               11, 2)  // SR31 >= 11.2
+				|| ebd.isSrNumberGte(HW_ID_SR_CODES.EXP_BRD_PROTO3_DELUXE,   4, 2)  // SR38 >= 4.2
+				|| ebd.isSrNumberGte(HW_ID_SR_CODES.EXP_BRD_EXG_UNIFIED,     8, 2)  // SR47 >= 8.2
+				|| (ebd.isSrNumberGte(HW_ID_SR_CODES.EXP_BRD_GSR_UNIFIED,    7, 2)
+						&& !ebd.isSrNumberGte(HW_ID_SR_CODES.EXP_BRD_GSR_UNIFIED, 8, 0)) // SR48 7.2..7.x
+				|| ebd.isSrNumberGte(HW_ID_SR_CODES.EXP_BRD_GSR_UNIFIED,     8, 2)  // SR48 >= 8.2
+				|| ebd.isSrNumberGte(HW_ID_SR_CODES.EXP_BRD_BR_AMP_UNIFIED,  4, 2); // SR49 >= 4.2
 
 		// Format guard: BMP581 (pre-compensated) output only exists from
 		// LogAndStream_Shimmer3R v1.01.006 onwards.
 		boolean fwEligible = svo.compareVersions(FW_ID.LOGANDSTREAM, 1, 1, 6);
 
 		return boardEligible && fwEligible;
+	}
+
+	/** Records the pressure sensor a Shimmer3R reported in-band and, if the
+	 * sensor class in use is not the one it names, rebuilds the sensor classes
+	 * around the reported sensor. The rebuild is what would have happened had
+	 * the sensor been known when the daughter card ID arrived: the config bytes,
+	 * which the Shimmer sends before this response while connecting, are parsed
+	 * again so the new sensor class picks up its settings (e.g. oversampling).
+	 *
+	 * @param pressureSensorId the sensor ID from the response, a {@link PRESSURE_SENSOR_ID}
+	 */
+	public void setPressureSensorIdInBand(int pressureSensorId) {
+		mPressureSensorIdInBand = pressureSensorId;
+
+		if(isShimmerGen3R()){
+			boolean bmp581InUse = mSensorBMPX80.mSensorType==SENSORS.BMP581;
+			if(bmp581InUse!=isSupportedBmp581()){
+				consolePrintLn("Pressure sensor reported in-band (ID " + pressureSensorId + ") differs from the SR-number rule, switching to " + (isSupportedBmp581()? "BMP581":"BMP390"));
+				sensorAndConfigMapsCreate();
+				if(mShimmerUsingConfigFromInfoMem && ConfigByteLayout.checkConfigBytesValid(mConfigBytes)){
+					configBytesParse(mConfigBytes, COMMUNICATION_TYPE.BLUETOOTH);
+				}
+			}
+		}
+	}
+
+	/**
+	 * @return the pressure sensor the Shimmer reported in-band (a {@link PRESSURE_SENSOR_ID}), or null if it hasn't
+	 */
+	public Integer getPressureSensorIdInBand() {
+		return mPressureSensorIdInBand;
+	}
+
+	/**
+	 * @param pressureSensorId a {@link PRESSURE_SENSOR_ID}
+	 * @return the number of coefficient bytes that follow this sensor ID in a
+	 *         PRESSURE_CALIBRATION_COEFFICIENTS_RESPONSE, or -1 if the ID is unknown
+	 */
+	public static int getPressureCalibCoefficientByteLength(int pressureSensorId) {
+		switch(pressureSensorId){
+			case PRESSURE_SENSOR_ID.BMP180:
+				return 22;
+			case PRESSURE_SENSOR_ID.BMP280:
+				return 24;
+			case PRESSURE_SENSOR_ID.BMP390:
+				return 21;
+			case PRESSURE_SENSOR_ID.BMP581:
+				return 0; // self-compensating, no coefficients
+			default:
+				return -1;
+		}
+	}
+
+	@Override
+	public void setExpansionBoardDetails(ExpansionBoardDetails eBD){
+		super.setExpansionBoardDetails(eBD);
+		// A different board may carry a different pressure sensor
+		mPressureSensorIdInBand = null;
+	}
+
+	@Override
+	public void clearExpansionBoardDetails(){
+		super.clearExpansionBoardDetails();
+		mPressureSensorIdInBand = null;
 	}
 
 	/** Returns true if the Shimmer is using new sensors. These sensors are:
