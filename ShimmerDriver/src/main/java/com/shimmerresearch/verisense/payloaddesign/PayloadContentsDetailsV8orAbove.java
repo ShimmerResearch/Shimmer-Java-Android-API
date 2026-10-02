@@ -2,7 +2,6 @@ package com.shimmerresearch.verisense.payloaddesign;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.ListIterator;
 import java.util.Map.Entry;
@@ -93,13 +92,30 @@ public class PayloadContentsDetailsV8orAbove extends PayloadContentsDetails {
 		
 		// --------- End of parsing ------------------
 
-		// The slow sensors' achieved sample rates differ from what the payload
-		// header can tell us (the light rate isn't stored at all and the chip adds
-		// per-measurement dead time; the skin-temp output cadence is refresh-code
-		// derived but similarly approximate), so refine them from the data itself
-		// before the block timings are back-filled below.
-		refineSlowSensorSamplingRateFromBlockTicks(DATABLOCK_SENSOR_ID.LIGHT);
-		refineSlowSensorSamplingRateFromBlockTicks(DATABLOCK_SENSOR_ID.SKIN_TEMP);
+		// The slow sensors carry their configured sample rate in the payload header
+		// (MLX90632 refresh code in byte 32; VD6283 rate index in byte 30 bits 6:3
+		// from FW v2.02.000), so where the rate is known the blocks are already
+		// correctly timed and only the CSV gap window has to be derived from it -
+		// see the method javadoc for why this is no longer measured from the data.
+		//
+		// Where it is NOT known - an ambient light recording from firmware earlier
+		// than v2.02.000 - the blocks are timed from the exposure bound, which only
+		// bounds the rate from above and is ten times too fast at the 1 Hz default.
+		// That is a real loss against measuring the spacing, and it is deliberate:
+		// measuring cost the ability to report data loss at all.
+		//
+		// Be precise about what it costs, because it is more than the CSV header.
+		// The light and skin-temp CSVs carry no timestamp column, so the FILE PARSER
+		// output moves only by its header start time, up to 8.1 s at 1 Hz. But the
+		// per-sample ObjectCluster stream is stamped from each block's start time
+		// stepping by its timestampDiffInS, so for those recordings every consumer
+		// of that stream - the Android API, live streaming, algorithm modules - now
+		// sees a 10-sample block laid over 0.9 s of the 10 s it really spans, and a
+		// 9.1 s jump to the next block. Second-generation firmware never shipped to
+		// a customer, so this reaches internal recordings only, and a recording from
+		// v2.02.000 onwards is unaffected either way.
+		seedSlowSensorGapWindow(DATABLOCK_SENSOR_ID.LIGHT);
+		seedSlowSensorGapWindow(DATABLOCK_SENSOR_ID.SKIN_TEMP);
 
 		// Up to, and including, payload design v10, the real-world clock time that was
 		// stored in the payload footer was the real-world time at the end of the
@@ -316,95 +332,55 @@ public class PayloadContentsDetailsV8orAbove extends PayloadContentsDetails {
 	}
 
 	/**
-	 * Derive a slow sensor's (ambient light / skin temp) achieved sample period
-	 * from the spacing of consecutive same-sensor block end ticks and apply it to
-	 * those blocks' sampling rate before their timings are back-filled. The
-	 * header-derived rates are only estimates (the light rate isn't stored at all
-	 * - see SensorVD6283.getRateFreq - and the skin-temp cadence is refresh-code
-	 * derived), and each block holds a fixed number of samples, so
-	 * {@code inter-block ticks / samples-per-block} is the exact per-sample period.
-	 * With fewer than two blocks in the payload the header-derived estimate the
-	 * blocks were created with is left in place.
+	 * Set a slow sensor CSV gap-splitting window from the rate the payload header
+	 * states, before the block timings are back-filled below.
+	 * <p>
+	 * Both slow sensors now carry their configured rate in the header - the
+	 * MLX90632 refresh code always did (byte 32), and the VD6283 rate index does
+	 * from FW v2.02.000 (byte 30 bits 6:3) - so the blocks keep the rate
+	 * {@code parseDataBlockMetaData} already seeded them with from
+	 * {@code getSamplingRateForSensor}, and nothing here re-times them. That is
+	 * what makes the FIRST block of a CSV set correctly timed rather than laid
+	 * out over a guessed span.
+	 * <p>
+	 * This deliberately replaces the older approach of measuring the period from
+	 * the spacing of consecutive same-sensor block end ticks. Measuring works
+	 * only on healthy data: a payload holds two or three slow-sensor blocks, so
+	 * the window was built from one or two gaps, and if one of those was itself a
+	 * dropped block it became the median and the gap was judged continuous while
+	 * the healthy boundary beside it was flagged instead (DEV-974). A window
+	 * derived from the configured rate cannot be pulled onto a wrong cadence by
+	 * the very loss it exists to detect.
+	 *
+	 * @param slowSensorId the slow sensor data block id
 	 */
-	private void refineSlowSensorSamplingRateFromBlockTicks(DATABLOCK_SENSOR_ID slowSensorId) {
-		List<DataBlockDetails> slowSensorBlocks = new ArrayList<DataBlockDetails>();
+	// Package-private so API_00011 can drive this layer directly. It is the layer
+	// that decides WHETHER the seeder runs, and the guard that keeps first-
+	// generation payloads away from the sensor-class lookup, so testing only
+	// UtilCsvSplitting leaves it uncovered.
+	void seedSlowSensorGapWindow(DATABLOCK_SENSOR_ID slowSensorId) {
+		if(!containsDataBlockForSensor(slowSensorId)) {
+			// No blocks of this sensor in this payload, so there is no boundary to
+			// judge and nothing to seed. Seeding regardless would ask the device for
+			// the sensor-class keys behind this data block id, and that lookup CREATES
+			// and caches them - so parsing a first-generation file, which has neither
+			// slow sensor, would quietly populate mappings and rate limits for
+			// hardware the recording does not have.
+			return;
+		}
+		if(slowSensorId==DATABLOCK_SENSOR_ID.LIGHT) {
+			UtilCsvSplitting.warnIfLightRateFieldUnusable(verisenseDevice);
+		}
+		UtilCsvSplitting.seedSlowSensorGapWindow(verisenseDevice, slowSensorId);
+	}
+
+	boolean containsDataBlockForSensor(DATABLOCK_SENSOR_ID slowSensorId) {
 		for(DataBlockDetails dataBlockDetails:listOfDataBlocksInOrder) {
 			if(dataBlockDetails.datablockSensorId==slowSensorId) {
-				slowSensorBlocks.add(dataBlockDetails);
+				return true;
 			}
 		}
-		if(slowSensorBlocks.size()<2) {
-			return;
-		}
-
-		// v11+ payloads store microcontroller-clock ticks per block, earlier designs
-		// store real-world-clock ticks; either works as only deltas are used.
-		boolean useUcClockTicks = verisenseDevice.isPayloadDesignV11orAbove();
-		List<Double> perSamplePeriodsS = new ArrayList<Double>();
-		for(int i=1;i<slowSensorBlocks.size();i++) {
-			VerisenseTimeDetails prev = useUcClockTicks? slowSensorBlocks.get(i-1).getTimeDetailsUcClock():slowSensorBlocks.get(i-1).getTimeDetailsRwc();
-			VerisenseTimeDetails curr = useUcClockTicks? slowSensorBlocks.get(i).getTimeDetailsUcClock():slowSensorBlocks.get(i).getTimeDetailsRwc();
-			// The per-block ticks are a SUB-MINUTE counter (resets at
-			// TICKS_PER_MINUTE, 32768 Hz x 60 s - the same semantics the
-			// minute-rollover logic in backfillDataBlockUcClockOrRwcTimestamps
-			// depends on), so a minute-boundary crossing shows as a negative
-			// delta that must be re-based by one minute - NOT wrapped at 2^24.
-			long deltaTicks = curr.getEndTimeTicks() - prev.getEndTimeTicks();
-			if(deltaTicks<0) {
-				deltaTicks += (long) AsmBinaryFileConstants.TICKS_PER_MINUTE;
-			}
-			int sampleCount = slowSensorBlocks.get(i).getSampleCount();
-			if(deltaTicks>0 && sampleCount>0) {
-				perSamplePeriodsS.add((deltaTicks/32768.0)/sampleCount);
-			}
-		}
-		if(perSamplePeriodsS.isEmpty()) {
-			return;
-		}
-		// Median so a dropped block (a 2x gap) can't skew the period.
-		Collections.sort(perSamplePeriodsS);
-		double medianPeriodS = perSamplePeriodsS.get(perSamplePeriodsS.size()/2);
-		if(!(medianPeriodS>0)) {
-			return;
-		}
-
-		double achievedRateHz = 1.0/medianPeriodS;
-		for(DataBlockDetails dataBlockDetails:slowSensorBlocks) {
-			dataBlockDetails.setSamplingRate(achievedRateHz);
-			dataBlockDetails.calculateTimestampDiffInS();
-		}
-
-		// Seed the CSV gap-splitting window from the OBSERVED cadence rather than a
-		// single-rate +/-10% band. The header-derived estimate can sit within ~1% of
-		// the band edge (VD6283: 10 Hz estimated vs ~9.09 Hz achieved), and the slow
-		// sensors' cadence is inherently jittery: the light's is bimodal (exposure vs
-		// exposure + dead time: ~100 vs ~110 ms at the default exposure) and the
-		// MLX90632's conversions can slip by several refresh periods and then catch
-		// up (observed +12.5% block spacing with no samples lost - DEV-927
-		// validation data). A single payload carries only 2-3 slow-sensor blocks,
-		// i.e. one or two inter-block gaps - no spread information - so the gap
-		// side of the window cannot rely on observed spread at all: it is set to
-		// tolerate anything up to SLOW_SENSOR_MAX_INTER_BLOCK_GAP_RATIO x the
-		// achieved median spacing, which keeps healthy jitter continuous while a
-		// genuinely dropped block (2x spacing) still splits. The fast side keeps
-		// the observed-minimum-period basis with the standard tolerance.
-		// The put is deliberately UNCONDITIONAL: the limits map is global across
-		// payloads, and a payload with fewer than two blocks of this sensor (early
-		// return above - e.g. the very first payload of a recording) leaves
-		// populateExpectedPayloadTsDiffLimitMapIfNeeded to seed a configured-rate
-		// +/-10% band first. A containsKey guard here would then lock that too-tight
-		// estimate in for the whole file (observed: 25-min DEV-927 skin-temp
-		// recording fragmented into 7 CSVs); the measured window must win as soon as
-		// it exists, and re-measuring on every payload keeps it tracking the sensor.
-		double minPeriodS = perSamplePeriodsS.get(0);
-		double[] samplingRateLimits = new double[] {
-				achievedRateHz/UtilCsvSplitting.FILE_GAP_TOLERANCE_MULTIPLIER.SLOW_SENSOR_MAX_INTER_BLOCK_GAP_RATIO,
-				(1.0/minPeriodS)*UtilCsvSplitting.FILE_GAP_TOLERANCE_MULTIPLIER.UPPER};
-		for(SENSORS sensorClassKey:verisenseDevice.getOrCreateListOfSensorClassKeysForDataBlockId(slowSensorId)) {
-			if(sensorClassKey!=SENSORS.CLOCK) {
-				UtilCsvSplitting.SAMPLING_RATE_LIMITS_PER_SENSOR.put(sensorClassKey, samplingRateLimits);
-			}
-		}
+		return false;
 	}
 
 	private void backfillDataBlockRwcTimestamps() {
