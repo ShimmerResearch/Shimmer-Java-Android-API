@@ -95,3 +95,12 @@ task runProtocolLive(type: JavaExec) {
     classpath = sourceSets.main.runtimeClasspath
     mainClass = 'com.shimmerresearch.simpleexamples.bletest.Shimmer3RProtocolLiveTest'
 }
+
+// Both capture-app backends (today's driver, new state machine) on a real device, headless.
+// Example: ./gradlew runCaptureSmoke --args="Shimmer3R-2F31 5"
+task runCaptureSmoke(type: JavaExec) {
+    group = 'native ble'
+    description = 'Runs both ShimmerBLECaptureExample backends against a real device and compares them'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.shimmerresearch.simpleexamples.CaptureBackendSmokeTest'
+}

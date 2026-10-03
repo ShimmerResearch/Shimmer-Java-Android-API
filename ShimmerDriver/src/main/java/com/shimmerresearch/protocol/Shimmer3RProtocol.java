@@ -9,6 +9,7 @@ import java.util.List;
 import com.shimmerresearch.bluetooth.ShimmerBluetooth.BT_CRC_MODE;
 import com.shimmerresearch.comms.wiredProtocol.ShimmerCrc;
 import com.shimmerresearch.driver.ObjectCluster;
+import com.shimmerresearch.driver.ShimmerDevice;
 import com.shimmerresearch.driver.ShimmerObject;
 import com.shimmerresearch.driverUtilities.ShimmerVerDetails.HW_ID;
 import com.shimmerresearch.driverUtilities.UtilShimmer;
@@ -103,6 +104,15 @@ public final class Shimmer3RProtocol {
 
 	public double getSamplingRate() {
 		return mModel.getSamplingRateShimmer();
+	}
+
+	/**
+	 * The device as configured by the handshake, for read-only uses such as listing its enabled
+	 * channels in a UI. Complete once the state is {@link State#READY}. Changing it does not
+	 * change the device: this state machine does not write configuration yet.
+	 */
+	public ShimmerDevice getDeviceModel() {
+		return mModel;
 	}
 
 	/** Starts the handshake. */

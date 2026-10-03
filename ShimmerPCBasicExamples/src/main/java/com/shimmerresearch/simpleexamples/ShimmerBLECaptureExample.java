@@ -21,6 +21,7 @@ import javax.swing.BoxLayout;
 import javax.swing.DefaultListModel;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
+import javax.swing.JComboBox;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JList;
@@ -31,33 +32,31 @@ import javax.swing.ListSelectionModel;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
 
-import com.shimmerresearch.bluetooth.ShimmerBluetooth;
-import com.shimmerresearch.bluetooth.ShimmerBluetooth.BT_STATE;
-import com.shimmerresearch.driver.BasicProcessWithCallBack;
-import com.shimmerresearch.driver.CallbackObject;
 import com.shimmerresearch.driver.ObjectCluster;
-import com.shimmerresearch.driver.ShimmerMsg;
+import com.shimmerresearch.driver.ShimmerDevice;
 import com.shimmerresearch.driver.ble.nativeble.BleCentral;
 import com.shimmerresearch.driver.ble.nativeble.BleScanListener;
 import com.shimmerresearch.driver.ble.nativeble.NativeBleDevice;
 import com.shimmerresearch.driver.ble.nativeble.NativeBleException;
 import com.shimmerresearch.driver.ble.nativeble.NativeBleRadio;
 import com.shimmerresearch.driverUtilities.ChannelDetails.CHANNEL_TYPE;
-import com.shimmerresearch.exceptions.ShimmerException;
 import com.shimmerresearch.guiUtilities.configuration.EnableSensorsDialog;
 import com.shimmerresearch.guiUtilities.configuration.SensorConfigDialog;
 import com.shimmerresearch.guiUtilities.configuration.SignalsToPlotDialog;
 import com.shimmerresearch.guiUtilities.plot.BasicPlotManagerPC;
-import com.shimmerresearch.pcDriver.ShimmerBLENative;
 
 import info.monitorenter.gui.chart.Chart2D;
 
 /**
- * Shimmer Capture-style example for Shimmer3 and Shimmer3R over BLE, using the in-process native
- * library ({@link ShimmerBLENative}) rather than the gRPC BLE server.
- * <p>
- * Scan, connect, configure, stream with a live plot and packet reception rate, log to CSV,
- * disconnect.
+ * Shimmer Capture-style example for Shimmer3 and Shimmer3R over BLE through the in-process native
+ * library, with a choice of driver:
+ * <ul>
+ * <li><b>Today's driver</b> - ShimmerBLENative (ShimmerBluetooth), as DEV-1132 built it;</li>
+ * <li><b>New state machine</b> - the DEV-1134 I/O-free Shimmer3R protocol prototype.</li>
+ * </ul>
+ * Both write the same CSV format, so recordings from the same device can be compared directly.
+ * The state machine cannot change the configuration yet: set the device up in driver mode
+ * (settings persist on the device), then reconnect in state-machine mode.
  * <p>
  * Needs the native library: run {@code ./gradlew buildNative} in ShimmerDriverPC first, or pass
  * {@code -Dshimmer.ble.lib=<path to library>}. On macOS, run from Terminal and allow Terminal to use
@@ -65,9 +64,13 @@ import info.monitorenter.gui.chart.Chart2D;
  */
 public class ShimmerBLECaptureExample {
 
+	private static final String MODE_DRIVER = "Today's driver (ShimmerBLENative)";
+	private static final String MODE_STATE_MACHINE = "New state machine (DEV-1134, Shimmer3R only)";
+
 	private final JFrame mFrame = new JFrame("Shimmer BLE Capture (native)");
 	private final DefaultListModel<NativeBleDevice> mDeviceModel = new DefaultListModel<NativeBleDevice>();
 	private final JList<NativeBleDevice> mDeviceList = new JList<NativeBleDevice>(mDeviceModel);
+	private final JComboBox<String> mMode = new JComboBox<String>(new String[] { MODE_DRIVER, MODE_STATE_MACHINE });
 	private final JButton mBtnScan = new JButton("Scan");
 	private final JButton mBtnConnect = new JButton("Connect");
 	private final JButton mBtnDisconnect = new JButton("Disconnect");
@@ -83,13 +86,12 @@ public class ShimmerBLECaptureExample {
 
 	private final Chart2D mChart = new Chart2D();
 	private final BasicPlotManagerPC mPlotManager = new BasicPlotManagerPC();
-	private final NativeBleBluetoothManager mConfigManager = new NativeBleBluetoothManager();
 	private final CsvLog mCsvLog = new CsvLog();
 	private final AtomicLong mPackets = new AtomicLong();
 
 	private BleCentral mCentral;
-	private volatile ShimmerBLENative mShimmer;
-	private volatile double mPacketReceptionRate = Double.NaN;
+	private volatile CaptureBackend mBackend;
+	private volatile String mDeviceName = "";
 	private boolean mScanning = false;
 	private long mPacketsAtLastTick = 0;
 
@@ -114,6 +116,10 @@ public class ShimmerBLECaptureExample {
 	}
 
 	private void buildUi() {
+		JPanel modeRow = new JPanel(new FlowLayout(FlowLayout.LEFT));
+		modeRow.add(new JLabel("Driver:"));
+		modeRow.add(mMode);
+
 		JPanel connectionRow = new JPanel(new FlowLayout(FlowLayout.LEFT));
 		connectionRow.add(mBtnScan);
 		connectionRow.add(mBtnConnect);
@@ -130,6 +136,7 @@ public class ShimmerBLECaptureExample {
 
 		JPanel north = new JPanel();
 		north.setLayout(new BoxLayout(north, BoxLayout.Y_AXIS));
+		north.add(modeRow);
 		north.add(connectionRow);
 		north.add(deviceRow);
 
@@ -151,7 +158,7 @@ public class ShimmerBLECaptureExample {
 		mFrame.getContentPane().add(devices, BorderLayout.WEST);
 		mFrame.getContentPane().add(mChart, BorderLayout.CENTER);
 		mFrame.getContentPane().add(south, BorderLayout.SOUTH);
-		mFrame.setSize(1100, 700);
+		mFrame.setSize(1100, 720);
 		mFrame.setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
 		mFrame.addWindowListener(new WindowAdapter() {
 			@Override
@@ -160,12 +167,28 @@ public class ShimmerBLECaptureExample {
 			}
 		});
 
+		String configTip = "The state machine cannot change the configuration yet: configure in driver mode";
+		mBtnSensors.setToolTipText(configTip);
+		mBtnConfig.setToolTipText(configTip);
+
+		mMode.addActionListener(e -> updateButtons());
 		mBtnScan.addActionListener(e -> toggleScan());
 		mBtnConnect.addActionListener(e -> connectSelected());
 		mBtnDisconnect.addActionListener(e -> disconnect());
-		mBtnSensors.addActionListener(e -> new EnableSensorsDialog(mShimmer, mConfigManager).showDialog());
-		mBtnConfig.addActionListener(e -> new SensorConfigDialog(mShimmer, mConfigManager).showDialog());
-		mBtnPlot.addActionListener(e -> new SignalsToPlotDialog().initialize(mShimmer, mPlotManager, mChart));
+		mBtnSensors.addActionListener(e -> {
+			DriverCaptureBackend driver = (DriverCaptureBackend) mBackend;
+			new EnableSensorsDialog(driver.getDeviceForPlot(), driver.getConfigManager()).showDialog();
+		});
+		mBtnConfig.addActionListener(e -> {
+			DriverCaptureBackend driver = (DriverCaptureBackend) mBackend;
+			new SensorConfigDialog(driver.getDeviceForPlot(), driver.getConfigManager()).showDialog();
+		});
+		mBtnPlot.addActionListener(e -> {
+			ShimmerDevice device = mBackend.getDeviceForPlot();
+			if (device != null) {
+				new SignalsToPlotDialog().initialize(device, mPlotManager, mChart);
+			}
+		});
 		mBtnStart.addActionListener(e -> startStreaming());
 		mBtnStop.addActionListener(e -> stopStreaming());
 	}
@@ -230,6 +253,12 @@ public class ShimmerBLECaptureExample {
 			JOptionPane.showMessageDialog(mFrame, "Scan, then select a device first.");
 			return;
 		}
+		final CaptureBackend backend = MODE_STATE_MACHINE.equals(mMode.getSelectedItem())
+				? new ProtocolCaptureBackend() : new DriverCaptureBackend();
+		mBackend = backend;
+		mDeviceName = device.getName();
+		mPackets.set(0);
+		mFrame.setTitle("Shimmer BLE Capture (native) - " + mMode.getSelectedItem());
 		runInBackground("connect", () -> {
 			// Scanning while connecting slows the connection on some adapters.
 			if (mScanning) {
@@ -240,40 +269,83 @@ public class ShimmerBLECaptureExample {
 				}
 				mScanning = false;
 			}
-			ShimmerBLENative shimmer = new ShimmerBLENative(device);
-			new DeviceCallbacks().setWaitForData(shimmer);
-			mConfigManager.setDevice(shimmer);
-			mShimmer = shimmer;
-			mPackets.set(0);
-			mPacketReceptionRate = Double.NaN;
-			shimmer.connect("", "");
+			backend.connect(device, new BackendListener(backend));
 			onUi(this::updateButtons);
 		});
 	}
 
+	/** Receives one backend's events; ignores them once another backend has replaced it. */
+	private class BackendListener implements CaptureBackend.Listener {
+		private final CaptureBackend mOwner;
+
+		BackendListener(CaptureBackend owner) {
+			mOwner = owner;
+		}
+
+		@Override
+		public void onState(final String state) {
+			if (mBackend != mOwner) {
+				return;
+			}
+			if (state.startsWith("DISCONNECTED") || state.startsWith("CONNECTION_LOST")) {
+				mCsvLog.close();
+			}
+			onUi(() -> {
+				mLblState.setText(mDeviceName + " [" + mOwner.label() + "]: " + state);
+				updateButtons();
+			});
+		}
+
+		@Override
+		public void onReady() {
+			if (mBackend == mOwner) {
+				onUi(ShimmerBLECaptureExample.this::updateButtons);
+			}
+		}
+
+		@Override
+		public void onSample(ObjectCluster sample) {
+			if (mBackend != mOwner) {
+				return;
+			}
+			mPackets.incrementAndGet();
+			mCsvLog.write(sample);
+			try {
+				mPlotManager.filterDataAndPlot(sample);
+			} catch (Exception e) {
+				e.printStackTrace();
+			}
+		}
+
+		@Override
+		public void onError(String message) {
+			if (mBackend == mOwner) {
+				showError(mOwner.label(), message);
+			}
+		}
+	}
+
 	private void disconnect() {
-		final ShimmerBLENative shimmer = mShimmer;
-		if (shimmer == null) {
+		final CaptureBackend backend = mBackend;
+		if (backend == null) {
 			return;
 		}
 		runInBackground("disconnect", () -> {
-			try {
-				shimmer.disconnect();
-			} catch (ShimmerException e) {
-				showError("Disconnect", e.getMessage());
-			}
+			backend.disconnect();
 			closeLog();
+			onUi(this::updateButtons);
 		});
 	}
 
 	private void startStreaming() {
-		ShimmerBLENative shimmer = mShimmer;
-		if (shimmer == null) {
+		CaptureBackend backend = mBackend;
+		if (backend == null) {
 			return;
 		}
 		if (mChkLog.isSelected()) {
 			String stamp = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
-			File file = new File(System.getProperty("user.dir"), "shimmer_ble_" + shimmer.getDeviceName() + "_" + stamp + ".csv");
+			File file = new File(System.getProperty("user.dir"),
+					"shimmer_ble_" + mDeviceName + "_" + backend.label() + "_" + stamp + ".csv");
 			try {
 				mCsvLog.open(file);
 			} catch (IOException e) {
@@ -282,16 +354,16 @@ public class ShimmerBLECaptureExample {
 		}
 		try {
 			mPackets.set(0);
-			shimmer.startStreaming();
-		} catch (ShimmerException e) {
+			backend.startStreaming();
+		} catch (Exception e) {
 			showError("Start streaming", e.getMessage());
 		}
 	}
 
 	private void stopStreaming() {
-		ShimmerBLENative shimmer = mShimmer;
-		if (shimmer != null) {
-			shimmer.stopStreaming();
+		CaptureBackend backend = mBackend;
+		if (backend != null) {
+			backend.stopStreaming();
 		}
 		closeLog();
 	}
@@ -304,29 +376,27 @@ public class ShimmerBLECaptureExample {
 	}
 
 	private void shutdown() {
-		ShimmerBLENative shimmer = mShimmer;
-		if (shimmer != null && shimmer.isConnected()) {
-			try {
-				shimmer.disconnect();
-			} catch (ShimmerException e) {
-				e.printStackTrace();
-			}
+		CaptureBackend backend = mBackend;
+		if (backend != null && backend.isConnected()) {
+			backend.disconnect();
 		}
 		mCsvLog.close();
 		System.exit(0);
 	}
 
 	private void updateButtons() {
-		ShimmerBLENative shimmer = mShimmer;
+		CaptureBackend backend = mBackend;
 		boolean ready = mCentral != null;
-		boolean connected = shimmer != null && shimmer.isConnected();
-		boolean streaming = connected && shimmer.isStreaming();
+		boolean connected = backend != null && backend.isConnected();
+		boolean streaming = connected && backend.isStreaming();
+		boolean configurable = connected && !streaming && backend.canConfigure();
+		mMode.setEnabled(!connected);
 		mBtnScan.setEnabled(ready);
 		mBtnScan.setText(mScanning ? "Stop scan" : "Scan");
 		mBtnConnect.setEnabled(ready && !connected);
-		mBtnDisconnect.setEnabled(connected);
-		mBtnSensors.setEnabled(connected && !streaming);
-		mBtnConfig.setEnabled(connected && !streaming);
+		mBtnDisconnect.setEnabled(backend != null);
+		mBtnSensors.setEnabled(configurable);
+		mBtnConfig.setEnabled(configurable);
 		mBtnPlot.setEnabled(connected);
 		mBtnStart.setEnabled(connected && !streaming);
 		mBtnStop.setEnabled(streaming);
@@ -334,52 +404,18 @@ public class ShimmerBLECaptureExample {
 	}
 
 	private void updateStats() {
-		ShimmerBLENative shimmer = mShimmer;
-		if (shimmer == null || !shimmer.isConnected()) {
+		CaptureBackend backend = mBackend;
+		if (backend == null || !backend.isConnected()) {
 			return;
 		}
+		updateButtons();
 		long packets = mPackets.get();
 		long perSecond = packets - mPacketsAtLastTick;
 		mPacketsAtLastTick = packets;
-		String prr = Double.isNaN(mPacketReceptionRate) ? "-" : String.format("%.1f%%", mPacketReceptionRate);
-		mLblStats.setText(String.format("MTU %d   |   sampling %.1f Hz   |   %d packets/s   |   %d packets   |   reception %s",
-				shimmer.getMtu(), shimmer.getSamplingRateShimmer(), perSecond, packets, prr));
-	}
-
-	/** Handles the driver's callbacks for the connected device. */
-	private class DeviceCallbacks extends BasicProcessWithCallBack {
-		@Override
-		protected void processMsgFromCallback(ShimmerMsg msg) {
-			int id = msg.mIdentifier;
-			if (id == ShimmerBluetooth.MSG_IDENTIFIER_STATE_CHANGE) {
-				final BT_STATE state = ((CallbackObject) msg.mB).mState;
-				onUi(() -> {
-					mLblState.setText(mShimmer.getDeviceName() + ": " + state);
-					updateButtons();
-				});
-				if (state == BT_STATE.CONNECTION_LOST || state == BT_STATE.DISCONNECTED) {
-					mCsvLog.close();
-				}
-			} else if (id == ShimmerBluetooth.MSG_IDENTIFIER_NOTIFICATION_MESSAGE) {
-				int indicator = ((CallbackObject) msg.mB).mIndicator;
-				if (indicator == ShimmerBluetooth.NOTIFICATION_SHIMMER_FULLY_INITIALIZED
-						|| indicator == ShimmerBluetooth.NOTIFICATION_SHIMMER_START_STREAMING
-						|| indicator == ShimmerBluetooth.NOTIFICATION_SHIMMER_STOP_STREAMING) {
-					onUi(ShimmerBLECaptureExample.this::updateButtons);
-				}
-			} else if (id == ShimmerBluetooth.MSG_IDENTIFIER_DATA_PACKET) {
-				ObjectCluster ojc = (ObjectCluster) msg.mB;
-				mPackets.incrementAndGet();
-				mCsvLog.write(ojc);
-				try {
-					mPlotManager.filterDataAndPlot(ojc);
-				} catch (Exception e) {
-					e.printStackTrace();
-				}
-			} else if (id == ShimmerBluetooth.MSG_IDENTIFIER_PACKET_RECEPTION_RATE_OVERALL) {
-				mPacketReceptionRate = ((CallbackObject) msg.mB).mPacketReceptionRate;
-			}
-		}
+		double prr = backend.getPacketReceptionRate();
+		mLblStats.setText(String.format("[%s]   MTU %d   |   sampling %.1f Hz   |   %d packets/s   |   %d packets   |   reception %s",
+				backend.label(), backend.getMtu(), backend.getSamplingRate(), perSecond, packets,
+				Double.isNaN(prr) ? "-" : String.format("%.1f%%", prr)));
 	}
 
 	/** Calibrated values, one row per packet, columns in the order the driver adds channels. */

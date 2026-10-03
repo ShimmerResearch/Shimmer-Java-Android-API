@@ -91,7 +91,7 @@ public abstract class BleTransport {
 	}
 
 	/** Scans until a Shimmer3-family device whose name contains {@code nameFilter} advertises. */
-	static NativeBleDevice scanFor(BleCentral central, final String nameFilter, int timeoutMs) throws Exception {
+	public static NativeBleDevice scanFor(BleCentral central, final String nameFilter, int timeoutMs) throws Exception {
 		final NativeBleDevice[] found = new NativeBleDevice[1];
 		final CountDownLatch latch = new CountDownLatch(1);
 		BleScanListener listener = new BleScanListener() {
