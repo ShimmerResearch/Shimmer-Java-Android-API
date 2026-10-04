@@ -3,13 +3,18 @@
 Java driver and API for Shimmer devices, shared by PC and Android consumers.
 
 ## Build
-**JDK 11**, **Gradle 8.10.2**. Each subproject carries its own wrapper — there is none at the repo root:
+**JDK 11**, **Gradle 8.14.3**. Each Gradle subproject carries its own wrapper, all pinned to that
+version — there is none at the repo root:
 ```
 cd ShimmerDriverPC && ./gradlew build -i
 ```
-CI (`gradle.yml`) builds **only `ShimmerDriverPC`**, and only on `master` / PRs into it. That means a
-change to another subproject can merge without ever being compiled by CI — build the affected
-subproject locally before you claim it works.
+CI (`gradle.yml`) runs only on `master` / PRs into it, using the committed wrappers: `./gradlew test`
+in `ShimmerDriver`, then `./gradlew build -i` in `ShimmerDriverPC`, whose `settings.gradle` includes
+`:ShimmerDriver` and `:ShimmerBluetoothManager`. CI therefore compiles and tests **those three
+subprojects and no others**. A change to `ShimmerLSL`, `JavaShimmerConnect`, `ShimmerTCP` or
+`ShimmerPCBasicExamples` can merge without ever being compiled by CI — build the affected subproject
+locally before you claim it works. `ShimmerTCPExample` and `simmerradiotest` have no Gradle build at
+all: they are legacy Eclipse ADT Android projects.
 
 Test results land in `**/build/test-results/test/*.xml`.
 
@@ -17,7 +22,7 @@ Test results land in `**/build/test-results/test/*.xml`.
 | Project | Role |
 |---|---|
 | `ShimmerDriver` | Core, platform-neutral driver |
-| `ShimmerDriverPC` | PC-side driver — the only one CI builds |
+| `ShimmerDriverPC` | PC-side driver — CI builds it along with `ShimmerDriver` and `ShimmerBluetoothManager` |
 | `ShimmerBluetoothManager` | Connection management |
 | `ShimmerLSL` | Lab Streaming Layer integration |
 | `JavaShimmerConnect`, `ShimmerTCP`, `ShimmerTCPExample` | Connectivity apps/examples |
