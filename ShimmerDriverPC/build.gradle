@@ -153,3 +153,8 @@ task buildNative(type: Copy) {
     from new File(nativeCrateDir, "target/release/${nativeLibFile}")
     into "src/main/resources/native/${nativePlatform}"
 }
+
+// The README only keeps src/main/resources in the tree for Eclipse; it does not belong in the jar.
+processResources {
+    exclude 'native/README.md'
+}
