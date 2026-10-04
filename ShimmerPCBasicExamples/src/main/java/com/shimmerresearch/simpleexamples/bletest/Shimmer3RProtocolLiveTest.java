@@ -1,19 +1,22 @@
 package com.shimmerresearch.simpleexamples.bletest;
 
+import java.util.function.BooleanSupplier;
+
 import com.shimmerresearch.driver.ObjectCluster;
 import com.shimmerresearch.driver.ble.nativeble.BleCentral;
 import com.shimmerresearch.driver.ble.nativeble.BleConnectionListener;
 import com.shimmerresearch.driver.ble.nativeble.BleUartProfile;
 import com.shimmerresearch.driver.ble.nativeble.NativeBleDevice;
 import com.shimmerresearch.driver.ble.nativeble.NativeBleEvent;
-import com.shimmerresearch.driver.ble.nativeble.NativeBleException;
 import com.shimmerresearch.protocol.ProtocolEvent;
-import com.shimmerresearch.protocol.ProtocolOutput;
+import com.shimmerresearch.protocol.ProtocolHost;
 import com.shimmerresearch.protocol.Shimmer3RProtocol;
+import com.shimmerresearch.protocol.Shimmer3RProtocol.State;
 
 /**
  * DEV-1134: the Shimmer3R protocol state machine driving a real device over the native BLE
- * transport (DEV-1132). This is the whole host side: a transport, a clock and a lock.
+ * transport (DEV-1132). The {@link ProtocolHost} runs the protocol; this class only opens the
+ * link and passes bytes to it.
  *
  * <pre>
  * Shimmer3RProtocolLiveTest &lt;device name&gt; [seconds to stream] [device ID if not advertising]
@@ -21,14 +24,13 @@ import com.shimmerresearch.protocol.Shimmer3RProtocol;
  */
 public class Shimmer3RProtocolLiveTest {
 
-	private final Shimmer3RProtocol mProtocol = new Shimmer3RProtocol();
-	private final Object mLock = new Object();
-	private BleCentral mCentral;
-	private long mHandle;
-	private int mSamples = 0;
-	private int mDiscardedEvents = 0;
-	private ObjectCluster mFirstSample;
-	private String mError;
+	private static final long HANDSHAKE_TIMEOUT_MS = 30000;
+	private static final long STATE_TIMEOUT_MS = 10000;
+
+	private volatile int mSamples = 0;
+	private volatile int mDiscardedEvents = 0;
+	private volatile ObjectCluster mFirstSample;
+	private volatile String mError;
 
 	public static void main(String[] args) throws Exception {
 		if (args.length < 1) {
@@ -42,10 +44,10 @@ public class Shimmer3RProtocolLiveTest {
 	}
 
 	boolean run(String name, int seconds, String knownId) throws Exception {
-		mCentral = BleCentral.getDefault();
+		BleCentral central = BleCentral.getDefault();
 		NativeBleDevice device;
 		try {
-			device = BleTransport.scanFor(mCentral, name, BleTransport.FIND_TIMEOUT_MS);
+			device = BleTransport.scanFor(central, name, BleTransport.FIND_TIMEOUT_MS);
 		} catch (Exception notAdvertising) {
 			if (knownId == null) {
 				throw notAdvertising;
@@ -55,107 +57,106 @@ public class Shimmer3RProtocolLiveTest {
 		}
 		System.out.println("connecting to " + device);
 
+		long[] handle = { 0 };
+		ProtocolHost host = new ProtocolHost(bytes -> central.write(handle[0], bytes), this::onEvent);
 		long started = System.currentTimeMillis();
-		mHandle = mCentral.connect(device.getId(), BleUartProfile.SHIMMER3R, 20000, new BleConnectionListener() {
+		handle[0] = central.connect(device.getId(), BleUartProfile.SHIMMER3R, 20000, new BleConnectionListener() {
 			@Override
 			public void onBytes(byte[] data) {
-				synchronized (mLock) {
-					handle(mProtocol.receive(data, System.currentTimeMillis()));
-				}
+				host.onBytes(data);
 			}
 
 			@Override
 			public void onDisconnected(String reason) {
-				synchronized (mLock) {
-					mError = "link lost: " + reason;
-				}
+				host.onLinkLost(reason);
 			}
 		});
-		System.out.println("BLE connected in " + (System.currentTimeMillis() - started) + " ms, MTU " + mCentral.mtu(mHandle));
+		System.out.println("BLE connected in " + (System.currentTimeMillis() - started) + " ms, MTU " + central.mtu(handle[0]));
 
 		long handshakeStarted = System.currentTimeMillis();
 		long streamingSince = -1;
 		long stopRequested = -1;
-		synchronized (mLock) {
-			handle(mProtocol.connect(handshakeStarted));
-		}
 		try {
-			while (true) {
-				Thread.sleep(20);
-				long now = System.currentTimeMillis();
-				synchronized (mLock) {
-					if (mError != null || mProtocol.getState() == Shimmer3RProtocol.State.FAILED) {
-						break;
-					}
-					if (now >= mProtocol.nextDeadline()) {
-						handle(mProtocol.tick(now));
-					}
-					Shimmer3RProtocol.State state = mProtocol.getState();
-					if (state == Shimmer3RProtocol.State.READY && streamingSince < 0) {
-						System.out.println("handshake done in " + (now - handshakeStarted) + " ms");
-						handle(mProtocol.startStreaming(now));
-					} else if (state == Shimmer3RProtocol.State.STREAMING && streamingSince < 0) {
-						streamingSince = now;
-					} else if (state == Shimmer3RProtocol.State.STREAMING && now - streamingSince >= seconds * 1000L
-							&& stopRequested < 0) {
-						stopRequested = now;
-						handle(mProtocol.stopStreaming(now));
-					} else if (state == Shimmer3RProtocol.State.READY && stopRequested > 0) {
-						break;
-					}
-				}
+			host.connect();
+			if (!waitFor(host, State.READY, HANDSHAKE_TIMEOUT_MS)) {
+				return report(host, 0);
 			}
+			System.out.println("handshake done in " + (System.currentTimeMillis() - handshakeStarted) + " ms (including "
+					+ Shimmer3RProtocol.SETTLE_MS + " ms waiting for a quiet link)");
+			host.startStreaming();
+			if (!waitFor(host, State.STREAMING, STATE_TIMEOUT_MS)) {
+				return report(host, 0);
+			}
+			streamingSince = System.currentTimeMillis();
+			waitUntil(() -> mError != null, seconds * 1000L);
+			stopRequested = System.currentTimeMillis();
+			host.stopStreaming();
+			waitFor(host, State.READY, STATE_TIMEOUT_MS);
 		} finally {
-			mCentral.disconnect(mHandle);
+			host.close();
+			central.disconnect(handle[0]);
 		}
+		double streamedSeconds = streamingSince < 0 ? 0 : (stopRequested - streamingSince) / 1000.0;
+		return report(host, streamedSeconds);
+	}
 
-		synchronized (mLock) {
-			double streamedSeconds = streamingSince < 0 ? 0 : ((stopRequested > 0 ? stopRequested : System.currentTimeMillis()) - streamingSince) / 1000.0;
-			System.out.println(String.format("%d samples in %.1f s = %.1f /s at %.1f Hz configured; %d discard event(s)",
-					mSamples, streamedSeconds, streamedSeconds > 0 ? mSamples / streamedSeconds : 0, mProtocol.getSamplingRate(),
-					mDiscardedEvents));
-			if (mFirstSample != null) {
-				for (String channel : mFirstSample.getChannelNamesByInsertionOrder()) {
-					if (!channel.startsWith("System_Timestamp")) {
-						System.out.println("  " + channel + " = " + mFirstSample.getFormatClusterValue(channel, "CAL"));
-					}
-				}
+	/** On the host's event thread. */
+	private void onEvent(ProtocolEvent e) {
+		switch (e.type) {
+		case SAMPLE:
+			if (mFirstSample == null) {
+				mFirstSample = e.sample;
 			}
-			if (mError != null) {
-				System.out.println("FAILED: " + mError);
-				return false;
-			}
-			return mSamples > 0 && mProtocol.getState() == Shimmer3RProtocol.State.READY;
+			mSamples++;
+			break;
+		case ERROR:
+			mError = e.message;
+			break;
+		case LINK_LOST:
+			mError = "link lost: " + e.message;
+			break;
+		case DISCARDED:
+			mDiscardedEvents++;
+			System.out.println("  discarded: " + e.message);
+			break;
+		default:
+			System.out.println("  " + e);
 		}
 	}
 
-	/** Called with mLock held. */
-	private void handle(ProtocolOutput out) {
-		for (byte[] write : out.getWrites()) {
-			try {
-				mCentral.write(mHandle, write);
-			} catch (NativeBleException e) {
-				mError = "write failed: " + e.getMessage();
+	private boolean report(ProtocolHost host, double streamedSeconds) {
+		System.out.println(String.format("%d samples in %.1f s = %.1f /s at %.1f Hz configured; %d discard event(s)",
+				mSamples, streamedSeconds, streamedSeconds > 0 ? mSamples / streamedSeconds : 0, host.getSamplingRate(),
+				mDiscardedEvents));
+		ObjectCluster first = mFirstSample;
+		if (first != null) {
+			for (String channel : first.getChannelNamesByInsertionOrder()) {
+				if (!channel.startsWith("System_Timestamp")) {
+					System.out.println("  " + channel + " = " + first.getFormatClusterValue(channel, "CAL"));
+				}
 			}
 		}
-		for (ProtocolEvent e : out.getEvents()) {
-			switch (e.type) {
-			case SAMPLE:
-				if (mFirstSample == null) {
-					mFirstSample = e.sample;
-				}
-				mSamples++;
-				break;
-			case ERROR:
-				mError = e.message;
-				break;
-			case DISCARDED:
-				mDiscardedEvents++;
-				System.out.println("  discarded: " + e.message);
-				break;
-			default:
-				System.out.println("  " + e);
-			}
+		if (mError != null) {
+			System.out.println("FAILED: " + mError);
+			return false;
+		}
+		if (host.getState() != State.READY) {
+			System.out.println("FAILED: ended in state " + host.getState());
+			return false;
+		}
+		return mSamples > 0;
+	}
+
+	/** Waits for a state; false if the protocol failed, the link dropped or the wait timed out. */
+	private boolean waitFor(ProtocolHost host, State state, long timeoutMs) throws InterruptedException {
+		waitUntil(() -> host.getState() == state || host.getState() == State.FAILED || mError != null, timeoutMs);
+		return host.getState() == state && mError == null;
+	}
+
+	private static void waitUntil(BooleanSupplier condition, long timeoutMs) throws InterruptedException {
+		long deadline = System.currentTimeMillis() + timeoutMs;
+		while (!condition.getAsBoolean() && System.currentTimeMillis() < deadline) {
+			Thread.sleep(20);
 		}
 	}
 }

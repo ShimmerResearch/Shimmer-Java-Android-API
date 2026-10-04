@@ -1,10 +1,5 @@
 package com.shimmerresearch.simpleexamples;
 
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
-
-import com.shimmerresearch.driver.ObjectCluster;
 import com.shimmerresearch.driver.ShimmerDevice;
 import com.shimmerresearch.driver.ble.nativeble.BleCentral;
 import com.shimmerresearch.driver.ble.nativeble.BleConnectionListener;
@@ -12,32 +7,23 @@ import com.shimmerresearch.driver.ble.nativeble.BleUartProfile;
 import com.shimmerresearch.driver.ble.nativeble.NativeBleDevice;
 import com.shimmerresearch.driver.ble.nativeble.NativeBleException;
 import com.shimmerresearch.protocol.ProtocolEvent;
-import com.shimmerresearch.protocol.ProtocolOutput;
+import com.shimmerresearch.protocol.ProtocolHost;
 import com.shimmerresearch.protocol.Shimmer3RProtocol;
 import com.shimmerresearch.protocol.Shimmer3RProtocol.State;
 
 /**
- * The DEV-1134 protocol state machine ({@link Shimmer3RProtocol}) over native BLE: the whole
- * host side is the transport, a clock (a 20 ms ticker for timeouts) and one lock.
- * Shimmer3R only, and it cannot change the device's configuration yet.
+ * The DEV-1134 protocol state machine ({@link Shimmer3RProtocol}) over native BLE. The
+ * {@link ProtocolHost} runs the protocol; all this class adds is the BLE link and the mapping of
+ * events onto the capture app. Shimmer3R only, and it cannot change the device's configuration yet.
  */
 class ProtocolCaptureBackend implements CaptureBackend {
 
 	private static final int CONNECT_TIMEOUT_MS = 20000;
-	private static final int TICK_MS = 20;
-	/** How long to listen for a stream left running, and the step while waiting for it to stop. */
-	private static final int STREAM_CHECK_MS = 300;
-	private static final int STREAM_STOP_TIMEOUT_MS = 3000;
-	private static final byte STOP_STREAMING_COMMAND = 0x20;
 
-	private final Object mLock = new Object();
 	private BleCentral mCentral;
-	private Shimmer3RProtocol mProtocol;
 	private Listener mListener;
-	private ScheduledExecutorService mTicker;
+	private volatile ProtocolHost mHost;
 	private volatile long mHandle = 0;
-	private volatile boolean mHandshakeStarted = false;
-	private volatile int mBytesBeforeHandshake = 0;
 	private volatile double mPacketReceptionRate = Double.NaN;
 
 	@Override
@@ -60,125 +46,71 @@ class ProtocolCaptureBackend implements CaptureBackend {
 	private void connectBlocking(NativeBleDevice device) {
 		try {
 			mCentral = BleCentral.getDefault();
-			synchronized (mLock) {
-				mProtocol = new Shimmer3RProtocol();
-				mHandshakeStarted = false;
-				mBytesBeforeHandshake = 0;
-				mPacketReceptionRate = Double.NaN;
-			}
+			mPacketReceptionRate = Double.NaN;
+			ProtocolHost host = new ProtocolHost(bytes -> mCentral.write(mHandle, bytes), this::onEvent);
+			mHost = host;
 			mListener.onState("CONNECTING (BLE)");
-			mHandle = mCentral.connect(device.getId(), BleUartProfile.SHIMMER3R, CONNECT_TIMEOUT_MS, new LinkListener());
-			stopStreamLeftRunning();
-			synchronized (mLock) {
-				mHandshakeStarted = true;
-				handle(mProtocol.connect(System.currentTimeMillis()));
-			}
-			mTicker = Executors.newSingleThreadScheduledExecutor(r -> {
-				Thread th = new Thread(r, "ProtocolCapture-tick");
-				th.setDaemon(true);
-				return th;
-			});
-			mTicker.scheduleAtFixedRate(this::tick, TICK_MS, TICK_MS, TimeUnit.MILLISECONDS);
+			mHandle = mCentral.connect(device.getId(), BleUartProfile.SHIMMER3R, CONNECT_TIMEOUT_MS,
+					new BleConnectionListener() {
+						@Override
+						public void onBytes(byte[] data) {
+							host.onBytes(data);
+						}
+
+						@Override
+						public void onDisconnected(String reason) {
+							mHandle = 0;
+							host.onLinkLost(reason);
+						}
+					});
+			host.connect();
 		} catch (Exception e) {
 			mListener.onError("Connect failed: " + e.getMessage());
 			disconnect();
 		}
 	}
 
-	/**
-	 * A link left open by a crashed earlier session (Windows keeps it) can still be streaming,
-	 * and the prototype's handshake does not handle that, so stop it first. Bytes received here
-	 * are not passed to the state machine.
-	 */
-	private void stopStreamLeftRunning() throws NativeBleException, InterruptedException {
-		Thread.sleep(STREAM_CHECK_MS);
-		if (mBytesBeforeHandshake == 0) {
-			return;
-		}
-		System.out.println("ProtocolCapture: device is already streaming; stopping it before the handshake");
-		mCentral.write(mHandle, new byte[] { STOP_STREAMING_COMMAND });
-		long deadline = System.currentTimeMillis() + STREAM_STOP_TIMEOUT_MS;
-		int before;
-		do {
-			before = mBytesBeforeHandshake;
-			Thread.sleep(STREAM_CHECK_MS);
-		} while (mBytesBeforeHandshake != before && System.currentTimeMillis() < deadline);
-	}
-
-	private class LinkListener implements BleConnectionListener {
-		@Override
-		public void onBytes(byte[] data) {
-			if (!mHandshakeStarted) {
-				mBytesBeforeHandshake += data.length;
-				return;
+	/** On the host's event thread. */
+	private void onEvent(ProtocolEvent e) {
+		switch (e.type) {
+		case STATE_CHANGED:
+			mListener.onState(e.state.toString());
+			if (e.state == State.FAILED) {
+				disconnect();
 			}
-			synchronized (mLock) {
-				handle(mProtocol.receive(data, System.currentTimeMillis()));
+			break;
+		case INITIALISED:
+			System.out.println("ProtocolCapture: " + e.message);
+			mListener.onReady();
+			break;
+		case SAMPLE:
+			double prr = e.sample.getFormatClusterValue("Packet_Reception_Rate_Trial", "CAL");
+			if (!Double.isNaN(prr)) {
+				mPacketReceptionRate = prr;
 			}
-		}
-
-		@Override
-		public void onDisconnected(String reason) {
-			mHandle = 0;
-			stopTicker();
-			mListener.onState("CONNECTION_LOST (" + reason + ")");
-		}
-	}
-
-	private void tick() {
-		boolean failed;
-		synchronized (mLock) {
-			long now = System.currentTimeMillis();
-			if (now >= mProtocol.nextDeadline()) {
-				handle(mProtocol.tick(now));
-			}
-			failed = mProtocol.getState() == State.FAILED;
-		}
-		if (failed) {
-			disconnect();
-		}
-	}
-
-	/** Called with mLock held. Listener calls must not call back into this backend synchronously. */
-	private void handle(ProtocolOutput out) {
-		for (byte[] write : out.getWrites()) {
-			try {
-				mCentral.write(mHandle, write);
-			} catch (NativeBleException e) {
-				mListener.onError("Write failed: " + e.getMessage());
-			}
-		}
-		for (ProtocolEvent e : out.getEvents()) {
-			switch (e.type) {
-			case STATE_CHANGED:
-				mListener.onState(e.state.toString());
-				break;
-			case INITIALISED:
-				System.out.println("ProtocolCapture: " + e.message);
-				mListener.onReady();
-				break;
-			case SAMPLE:
-				double prr = e.sample.getFormatClusterValue("Packet_Reception_Rate_Trial", "CAL");
-				if (!Double.isNaN(prr)) {
-					mPacketReceptionRate = prr;
-				}
-				mListener.onSample(e.sample);
-				break;
-			case ERROR:
-				mListener.onError(e.message);
-				break;
-			case DISCARDED:
-				System.out.println("ProtocolCapture: " + e.message);
-				break;
-			default:
-				break;
-			}
+			mListener.onSample(e.sample);
+			break;
+		case ERROR:
+			mListener.onError(e.message);
+			break;
+		case LINK_LOST:
+			mListener.onState("CONNECTION_LOST (" + e.message + ")");
+			break;
+		case DISCARDED:
+			System.out.println("ProtocolCapture: " + e.message);
+			break;
+		default:
+			break;
 		}
 	}
 
 	@Override
 	public void disconnect() {
-		stopTicker();
+		// Close the host first, so the transport's own disconnect is not reported as a lost link.
+		ProtocolHost host = mHost;
+		if (host != null) {
+			host.close();
+		}
 		long handle = mHandle;
 		mHandle = 0;
 		if (handle != 0 && mCentral != null) {
@@ -193,32 +125,25 @@ class ProtocolCaptureBackend implements CaptureBackend {
 		}
 	}
 
-	private void stopTicker() {
-		ScheduledExecutorService ticker = mTicker;
-		mTicker = null;
-		if (ticker != null) {
-			ticker.shutdownNow();
-		}
-	}
-
 	@Override
 	public void startStreaming() {
-		synchronized (mLock) {
-			handle(mProtocol.startStreaming(System.currentTimeMillis()));
+		ProtocolHost host = mHost;
+		if (host != null) {
+			host.startStreaming();
 		}
 	}
 
 	@Override
 	public void stopStreaming() {
-		synchronized (mLock) {
-			handle(mProtocol.stopStreaming(System.currentTimeMillis()));
+		ProtocolHost host = mHost;
+		if (host != null) {
+			host.stopStreaming();
 		}
 	}
 
 	private State state() {
-		synchronized (mLock) {
-			return mProtocol == null ? State.DISCONNECTED : mProtocol.getState();
-		}
+		ProtocolHost host = mHost;
+		return host == null ? State.DISCONNECTED : host.getState();
 	}
 
 	@Override
@@ -234,9 +159,8 @@ class ProtocolCaptureBackend implements CaptureBackend {
 
 	@Override
 	public double getSamplingRate() {
-		synchronized (mLock) {
-			return mProtocol == null ? Double.NaN : mProtocol.getSamplingRate();
-		}
+		ProtocolHost host = mHost;
+		return host == null ? Double.NaN : host.getSamplingRate();
 	}
 
 	@Override
@@ -259,9 +183,8 @@ class ProtocolCaptureBackend implements CaptureBackend {
 
 	@Override
 	public ShimmerDevice getDeviceForPlot() {
-		synchronized (mLock) {
-			return mProtocol != null && isConnected() ? mProtocol.getDeviceModel() : null;
-		}
+		ProtocolHost host = mHost;
+		return host != null && isConnected() ? host.getDeviceModel() : null;
 	}
 
 	@Override

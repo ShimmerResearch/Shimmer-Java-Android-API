@@ -28,9 +28,15 @@ import com.shimmerresearch.exceptions.ShimmerException;
  * device. Decoding and calibration are delegated unchanged to the existing driver code through
  * {@link Shimmer3RModel}.
  * <p>
+ * The handshake starts only once the link has been quiet for {@link #SETTLE_MS}. Windows keeps a
+ * BLE link open after the process that owned it dies, so a new session can inherit a device that
+ * is still streaming; if bytes arrive in that time, it is told to stop first. One object serves
+ * one link: after {@link #linkLost} it stays {@link State#DISCONNECTED}, and a new connection
+ * needs a new object.
+ * <p>
  * Scope: Shimmer3R with firmware that reads config bytes and the calibration dump over Bluetooth.
- * Not handled yet: a device still streaming when the handshake starts, unsolicited status
- * responses, and in-stream commands while streaming.
+ * Not handled yet: unsolicited status responses, in-stream commands while streaming, and writes
+ * longer than the link's MTU (none of today's commands are).
  */
 public final class Shimmer3RProtocol {
 
@@ -42,6 +48,10 @@ public final class Shimmer3RProtocol {
 	public static final long DEFAULT_TIMEOUT_MS = 2000;
 	/** For the large memory reads. */
 	public static final long LONG_TIMEOUT_MS = 5000;
+	/** How long the link must be quiet before the handshake starts. */
+	public static final long SETTLE_MS = 300;
+	/** How long a device found streaming at connect has to stop before the connection fails. */
+	public static final long SETTLE_GIVE_UP_MS = 3000;
 	/** The most bytes the firmware returns per config-byte or calibration-dump read. */
 	static final int MEM_CHUNK = 128;
 	/** Config bytes (firmware code 6) and the calibration dump (7) over Bluetooth. */
@@ -87,6 +97,14 @@ public final class Shimmer3RProtocol {
 	private long mDeadline = Long.MAX_VALUE;
 	private int mCrcBytes = 0;
 	private int mDroppedBytes = 0;
+	private boolean mLinkLost = false;
+
+	/** Waiting for a quiet link before the handshake; see {@link #SETTLE_MS}. */
+	private boolean mSettling = false;
+	private long mQuietAt = Long.MAX_VALUE;
+	private long mSettleGiveUpAt = Long.MAX_VALUE;
+	private boolean mStopSent = false;
+	private int mSettleBytes = 0;
 
 	private byte[] mConfigBytes = new byte[0];
 	private int mConfigLength;
@@ -99,6 +117,9 @@ public final class Shimmer3RProtocol {
 
 	/** When the host should next call {@link #tick}, or Long.MAX_VALUE if nothing is pending. */
 	public long nextDeadline() {
+		if (mSettling) {
+			return Math.min(mQuietAt, mSettleGiveUpAt);
+		}
 		return mInFlight == null ? Long.MAX_VALUE : mDeadline;
 	}
 
@@ -115,23 +136,53 @@ public final class Shimmer3RProtocol {
 		return mModel;
 	}
 
-	/** Starts the handshake. */
+	/**
+	 * Call once the link is open. The handshake itself starts from {@link #tick} once the link has
+	 * been quiet for {@link #SETTLE_MS}, so this returns no writes.
+	 */
 	public ProtocolOutput connect(long nowMs) {
 		ProtocolOutput out = new ProtocolOutput();
+		if (mLinkLost) {
+			out.event(ProtocolEvent.error("this link was lost; use a new Shimmer3RProtocol for a new connection"));
+			return out;
+		}
 		if (mState != State.DISCONNECTED) {
 			return failed(out, "connect() called in state " + mState);
 		}
 		setState(State.CONNECTING, out);
-		mQueue.add(new Command("GET_SHIMMER_VERSION", new byte[] { ShimmerObject.GET_SHIMMER_VERSION_COMMAND_NEW },
-				ShimmerObject.GET_SHIMMER_VERSION_RESPONSE, fixed(1, this::onHardwareVersion), DEFAULT_TIMEOUT_MS));
-		mQueue.add(new Command("GET_FW_VERSION", new byte[] { ShimmerObject.GET_FW_VERSION_COMMAND },
-				ShimmerObject.FW_VERSION_RESPONSE, fixed(6, this::onFirmwareVersion), DEFAULT_TIMEOUT_MS));
-		sendNext(nowMs, out);
+		mSettling = true;
+		mQuietAt = nowMs + SETTLE_MS;
+		mSettleGiveUpAt = nowMs + SETTLE_GIVE_UP_MS;
+		return out;
+	}
+
+	/**
+	 * The host lost the link. Whatever was in progress is abandoned and the state becomes
+	 * {@link State#DISCONNECTED} for good: later bytes, ticks and stream requests are ignored, and
+	 * {@link #connect} reports an error.
+	 */
+	public ProtocolOutput linkLost(String reason, long nowMs) {
+		ProtocolOutput out = new ProtocolOutput();
+		if (mLinkLost) {
+			return out;
+		}
+		mLinkLost = true;
+		mSettling = false;
+		mInFlight = null;
+		mDeadline = Long.MAX_VALUE;
+		mQueue.clear();
+		mRx.consume(mRx.size());
+		mModel.streamingStopped();
+		out.event(ProtocolEvent.linkLost(reason));
+		setState(State.DISCONNECTED, out);
 		return out;
 	}
 
 	public ProtocolOutput startStreaming(long nowMs) {
 		ProtocolOutput out = new ProtocolOutput();
+		if (mLinkLost) {
+			return out;
+		}
 		if (mState != State.READY) {
 			return failed(out, "startStreaming() called in state " + mState);
 		}
@@ -149,6 +200,9 @@ public final class Shimmer3RProtocol {
 
 	public ProtocolOutput stopStreaming(long nowMs) {
 		ProtocolOutput out = new ProtocolOutput();
+		if (mLinkLost) {
+			return out;
+		}
 		if (mState != State.STREAMING) {
 			return failed(out, "stopStreaming() called in state " + mState);
 		}
@@ -165,6 +219,10 @@ public final class Shimmer3RProtocol {
 		if (mState == State.DISCONNECTED || mState == State.FAILED) {
 			return out;
 		}
+		if (mSettling) {
+			settleOn(bytes, nowMs, out);
+			return out;
+		}
 		mRx.append(bytes);
 		boolean progressed = true;
 		while (progressed && mRx.size() > 0 && mState != State.FAILED) {
@@ -174,13 +232,47 @@ public final class Shimmer3RProtocol {
 		return out;
 	}
 
-	/** Fires a command timeout if one is due. */
+	/** Starts the handshake once the link is quiet, and fires a command timeout if one is due. */
 	public ProtocolOutput tick(long nowMs) {
 		ProtocolOutput out = new ProtocolOutput();
+		if (mSettling) {
+			if (nowMs >= mQuietAt) {
+				startHandshake(nowMs, out);
+			} else if (nowMs >= mSettleGiveUpAt) {
+				failed(out,"the device was already streaming and did not stop within " + SETTLE_GIVE_UP_MS + " ms");
+			}
+			return out;
+		}
 		if (mInFlight != null && nowMs >= mDeadline) {
 			failed(out, "no " + (mAckSeen ? "response" : "ACK") + " to " + mInFlight.name + " within " + mInFlight.timeoutMs + " ms");
 		}
 		return out;
+	}
+
+	// --- Settling: a device left streaming by an earlier session -------------------------------
+
+	/** Bytes before the handshake can only be a stream left running: stop it, then wait for quiet. */
+	private void settleOn(byte[] bytes, long nowMs, ProtocolOutput out) {
+		mSettleBytes += bytes.length;
+		mQuietAt = nowMs + SETTLE_MS;
+		if (!mStopSent) {
+			mStopSent = true;
+			out.write(new byte[] { ShimmerObject.STOP_STREAMING_COMMAND });
+		}
+	}
+
+	private void startHandshake(long nowMs, ProtocolOutput out) {
+		mSettling = false;
+		mQuietAt = Long.MAX_VALUE;
+		mSettleGiveUpAt = Long.MAX_VALUE;
+		if (mSettleBytes > 0) {
+			out.event(ProtocolEvent.discarded("the device was already streaming; stopped it and dropped " + mSettleBytes + " byte(s)"));
+		}
+		mQueue.add(new Command("GET_SHIMMER_VERSION", new byte[] { ShimmerObject.GET_SHIMMER_VERSION_COMMAND_NEW },
+				ShimmerObject.GET_SHIMMER_VERSION_RESPONSE, fixed(1, this::onHardwareVersion), DEFAULT_TIMEOUT_MS));
+		mQueue.add(new Command("GET_FW_VERSION", new byte[] { ShimmerObject.GET_FW_VERSION_COMMAND },
+				ShimmerObject.FW_VERSION_RESPONSE, fixed(6, this::onFirmwareVersion), DEFAULT_TIMEOUT_MS));
+		sendNext(nowMs, out);
 	}
 
 	// --- Commands and responses -------------------------------------------------------------
@@ -511,6 +603,7 @@ public final class Shimmer3RProtocol {
 	}
 
 	private ProtocolOutput failed(ProtocolOutput out, String why) {
+		mSettling = false;
 		mInFlight = null;
 		mDeadline = Long.MAX_VALUE;
 		mQueue.clear();

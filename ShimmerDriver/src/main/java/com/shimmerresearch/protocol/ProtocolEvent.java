@@ -15,7 +15,9 @@ public final class ProtocolEvent {
 		/** The protocol failed, for instance a command timed out; see {@link #message}. */
 		ERROR,
 		/** Bytes were dropped while resynchronising; see {@link #message}. */
-		DISCARDED
+		DISCARDED,
+		/** The host reported that the link to the device was lost; see {@link #message} for why. */
+		LINK_LOST
 	}
 
 	public final Type type;
@@ -48,6 +50,10 @@ public final class ProtocolEvent {
 
 	static ProtocolEvent discarded(String message) {
 		return new ProtocolEvent(Type.DISCARDED, null, null, message);
+	}
+
+	static ProtocolEvent linkLost(String reason) {
+		return new ProtocolEvent(Type.LINK_LOST, null, null, reason);
 	}
 
 	@Override
