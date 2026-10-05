@@ -7,6 +7,7 @@
 //! A device ID (the Bluetooth address on Windows) skips the scan, for a device this PC still
 //! holds connected, which does not advertise.
 
+use std::collections::VecDeque;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use shimmer_protocol::protocol::{Event, LogAndStreamProtocol, Output, State};
@@ -47,6 +48,8 @@ struct Run {
     /// (arrival, device ticks) of the first sample, and the worst backlog seen so far.
     first: Option<(Instant, u32)>,
     worst_lag_ms: f64,
+    /// The last few notifications, printed when bytes are dropped, to show what they were.
+    recent: VecDeque<(Instant, Vec<u8>)>,
 }
 
 /// Sends the protocol's writes to the device and handles its events.
@@ -69,6 +72,10 @@ fn apply(core: &BleCore, handle: i64, out: Output, run: &mut Run) {
             Event::Discarded(m) => {
                 run.discards += 1;
                 println!("  discarded: {}", m);
+                for (t, data) in &run.recent {
+                    let hex: Vec<String> = data.iter().map(|b| format!("{:02X}", b)).collect();
+                    println!("    -{:4} ms: {}", t.elapsed().as_millis(), hex.join(" "));
+                }
             }
             Event::Error(m) => {
                 println!("  ERROR: {}", m);
@@ -140,6 +147,10 @@ fn main() {
                         data.len(),
                         tail.join(" ")
                     );
+                }
+                run.recent.push_back((Instant::now(), data.clone()));
+                if run.recent.len() > 8 {
+                    run.recent.pop_front();
                 }
                 let out = protocol.receive(&data, now_ms());
                 apply(&core, handle, out, &mut run);

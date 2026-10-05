@@ -32,10 +32,9 @@ checked against, and moves to its own repository later.
 
 ## Next
 
-1. Port the rest of `LogAndStreamProtocol` (handshake, commands, timeouts, stream recovery).
-2. Port the model (configuration, calibration, decoding) for Shimmer3 and Shimmer3R, checked value
+1. Port the model (configuration, calibration, decoding) for Shimmer3 and Shimmer3R, checked value
    by value against the Java reference exports in `python/tests/data/`.
-3. Bindings: Java through JNI (as `ShimmerBLENativeLib` does), Python through PyO3 (replacing the
+2. Bindings: Java through JNI (as `ShimmerBLENativeLib` does), Python through PyO3 (replacing the
    hand port in `python/`), the web SDK through WebAssembly, Kotlin and Swift through UniFFI.
 
 ## Build and test
