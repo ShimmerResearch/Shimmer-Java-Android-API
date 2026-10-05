@@ -1726,37 +1726,17 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 	}
 
 	/**
-	 * DEV-896: True when the runtime class overrides
-	 * {@link #updateHrPanelIfVisible(String[], ObjectCluster)}. In this base class that method is a
-	 * no-op, so there is no point recording (and allocating) a deferred HR action per trace per
-	 * sample for plots that will never do anything with it; only the downstream override (Consensys
-	 * {@code PlotManagerPC}) needs them, and it counts its calls, so when it IS present every
-	 * matching trace must still produce exactly one call.
+	 * DEV-896: In this base class {@link #updateHrPanelIfVisible(String[], ObjectCluster)} is a
+	 * no-op, so recording a deferred HR action per trace per sample is skipped only for the base
+	 * class itself. Any subclass records one deferred action per matching trace: the downstream
+	 * override (Consensys {@code PlotManagerPC}) counts its calls, so every matching trace must
+	 * still produce exactly one call.
 	 *
-	 * <p>Resolved once per instance rather than per sample. The method is {@code protected}, so
-	 * {@code getMethod()} would not see it - the class hierarchy is walked with
-	 * {@code getDeclaredMethod()} from the runtime class up to (but excluding) this class instead.
-	 * Anything unexpected from the reflective lookup defaults to {@code true}, i.e. to the previous
-	 * unconditional behaviour, so a hardened SecurityManager can only cost the allocation, never
-	 * suppress an HR update.</p>
+	 * <p>A reflective lookup of the method by name is deliberately not used: ProGuard renaming it
+	 * would make that lookup fail and silently disable the HR panel in the obfuscated release
+	 * build while dev builds kept working.</p>
 	 */
-	private final boolean mIsHrPanelUpdateOverridden = isHrPanelUpdateOverridden(getClass());
-
-	private static boolean isHrPanelUpdateOverridden(Class<?> runtimeClass){
-		try {
-			for(Class<?> c = runtimeClass; c!=null && c!=BasicPlotManagerPC.class; c = c.getSuperclass()){
-				try {
-					c.getDeclaredMethod("updateHrPanelIfVisible", String[].class, ObjectCluster.class);
-					return true;
-				} catch (NoSuchMethodException e) {
-					//Not declared at this level, keep walking up towards BasicPlotManagerPC.
-				}
-			}
-			return false;
-		} catch (Throwable t) {
-			return true; //Safe default: behave exactly as before the optimisation.
-		}
-	}
+	private final boolean mIsHrPanelUpdateOverridden = (getClass() != BasicPlotManagerPC.class);
 
 	/** DEV-896: Appends one action to the (lazily created) deferral list and returns the list to
 	 * assign back, so the common case - no debug mode, no missing signal, no HR override - allocates
@@ -2350,7 +2330,16 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 				//DEV-896: replay, in the recorded order, the work that must not run under the chart
 				//monitor. This runs on every exit path from the loop above, the "Trace does not exist"
 				//throw included, because before the batching it ran inline per trace.
-				replayDeferredPlotActions(deferredActions, ojc);
+				try {
+					replayDeferredPlotActions(deferredActions, ojc);
+				} catch (Exception replayException) {
+					//DEV-896: never let a replay failure hide the loop's own exception.
+					if(pendingException != null){
+						pendingException.addSuppressed(replayException);
+					} else {
+						pendingException = replayException;
+					}
+				}
 				if(pendingException != null){
 					throw pendingException;
 				}

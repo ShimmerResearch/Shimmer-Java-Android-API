@@ -50,12 +50,18 @@ import info.monitorenter.gui.chart.traces.Trace2DLtd;
  *       keeps the buffer sorted.</li>
  * </ul>
  *
- * <p>Externally this class reports the same bounds, property-change events and
- * {@code setMaxSize} semantics as {@code Trace2DLtd}; it only removes the redundant O(n) X
- * rescans. The one behavioural difference is a deliberate opt-out rather than a divergence: if any
- * error bar policy is installed on the trace, both X searches delegate wholly to the superclass,
- * because stock {@code minXSearch()}/{@code maxXSearch()} finish by folding the error bar extents
- * into the bounds and the O(1) path has no equivalent. It extends {@code Trace2DLtd} so existing
+ * <p>For any X a Shimmer timestamp can take, this class reports the same bounds, property-change
+ * events and {@code setMaxSize} semantics as {@code Trace2DLtd}; it only removes the redundant
+ * O(n) X rescans. Two edge divergences remain, both at values timestamps never reach: on ties the
+ * stock scan keeps the oldest point while the max-X fast path returns the youngest, which only
+ * differs for -0.0 vs 0.0 (the sign of zero in {@code getMaxX()}/{@code PROPERTY_MAX_X}); and the
+ * fast path skips stock's unconditional {@code expandMin/MaxXErrorBarBounds()} bookkeeping, which
+ * only changes results or fires extra bound events when |X| is within ~1e16 of
+ * {@code Double.MAX_VALUE} or infinite, a regime where stock behaviour after {@code setMaxSize} is
+ * itself wrong. Separately, there is one deliberate opt-out: if any error bar policy is
+ * installed on the trace, both X searches delegate wholly to the superclass, because stock
+ * {@code minXSearch()}/{@code maxXSearch()} finish by folding the error bar extents into the
+ * bounds and the O(1) path has no equivalent. It extends {@code Trace2DLtd} so existing
  * {@code ((Trace2DLtd)trace).setMaxSize(...)} / {@code .iterator()} casts keep working.</p>
  */
 public class Trace2DLtdMonotonicX extends Trace2DLtd {
