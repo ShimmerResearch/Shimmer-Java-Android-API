@@ -78,7 +78,7 @@ fn command_after_the_config_bytes(
     for chunk in 0..3 {
         assert_eq!(out.writes[0][0], 0x8E, "INFOMEM read {}", chunk);
         let mut reply = vec![0xFF, 0x8D, 0x80];
-        reply.extend(std::iter::repeat(0xFF).take(128)); // blank config bytes
+        reply.extend(std::iter::repeat_n(0xFF, 128)); // blank config bytes
         reply.push(0x00);
         t += 10;
         out = p.receive(&reply, t);

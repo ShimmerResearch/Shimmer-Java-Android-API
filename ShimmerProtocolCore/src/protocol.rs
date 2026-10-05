@@ -16,7 +16,7 @@ use std::collections::VecDeque;
 
 use crate::crc::crc;
 use crate::framing::{Frame, StreamFramer};
-use crate::model::{DeviceModel, RawSample};
+use crate::model::{DeviceModel, Sample};
 
 pub const ACK: u8 = 0xFF;
 pub const INQUIRY_COMMAND: u8 = 0x01;
@@ -63,7 +63,7 @@ pub enum Event {
     StateChanged(State),
     /// The handshake finished: the device is configured and ready to stream.
     Initialised(String),
-    Sample(RawSample),
+    Sample(Sample),
     /// The protocol failed, for instance a command timed out.
     Error(String),
     /// Bytes were dropped, or something was ignored; for information.

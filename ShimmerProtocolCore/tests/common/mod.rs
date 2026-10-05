@@ -39,7 +39,7 @@ pub fn load_session(path: &str) -> Vec<Entry> {
             continue;
         };
         let t: Vec<u64> = line[..12]
-            .split(|c| c == ':' || c == '.')
+            .split([':', '.'])
             .map(|n| n.parse().unwrap())
             .collect();
         let ms = ((t[0] * 60 + t[1]) * 60 + t[2]) * 1000 + t[3];
@@ -82,4 +82,52 @@ pub fn java_timestamps(reference: &str) -> Vec<u32> {
     lines
         .map(|l| l.split(',').nth(column).unwrap().parse::<f64>().unwrap() as u32)
         .collect()
+}
+
+/// A Java reference export: one column per channel and format ("Accel_LN_X|CAL|m/(s^2)"), one
+/// row per sample, as API_00030_PythonReferenceTest writes it.
+pub struct JavaReference {
+    /// (channel, "CAL" or "UNCAL", units)
+    pub columns: Vec<(String, String, String)>,
+    pub rows: Vec<Vec<f64>>,
+}
+
+pub fn java_reference(reference: &str) -> JavaReference {
+    let text = fs::read_to_string(repo(reference)).expect("Java reference");
+    let mut lines = text.lines();
+    let columns = lines.next().unwrap().split(',').skip(1).map(|h| {
+        let parts: Vec<&str> = h.split('|').collect();
+        (
+            parts[0].to_string(),
+            parts[1].to_string(),
+            parts[2].to_string(),
+        )
+    });
+    JavaReference {
+        columns: columns.collect(),
+        rows: lines
+            .map(|l| l.split(',').skip(1).map(java_double).collect())
+            .collect(),
+    }
+}
+
+/// Double.toString's output: "1.0519714E7", "NaN", "Infinity".
+pub fn java_double(text: &str) -> f64 {
+    match text {
+        "NaN" => f64::NAN,
+        "Infinity" => f64::INFINITY,
+        "-Infinity" => f64::NEG_INFINITY,
+        _ => text
+            .parse()
+            .unwrap_or_else(|_| panic!("not a double: {}", text)),
+    }
+}
+
+/// Equal to the last bit, sign of zero included (any NaN equal to any NaN).
+pub fn same(a: f64, b: f64) -> bool {
+    a.to_bits() == b.to_bits() || (a.is_nan() && b.is_nan())
+}
+
+pub fn repo_text(path: &str) -> String {
+    fs::read_to_string(repo(path)).expect(path)
 }

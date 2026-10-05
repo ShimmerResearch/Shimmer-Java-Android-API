@@ -9,6 +9,7 @@ use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
 use common::*;
+use shimmer_protocol::model::Sample;
 use shimmer_protocol::protocol::{Event, LogAndStreamProtocol, Output, State, SET_RWC_COMMAND};
 
 const START_MS: u64 = 1790960000000; // the Java replay's origin
@@ -62,6 +63,7 @@ struct Replay {
     order: u64,
     pending: BinaryHeap<Reverse<(u64, u64, Vec<u8>)>>,
     events: Vec<Event>,
+    samples: Vec<Sample>,
     timestamps: Vec<u32>,
 }
 
@@ -79,6 +81,7 @@ impl Replay {
             order: 0,
             pending: BinaryHeap::new(),
             events: Vec::new(),
+            samples: Vec::new(),
             timestamps: Vec::new(),
         };
         let out = p.connect(r.now);
@@ -94,7 +97,7 @@ impl Replay {
             let next_delivery = r.pending.peek().map(|Reverse((t, _, _))| *t);
             match (next_delivery, p.next_deadline()) {
                 (None, None) => break,
-                (Some(t), d) if d.map_or(true, |d| t <= d) => {
+                (Some(t), d) if d.is_none_or(|d| t <= d) => {
                     let Reverse((when, _, data)) = r.pending.pop().unwrap();
                     r.now = r.now.max(when);
                     let out = p.receive(&data, r.now);
@@ -113,10 +116,12 @@ impl Replay {
 
     fn handle(&mut self, out: Output) {
         for e in out.events {
-            if let Event::Sample(s) = &e {
+            if let Event::Sample(s) = e {
                 self.timestamps.push(s.timestamp_ticks);
+                self.samples.push(s);
+            } else {
+                self.events.push(e);
             }
-            self.events.push(e);
         }
         for w in out.writes {
             if let Some((tx_time, rx)) = self.responder.answer(&w) {
@@ -239,4 +244,54 @@ fn a_corrupted_packet_is_dropped_and_decoding_resumes() {
         "the dropped bytes are reported"
     );
     assert_eq!(corrupted.timestamps.last(), clean.timestamps.last());
+}
+
+/// Every channel, raw and calibrated, of every sample: equal to the last bit to the Java decoder's
+/// for the same recording, not just close. That includes the gyro after its on-the-fly offset
+/// recalibration (from sample 51 on), and the PC-clock channels, whose equality shows the replay
+/// itself runs exactly as the Java one.
+fn check_values(session: &str, reference: &str) {
+    let (r, _) = Replay::run(load_session(session));
+    let java = java_reference(reference);
+    assert_eq!(r.samples.len(), java.rows.len());
+
+    let mut names: Vec<&str> = r.samples[0].readings.iter().map(|x| x.name).collect();
+    let mut java_names: Vec<&str> = java.columns.iter().map(|(c, _, _)| c.as_str()).collect();
+    names.sort();
+    java_names.sort();
+    java_names.dedup();
+    assert_eq!(names, java_names, "the same channels");
+
+    for (i, (sample, expected)) in r.samples.iter().zip(&java.rows).enumerate() {
+        for ((channel, format, units), &want) in java.columns.iter().zip(expected) {
+            let reading = sample.reading(channel).unwrap();
+            let got = if format == "CAL" {
+                reading.cal
+            } else {
+                reading.uncal.unwrap()
+            };
+            assert!(
+                same(got, want),
+                "sample {}, {} {}: {} != {}",
+                i,
+                channel,
+                format,
+                got,
+                want
+            );
+            if format == "CAL" {
+                assert_eq!(reading.units, units, "{}", channel);
+            }
+        }
+    }
+}
+
+#[test]
+fn shimmer3r_samples_are_identical_to_the_java_decoder() {
+    check_values(SHIMMER3R_SESSION, SHIMMER3R_REFERENCE);
+}
+
+#[test]
+fn shimmer3_samples_are_identical_to_the_java_decoder() {
+    check_values(SHIMMER3_SESSION, SHIMMER3_REFERENCE);
 }

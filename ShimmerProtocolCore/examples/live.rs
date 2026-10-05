@@ -50,6 +50,10 @@ struct Run {
     worst_lag_ms: f64,
     /// The last few notifications, printed when bytes are dropped, to show what they were.
     recent: VecDeque<(Instant, Vec<u8>)>,
+    /// |accel| in m/s^2 of each sample with low-noise accel: about 9.81 at rest.
+    accel_magnitudes: Vec<f64>,
+    /// The last sample's calibrated channels, printed at the end.
+    last: Option<shimmer_protocol::model::Sample>,
 }
 
 /// Sends the protocol's writes to the device and handles its events.
@@ -68,6 +72,14 @@ fn apply(core: &BleCore, handle: i64, out: Output, run: &mut Run) {
                 let lag = t0.elapsed().as_secs_f64() * 1000.0 - device_ms;
                 run.worst_lag_ms = run.worst_lag_ms.max(lag);
                 run.timestamps.push(s.timestamp_ticks);
+                if let (Some(x), Some(y), Some(z)) = (
+                    s.get("Accel_LN_X"),
+                    s.get("Accel_LN_Y"),
+                    s.get("Accel_LN_Z"),
+                ) {
+                    run.accel_magnitudes.push((x * x + y * y + z * z).sqrt());
+                }
+                run.last = Some(s);
             }
             Event::Discarded(m) => {
                 run.discards += 1;
@@ -224,6 +236,30 @@ fn main() {
         if received > 0.0 { 100.0 * received / (received + missing as f64) } else { 0.0 },
         run.discards
     );
+    if let Some(last) = &run.last {
+        let channels: Vec<String> = last
+            .readings
+            .iter()
+            .filter(|r| r.uncal.is_some() && r.name != "Clock 3_LSB")
+            .map(|r| format!("{} {:.3} {}", r.name, r.cal, r.units))
+            .collect();
+        println!("last sample: {}", channels.join(", "));
+    }
+    if !run.accel_magnitudes.is_empty() {
+        let n = run.accel_magnitudes.len() as f64;
+        let mean = run.accel_magnitudes.iter().sum::<f64>() / n;
+        let sd = (run
+            .accel_magnitudes
+            .iter()
+            .map(|m| (m - mean).powi(2))
+            .sum::<f64>()
+            / n)
+            .sqrt();
+        println!(
+            "|accel|: mean {:.3} m/s^2 (1 g = 9.81), sd {:.3}, over {} samples",
+            mean, sd, n
+        );
+    }
     match run.error {
         Some(e) => {
             println!("FAILED: {}", e);

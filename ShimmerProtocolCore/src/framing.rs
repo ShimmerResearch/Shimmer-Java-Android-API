@@ -121,7 +121,7 @@ mod tests {
 
     fn packet(size: usize, fill: u8, with_crc: bool) -> Vec<u8> {
         let mut p = vec![DATA_PACKET];
-        p.extend(std::iter::repeat(fill).take(size));
+        p.extend(std::iter::repeat_n(fill, size));
         if with_crc {
             let c = crc(&p);
             p.push(c[0]);
