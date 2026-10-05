@@ -45,9 +45,11 @@ import com.shimmerresearch.driverUtilities.ExpansionBoardDetails;
 import com.shimmerresearch.driverUtilities.SensorDetailsRef;
 import com.shimmerresearch.driverUtilities.SensorGroupingDetails;
 import com.shimmerresearch.driverUtilities.SensorDetails;
+import com.shimmerresearch.driverUtilities.SdTimestampAnchor;
 import com.shimmerresearch.driverUtilities.ShimmerSDCardDetails;
 import com.shimmerresearch.driverUtilities.ShimmerVerDetails;
 import com.shimmerresearch.driverUtilities.ShimmerVerObject;
+import com.shimmerresearch.driverUtilities.TimestampUnwrap;
 import com.shimmerresearch.driverUtilities.UtilParseData;
 import com.shimmerresearch.driverUtilities.UtilShimmer;
 import com.shimmerresearch.exceptions.ShimmerException;
@@ -76,6 +78,7 @@ import com.shimmerresearch.sensors.bmpX80.SensorBMP280;
 import com.shimmerresearch.sensors.bmpX80.SensorBMP390;
 import com.shimmerresearch.sensors.bmpX80.SensorBMP581;
 import com.shimmerresearch.sensors.bmpX80.SensorBMPX80;
+import com.shimmerresearch.sensors.bmpX80.SdHeaderPressureSensorId;
 import com.shimmerresearch.sensors.kionix.SensorKionixAccel;
 import com.shimmerresearch.sensors.kionix.SensorKionixKXRB52042;
 import com.shimmerresearch.sensors.kionix.SensorKionixKXTC92050;
@@ -472,7 +475,17 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 
 	public static final byte GET_PRESSURE_CALIBRATION_COEFFICIENTS_COMMAND  = (byte) 0xA7;//BMP390
 	public static final byte PRESSURE_CALIBRATION_COEFFICIENTS_RESPONSE    = (byte) 0xA6;//BMP390
-	
+
+	/** The sensor ID byte in a PRESSURE_CALIBRATION_COEFFICIENTS_RESPONSE, which
+	 * is laid out as [0xA6][len = 1+n][sensorId][n coefficient bytes]
+	 * (log-and-stream-common Comms/shimmer_bt_uart.c). */
+	public static final class PRESSURE_SENSOR_ID {
+		public static final int BMP180 = 0;
+		public static final int BMP280 = 1;
+		public static final int BMP390 = 2;
+		public static final int BMP581 = 3;
+	}
+
 	public static final byte SET_PRESSURE_OVERSAMPLING_RATIO_COMMAND 	= (byte) 0x52;
 	public static final byte PRESSURE_OVERSAMPLING_RATIO_RESPONSE 		= (byte) 0x53;
 	public static final byte GET_PRESSURE_OVERSAMPLING_RATIO_COMMAND 	= (byte) 0x54;
@@ -629,6 +642,11 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 	//-------- Timestamp related start --------
 	protected double mLastReceivedTimeStampTicksUnwrapped=0;
 	protected double mCurrentTimeStampCycle=0;
+	/** False only before the first sample of a stream. The pair above cannot say
+	 *  it on their own: (0, 0) is the reset state and also a state the unwrap can
+	 *  reach, when a reordered packet lands exactly on the counter's origin. See
+	 *  {@link TimestampUnwrap#unwrap(double, double, double, int, double, boolean)}. */
+	protected boolean mHasPreviousTimeStamp=false;
 	protected long mInitialTimeStampTicksSd = 0;
 	@Deprecated //not needed any more
 	protected double mLastReceivedCalibratedTimeStamp=-1; 
@@ -638,19 +656,22 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 	
 	protected int mTimeStampPacketByteSize = 2;
 	protected int mTimeStampTicksMaxValue = 65536;// 16777216 or 65536
+	/** Set per sample by unwrapTimeStamp; see isLastTimestampRejected(). Transient
+	 * because it describes the sample in hand, not the device's configuration. */
+	protected transient boolean mLastTimestampRejected = false;
 	
 	protected long mRTCDifferenceInTicks = 0; //this is in ticks
 	public int mRTCSetByBT = 1; // RTC source, = 1 because it comes from the BT
 
 	protected boolean mFirstTime = true;
 	
-	/** This variable was originally implemented because the
-	 * initial time in the SD header (i.e., the time when the header
-	 * was created) wasn't equal to the first timestamp in the
-	 * subsequent data packets (i.e., the lower 3 bytes of the
-	 * initial timestamp). This problem has since been addressed in
-	 * firmware whereby the header is updated with the timestamp
-	 * from the first packet. Therefore this variable is redundant. */
+	/** Subtracted, with the header's initial timestamp added, from each
+	 * unwrapped SD timestamp so that the file's records land on their own
+	 * counter time. It is not redundant: the SD header holds the RTC at the
+	 * time the file was created, not the first packet's timestamp - the
+	 * firmware captures the latter but never writes it back - so it is set by
+	 * {@link SdTimestampAnchor#firstTsOffsetFromInitialTsTicks} from the
+	 * header's low bits and the first packet's raw timestamp (DEV-1095). */
 	protected double mFirstTsOffsetFromInitialTsTicks = 0;
 	public int OFFSET_LENGTH = 9;
 	//-------- Timestamp related end --------
@@ -671,7 +692,18 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 	protected SensorMPU9X50 mSensorMpu9x50 = new SensorMPU9150(this);
 	// Shimmer3 - Pressure/Temperature 
 	public SensorBMPX80 mSensorBMPX80 = new SensorBMP180(this);
-  
+	/** The pressure sensor a Shimmer3R reported in-band in its
+	 * PRESSURE_CALIBRATION_COEFFICIENTS_RESPONSE (a {@link PRESSURE_SENSOR_ID}),
+	 * or null if it hasn't. When set it overrides the SR-number rule in
+	 * {@link #isSupportedBmp581()}. Cleared whenever the expansion board details
+	 * change, so each connection starts from the SR-number rule again. */
+	protected Integer mPressureSensorIdInBand = null;
+	/** The pressure sensor an SD log file's header records at offset 224, or
+	 * null if none has been applied. When present it overrides the SR-number
+	 * rule in {@link #isSupportedBmp581()} and {@link #isSupportedBmp280()}.
+	 * Cleared whenever the expansion board details change. */
+	protected SdHeaderPressureSensorId mPressureSensorIdSdHeader = null;
+
 	// Shimmer3r - Mag
 	private SensorLIS2MDL mSensorLIS2MDL = new SensorLIS2MDL(this);
 	// Shimmer3r - Alt Mag
@@ -2019,7 +2051,7 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 				uncalibratedData[iUP]=(double)newPacketInt[iUP];
 				uncalibratedDataUnits[iUT]=CHANNEL_UNITS.NO_UNITS;
 				uncalibratedDataUnits[iUP]=CHANNEL_UNITS.NO_UNITS;
-				if (mEnableCalibration){
+				if (mEnableCalibration && isPressureSensorCalibratable()){
 					double[] bmp180caldata = mSensorBMPX80.calibratePressureSensorData(UP,UT);
 					objectCluster.addDataToMap(signalNameBmpX80Pressure,CHANNEL_TYPE.CAL.toString(),CHANNEL_UNITS.KPASCAL,bmp180caldata[0]/1000);
 					objectCluster.addDataToMap(signalNameBmpX80Temperature,CHANNEL_TYPE.CAL.toString(),CHANNEL_UNITS.DEGREES_CELSIUS,bmp180caldata[1]);
@@ -2027,6 +2059,12 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 					calibratedData[iUP]=bmp180caldata[0]/1000;
 					calibratedDataUnits[iUT]=CHANNEL_UNITS.DEGREES_CELSIUS;
 					calibratedDataUnits[iUP]=CHANNEL_UNITS.KPASCAL;
+				} else if (mEnableCalibration){
+					// The SD header names a sensor this parser cannot calibrate, or
+					// none fitted. The multimap has no CAL entry, so it reads NaN;
+					// leaving the arrays at 0 would look like a real reading.
+					calibratedData[iUT]=Double.NaN;
+					calibratedData[iUP]=Double.NaN;
 				}
 			}
 
@@ -2125,7 +2163,8 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 					if(currentGSRRange==3 && gsrAdcValueUnCal<SensorGSR.GSR_UNCAL_LIMIT_RANGE3) {
 						gsrAdcValueUnCal = SensorGSR.GSR_UNCAL_LIMIT_RANGE3;
 					}
-					gsrResistanceKOhms = SensorGSR.calibrateGsrDataToKOhmsUsingAmplifierEq(gsrAdcValueUnCal, currentGSRRange, MICROCONTROLLER_ADC_PROPERTIES.SHIMMER2R3_3V0, SensorGSR.SHIMMER3_GSR_REF_RESISTORS_KOHMS);
+					//An open circuit reads as open on ranges 0-2 too, where only the resistance changes (DEV-1070)
+					gsrResistanceKOhms = SensorGSR.calibrateGsrDataToKOhmsWithOpenCircuitLimit(gsrAdcValueUnCal, currentGSRRange, SensorGSR.GSR_UNCAL_LIMIT_RANGE3, MICROCONTROLLER_ADC_PROPERTIES.SHIMMER2R3_3V0, SensorGSR.SHIMMER3_GSR_REF_RESISTORS_KOHMS);
 					gsrResistanceKOhms = SensorGSR.nudgeGsrResistance(gsrResistanceKOhms, getGSRRange(), SensorGSR.SHIMMER3_GSR_RESISTANCE_MIN_MAX_KOHMS);
 					gsrConductanceUSiemens = (1.0/gsrResistanceKOhms)*1000;
 					
@@ -2812,17 +2851,19 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 		objectCluster.addDataToMap(Shimmer3.ObjectClusterSensorName.SHIMMER_CLOCK,CHANNEL_TYPE.UNCAL.toString(),CHANNEL_UNITS.CLOCK_UNIT,shimmerTimestampTicks);
 		objectCluster.addDataToMap(Shimmer3.ObjectClusterSensorName.SHIMMER_CLOCK,CHANNEL_TYPE.CAL.toString(),CHANNEL_UNITS.CLOCK_UNIT,shimmerTimestampTicks);
 		if(mFirstTime && fwType==COMMUNICATION_TYPE.SD){
-			//this is to make sure the Raw starts from zero for SD data. See comment for mFirstTsOffsetFromInitialTsTicks. 
-			mFirstTsOffsetFromInitialTsTicks = shimmerTimestampTicks;
-			
-			//This is to circumvent a bug with old StroKare firmware. Resolved in firmware v1.0.1 
+			//This is to circumvent a bug with old StroKare firmware. Resolved in firmware v1.0.1
 			if(getFirmwareIdentifier()==FW_ID.STROKARE
 					&& !isThisVerCompatibleWith(FW_ID.STROKARE, 1, 0, 1)){
 				long initialTsTicksOriginal = getInitialTimeStampTicksSd();
 				long initialTsTicksNew = (long) ((initialTsTicksOriginal&0xFFFF000000L)+shimmerTimestampTicks);
 				setInitialTimeStampTicksSd(initialTsTicksNew);
 			}
-			
+
+			//Anchors the file on the first packet's own counter time rather than on
+			//the header's file-creation time. See comment for mFirstTsOffsetFromInitialTsTicks.
+			mFirstTsOffsetFromInitialTsTicks = SdTimestampAnchor.firstTsOffsetFromInitialTsTicks(
+					getInitialTimeStampTicksSd(), shimmerTimestampTicks, mTimeStampTicksMaxValue);
+
 			mFirstTime = false;
 		}
 
@@ -2830,7 +2871,11 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 		double timestampUnwrappedMilliSecs = timestampUnwrappedTicks/getRtcClockFreq()*1000;   // to convert into mS
 		
 		incrementPacketsReceivedCounters();
-		calculateTrialPacketLoss(timestampUnwrappedMilliSecs);
+		if(!isLastTimestampRejected()){
+			//A rejected sample carries the previous timestamp, so feeding it to the
+			//packet-loss estimate would show a zero-length gap that never happened.
+			calculateTrialPacketLoss(timestampUnwrappedMilliSecs);
+		}
 		
 		//TIMESTAMP
 		double timestampUnwrappedWithOffsetTicks = 0;
@@ -3822,29 +3867,64 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 
 	/**
 	 * Unwraps the timestamp based on the current recording (i.e., per file for
-	 * SD recordings not taking into account the initial file start time)
+	 * SD recordings not taking into account the initial file start time).
+	 * <p>
+	 * A sample can be rejected rather than unwrapped - see
+	 * {@link TimestampUnwrap} and {@link #isLastTimestampRejected()}.
 	 * 
 	 * @param timeStampTicks
 	 * @return
 	 */
 	protected double unwrapTimeStamp(double timeStampTicks){
-		//first convert to continuous time stamp
-		double timestampUnwrappedTicks = calculateTimeStampUnwrapped(timeStampTicks);
-		
-		//Check if there was a roll-over
-		if (getLastReceivedTimeStampTicksUnwrapped()>timestampUnwrappedTicks){ 
-			mCurrentTimeStampCycle += 1;
-			//Recalculate timestamp
-			timestampUnwrappedTicks = calculateTimeStampUnwrapped(timeStampTicks);
-		}
+		TimestampUnwrap.Result result = TimestampUnwrap.unwrap(timeStampTicks,
+				getLastReceivedTimeStampTicksUnwrapped(), mCurrentTimeStampCycle, mTimeStampTicksMaxValue,
+				getReorderWindowTicks(), mHasPreviousTimeStamp);
 
-		setLastReceivedTimeStampTicksUnwrapped(timestampUnwrappedTicks);
+		mLastTimestampRejected = result.rejected;
+		mCurrentTimeStampCycle = result.cycle;
+		//On a rejected sample this puts back the value it already held, which is
+		//what keeps the rejection from cascading: the next sample reads above it
+		//and is accepted normally.
+		setLastReceivedTimeStampTicksUnwrapped(result.unwrapped);
 
-		return timestampUnwrappedTicks;
+		return result.unwrapped;
 	}
 
-	private double calculateTimeStampUnwrapped(double timeStampTicks) {
-		return timeStampTicks+(mTimeStampTicksMaxValue*mCurrentTimeStampCycle);
+	/**
+	 * How far behind its predecessor a sample may sit and still be read as a
+	 * reordered packet rather than a counter roll-over. See
+	 * {@link TimestampUnwrap#reorderWindowTicks(double, int)}.
+	 * <p>
+	 * Derived on every sample rather than cached, so a rate written mid-session is
+	 * picked up by the next one and there is no stale window to reset.
+	 * {@link #getSamplingRateShimmer()} is safe to call here on both paths: the map
+	 * it reads is seeded for SD and Bluetooth at construction, an SD file's header
+	 * rate lands before the first record is parsed, and a Bluetooth rate lands
+	 * during connect.
+	 * <p>
+	 * Zero - reorder detection off - on Shimmer2 and Shimmer2R. Their tick domain
+	 * is not settled: this class divides their 16-bit counter by
+	 * {@link #getRtcClockFreq()} (32768) while the C# API divides by 1024, so a
+	 * window derived from the rate would be wrong in one of the two. Those devices
+	 * keep the behaviour they have always had; the invalid-zero rule never applied
+	 * to a 2-byte counter anyway.
+	 */
+	protected double getReorderWindowTicks(){
+		if(getHardwareVersion()==HW_ID.SHIMMER_2 || getHardwareVersion()==HW_ID.SHIMMER_2R){
+			return 0.0;
+		}
+		return TimestampUnwrap.reorderWindowTicks(getSamplingRateShimmer(), mTimeStampTicksMaxValue);
+	}
+
+	/**
+	 * True when the sample most recently passed to {@link #unwrapTimeStamp(double)}
+	 * carried an invalid zero timestamp and was rejected rather than unwrapped. Its
+	 * sensor data is fine; only its timestamp is missing. Callers reading a file
+	 * should drop the record; a live stream has nothing better to do than carry the
+	 * previous timestamp forward for one packet.
+	 */
+	public boolean isLastTimestampRejected() {
+		return mLastTimestampRejected;
 	}
 
 
@@ -3885,6 +3965,14 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 		mStreamingStartTimeMilliSecs = -1;
 		
 		setCurrentTimeStampCycle(0);
+		//Last, because the setter above marks a predecessor as present - which is
+		//what a caller seeding state across files wants, and the opposite of what
+		//a reset means.
+		mHasPreviousTimeStamp = false;
+		//Belongs with the unwrap state reset above: it describes the last sample
+		//unwrapped against that state, so leaving it set would carry a rejection
+		//into a recording that has not started yet.
+		mLastTimestampRejected = false;
 	}
 
 
@@ -4730,6 +4818,10 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 	
 	public void setLastReceivedTimeStampTicksUnwrapped(double lastReceivedTimeStampTicksUnwrapped){
 		mLastReceivedTimeStampTicksUnwrapped = lastReceivedTimeStampTicksUnwrapped;
+		//Being told the previous sample's value IS a predecessor - that is what
+		//callers chaining legacy SD files across a trial are doing. A reset says
+		//so explicitly afterwards; see resetCalibratedTimeStamp().
+		mHasPreviousTimeStamp = true;
 	}
 
 	public void updateTimestampByteLength(){
@@ -5455,7 +5547,9 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 				
 			}
 			else if(isSupportedNewImuSensors()){
-				mSensorBMPX80 = new SensorBMP280(this);
+				// The barometer follows isSupportedBmp280(), which an SD header's
+				// pressure sensor ID can set apart from the IMU generation
+				mSensorBMPX80 = isSupportedBmp280()? new SensorBMP280(this):new SensorBMP180(this);
 				addSensorClass(mSensorBMPX80);
 				
 				mSensorLSM303 = new SensorLSM303AH(this);
@@ -5471,7 +5565,7 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 			}
 			
 			else{
-				mSensorBMPX80 = new SensorBMP180(this);
+				mSensorBMPX80 = isSupportedBmp280()? new SensorBMP280(this):new SensorBMP180(this);
 				addSensorClass(mSensorBMPX80);
 				
 				mSensorLSM303 = new SensorLSM303DLHC(this);
@@ -10745,9 +10839,17 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 	/** Returns true if the Shimmer is using new sensors. These sensors are:
 	 * <li> Use BMP280 instead of BMP180 as barometer. 
 	 * 
+	 * <p>
+	 * If an SD log file's header names its pressure sensor (see
+	 * {@link #setPressureSensorIdFromSdHeader(int)}), that answer is used
+	 * instead of the board revision.
+	 * 
 	 * @return
 	 */
 	public boolean isSupportedBmp280() {
+		if(mPressureSensorIdSdHeader!=null && mPressureSensorIdSdHeader.isPresent() && getHardwareVersion()==HW_ID.SHIMMER_3){
+			return mPressureSensorIdSdHeader.isSensor(PRESSURE_SENSOR_ID.BMP280);
+		}
 		return isSupportedNewImuSensors();
 	}
 
@@ -10762,37 +10864,189 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 	 * SR number/revision and the firmware version that produces the new output
 	 * format.
 	 *
-	 * @return true if the connected Shimmer3R board revision and firmware version indicate BMP581 output support
+	 * <p>
+	 * If the Shimmer has reported its pressure sensor in-band (the sensor ID in
+	 * its PRESSURE_CALIBRATION_COEFFICIENTS_RESPONSE, LogAndStream_Shimmer3R
+	 * v1.01.007 onwards), that answer is used and overrides the SR-number rule
+	 * in either direction. Otherwise, e.g. when the firmware NACKs the command
+	 * or is too old to have it, the SR-number rule decides.
+	 *
+	 * <p>
+	 * An SD log file's header names its pressure sensor from
+	 * LogAndStream_Shimmer3R v1.01.018 (see
+	 * {@link #setPressureSensorIdFromSdHeader(int)}), and that overrides the
+	 * SR-number rule in the same way.
+	 *
+	 * @return true if the connected Shimmer3R reported a BMP581, or if its board revision and firmware version indicate BMP581 output support
 	 */
 	public boolean isSupportedBmp581() {
+		if(mPressureSensorIdInBand!=null && getHardwareVersion()==HW_ID.SHIMMER_3R){
+			return mPressureSensorIdInBand==PRESSURE_SENSOR_ID.BMP581;
+		}
+		if(mPressureSensorIdSdHeader!=null && mPressureSensorIdSdHeader.isPresent() && getHardwareVersion()==HW_ID.SHIMMER_3R){
+			return mPressureSensorIdSdHeader.isSensor(PRESSURE_SENSOR_ID.BMP581);
+		}
 		return isSupportedBmp581(getShimmerVerObject(), getExpansionBoardDetails());
 	}
 
+	/** The SR-number rule alone, used when the Shimmer hasn't identified its
+	 * pressure sensor in-band and for SD log files whose header doesn't name
+	 * it. It mirrors the firmware's own fallback,
+	 * ShimBrd_isBmp581PresentPerSrNumber() in log-and-stream-common
+	 * Boards/shimmer_boards.c, plus a firmware-version guard.
+	 *
+	 * @param svo the Shimmer's version details
+	 * @param ebd the Shimmer's expansion board details
+	 * @return true if a Shimmer3R with this board and firmware carries a BMP581
+	 */
 	public static boolean isSupportedBmp581(ShimmerVerObject svo, ExpansionBoardDetails ebd) {
 		if(svo==null || ebd==null || svo.getHardwareVersion()!=HW_ID.SHIMMER_3R){
 			return false;
 		}
 
-		// SR48 (GSR+): BMP581 spans two bands - 7.2..7.x AND 8.2 and above.
-		// 7.0/7.1 and 8.0/8.1 are BMP390, so a single lexicographic ">=" can't
-		// express it (8.0/8.1 fall between the two BMP581 bands).
-		boolean sr48Bmp581 =
-				(ebd.getExpansionBoardId()==HW_ID_SR_CODES.EXP_BRD_GSR_UNIFIED
-						&& ebd.getExpansionBoardRev()==7
-						&& ebd.getExpansionBoardRevSpecial()>=2)                  // SR48 7.2..7.x
-				|| ebd.isSrNumberGte(HW_ID_SR_CODES.EXP_BRD_GSR_UNIFIED, 8, 2);   // SR48 8.2 and above
-
+		// Fitted models (">=" applies to both rev fields): SR31-11-2, SR38-4-2,
+		// SR47-8-2, SR48-7-2, SR48-8-2, SR49-4-2. SR48 (GSR+) has two BMP581
+		// bands, 7.2..7.x and 8.2 onwards: 8.0/8.1 went back to the BMP390, so
+		// the rev-7 band is ">= 7.2 and not >= 8.0". An unprogrammed card (board
+		// ID 0x00 or 0xFF) matches none of these IDs.
 		boolean boardEligible =
-				   ebd.isSrNumberGte(HW_ID_SR_CODES.SHIMMER3,              11, 2)  // SR31 >= 11.2
-				|| ebd.isSrNumberGte(HW_ID_SR_CODES.EXP_BRD_EXG_UNIFIED,   8, 2)  // SR47 >= 8.2
-				|| sr48Bmp581                                                     // SR48 7.2..7.x and 8.2+
-				|| ebd.isSrNumberGte(HW_ID_SR_CODES.EXP_BRD_BR_AMP_UNIFIED, 4, 2); // SR49 >= 4.2
+				   ebd.isSrNumberGte(HW_ID_SR_CODES.SHIMMER3,               11, 2)  // SR31 >= 11.2
+				|| ebd.isSrNumberGte(HW_ID_SR_CODES.EXP_BRD_PROTO3_DELUXE,   4, 2)  // SR38 >= 4.2
+				|| ebd.isSrNumberGte(HW_ID_SR_CODES.EXP_BRD_EXG_UNIFIED,     8, 2)  // SR47 >= 8.2
+				|| (ebd.isSrNumberGte(HW_ID_SR_CODES.EXP_BRD_GSR_UNIFIED,    7, 2)
+						&& !ebd.isSrNumberGte(HW_ID_SR_CODES.EXP_BRD_GSR_UNIFIED, 8, 0)) // SR48 7.2..7.x
+				|| ebd.isSrNumberGte(HW_ID_SR_CODES.EXP_BRD_GSR_UNIFIED,     8, 2)  // SR48 >= 8.2
+				|| ebd.isSrNumberGte(HW_ID_SR_CODES.EXP_BRD_BR_AMP_UNIFIED,  4, 2); // SR49 >= 4.2
 
 		// Format guard: BMP581 (pre-compensated) output only exists from
 		// LogAndStream_Shimmer3R v1.01.006 onwards.
 		boolean fwEligible = svo.compareVersions(FW_ID.LOGANDSTREAM, 1, 1, 6);
 
 		return boardEligible && fwEligible;
+	}
+
+	/** Records the pressure sensor a Shimmer3R reported in-band and, if the
+	 * sensor class in use is not the one it names, rebuilds the sensor classes
+	 * around the reported sensor. The rebuild is what would have happened had
+	 * the sensor been known when the daughter card ID arrived: the config bytes,
+	 * which the Shimmer sends before this response while connecting, are parsed
+	 * again so the new sensor class picks up its settings (e.g. oversampling).
+	 *
+	 * @param pressureSensorId the sensor ID from the response, a {@link PRESSURE_SENSOR_ID}
+	 */
+	public void setPressureSensorIdInBand(int pressureSensorId) {
+		mPressureSensorIdInBand = pressureSensorId;
+
+		if(isShimmerGen3R()){
+			boolean bmp581InUse = mSensorBMPX80.mSensorType==SENSORS.BMP581;
+			if(bmp581InUse!=isSupportedBmp581()){
+				consolePrintLn("Pressure sensor reported in-band (ID " + pressureSensorId + ") differs from the SR-number rule, switching to " + (isSupportedBmp581()? "BMP581":"BMP390"));
+				sensorAndConfigMapsCreate();
+				if(mShimmerUsingConfigFromInfoMem && ConfigByteLayout.checkConfigBytesValid(mConfigBytes)){
+					configBytesParse(mConfigBytes, COMMUNICATION_TYPE.BLUETOOTH);
+				}
+			}
+		}
+	}
+
+	/**
+	 * @return the pressure sensor the Shimmer reported in-band (a {@link PRESSURE_SENSOR_ID}), or null if it hasn't
+	 */
+	public Integer getPressureSensorIdInBand() {
+		return mPressureSensorIdInBand;
+	}
+
+	/** Applies the pressure sensor an SD log file's header records at offset
+	 * 224. The byte is ignored (the SR-number rule decides, as before) unless
+	 * the firmware is new enough to write it. Call this after the version and
+	 * expansion board details are set, because setting the board clears it,
+	 * and before {@link #sensorAndConfigMapsCreate()}, which builds the
+	 * pressure sensor class from it.
+	 *
+	 * @param headerValue the byte at {@link SdHeaderPressureSensorId#SD_HEADER_INDEX}, 0-255
+	 * @return what the byte means for this file
+	 */
+	public SdHeaderPressureSensorId setPressureSensorIdFromSdHeader(int headerValue) {
+		SdHeaderPressureSensorId sdHeaderId = SdHeaderPressureSensorId.parse(getShimmerVerObject(), headerValue);
+
+		mPressureSensorIdSdHeader = sdHeaderId;
+
+		boolean isShimmer3R = getHardwareVersion()==HW_ID.SHIMMER_3R;
+		boolean isNewerSensorPerSrRule = isShimmer3R?
+				isSupportedBmp581(getShimmerVerObject(), getExpansionBoardDetails()):isSupportedNewImuSensors();
+
+		if(sdHeaderId.isKnown()){
+			boolean isNewerSensorPerHeader = sdHeaderId.isSensor(isShimmer3R? PRESSURE_SENSOR_ID.BMP581:PRESSURE_SENSOR_ID.BMP280);
+			if(isNewerSensorPerHeader!=isNewerSensorPerSrRule){
+				consolePrintLn("Pressure sensor in the SD header, " + sdHeaderId + ", differs from the SR-number rule, using the SD header");
+			}
+			if(sdHeaderId.isInferred()){
+				consolePrintErrLn("Pressure sensor in the SD header, " + sdHeaderId + ", was not confirmed by chip ID");
+			}
+		} else if(sdHeaderId.getState()==SdHeaderPressureSensorId.STATE.UNKNOWN){
+			consolePrintErrLn("Pressure sensor in the SD header, " + sdHeaderId + ", is not one this parser knows, pressure and temperature will be uncalibrated");
+		}
+		return sdHeaderId;
+	}
+
+	/**
+	 * @return the pressure sensor ID applied from an SD log file's header, or
+	 *         null if none has been applied
+	 */
+	public SdHeaderPressureSensorId getPressureSensorIdSdHeader() {
+		return mPressureSensorIdSdHeader;
+	}
+
+	/**
+	 * @return true if an SD log file's header says the pressure sensor was
+	 *         inferred from the SR number rather than confirmed by chip ID
+	 */
+	public boolean isPressureSensorInferred() {
+		return mPressureSensorIdSdHeader!=null && mPressureSensorIdSdHeader.isPresent() && mPressureSensorIdSdHeader.isInferred();
+	}
+
+	/**
+	 * @return false if an SD log file's header names a pressure sensor this
+	 *         parser doesn't know, or says none is fitted, in which case the
+	 *         pressure and temperature channels are emitted uncalibrated
+	 */
+	public boolean isPressureSensorCalibratable() {
+		return mPressureSensorIdSdHeader==null || !mPressureSensorIdSdHeader.isUncalibrated();
+	}
+
+	/**
+	 * @param pressureSensorId a {@link PRESSURE_SENSOR_ID}
+	 * @return the number of coefficient bytes that follow this sensor ID in a
+	 *         PRESSURE_CALIBRATION_COEFFICIENTS_RESPONSE, or -1 if the ID is unknown
+	 */
+	public static int getPressureCalibCoefficientByteLength(int pressureSensorId) {
+		switch(pressureSensorId){
+			case PRESSURE_SENSOR_ID.BMP180:
+				return 22;
+			case PRESSURE_SENSOR_ID.BMP280:
+				return 24;
+			case PRESSURE_SENSOR_ID.BMP390:
+				return 21;
+			case PRESSURE_SENSOR_ID.BMP581:
+				return 0; // self-compensating, no coefficients
+			default:
+				return -1;
+		}
+	}
+
+	@Override
+	public void setExpansionBoardDetails(ExpansionBoardDetails eBD){
+		super.setExpansionBoardDetails(eBD);
+		// A different board may carry a different pressure sensor
+		mPressureSensorIdInBand = null;
+		mPressureSensorIdSdHeader = null;
+	}
+
+	@Override
+	public void clearExpansionBoardDetails(){
+		super.clearExpansionBoardDetails();
+		mPressureSensorIdInBand = null;
+		mPressureSensorIdSdHeader = null;
 	}
 
 	/** Returns true if the Shimmer is using new sensors. These sensors are:
