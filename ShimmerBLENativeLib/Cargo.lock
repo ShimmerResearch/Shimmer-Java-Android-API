@@ -585,6 +585,8 @@ dependencies = [
  "jni 0.21.1",
  "tokio",
  "uuid",
+ "windows",
+ "windows-future",
 ]
 
 [[package]]

@@ -2,16 +2,19 @@ package com.shimmerresearch.driver.ble.nativeble;
 
 /**
  * The BLE service each device family uses as a serial byte pipe: the host writes commands to one
- * characteristic and receives data as notifications on another.
+ * characteristic and receives data as notifications on another (or the same one).
  * <p>
- * The UUIDs match those used by the gRPC BLE servers (Shimmer-C-API ShimmerBLEGrpc).
+ * Shimmer3R: CA102 offers notify and write-without-response, CA101 indicate and write. The
+ * firmware sends on whichever is subscribed, so both pairings work, but CA101's indications are
+ * acknowledged one by one and so have less headroom; this uses CA102 for both directions. (The
+ * gRPC BLE servers in Shimmer-C-API subscribe to CA101; the Android and Swift APIs to CA102.)
  */
 public enum BleUartProfile {
 
 	SHIMMER3R("Shimmer3R",
 			"65333333-a115-11e2-9e9a-0800200ca100",
 			"65333333-a115-11e2-9e9a-0800200ca102",
-			"65333333-a115-11e2-9e9a-0800200ca101"),
+			"65333333-a115-11e2-9e9a-0800200ca102"),
 	/** Microchip transparent UART, used by the Shimmer3 BLE radio. */
 	SHIMMER3("Shimmer3",
 			"49535343-fe7d-4ae5-8fa9-9fafd205e455",

@@ -8,6 +8,8 @@
 //! `NativeBleException` on the Java side, never an abort of the JVM.
 
 pub mod engine;
+#[cfg(target_os = "windows")]
+mod winrt_link;
 
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::{Mutex, OnceLock};

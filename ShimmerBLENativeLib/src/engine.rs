@@ -76,6 +76,9 @@ struct Connection {
     write_char: Characteristic,
     write_type: WriteType,
     pump: JoinHandle<()>,
+    /// Held so a short connection interval lasts as long as the link (see winrt_link).
+    #[cfg(target_os = "windows")]
+    _fast_link: Option<crate::winrt_link::FastLink>,
 }
 
 struct Shared {
@@ -356,6 +359,22 @@ async fn open_link(
     let mut notifications = peripheral.notifications().await?;
     peripheral.subscribe(&notify_char).await?;
 
+    // btleplug on Windows subscribes with indications whenever they are offered, and a Shimmer3
+    // cannot sustain 51.2 Hz over them at Windows' default interval; ask for a shorter one (see
+    // winrt_link). The link works without it, more slowly, so a failure does not fail the connection.
+    #[cfg(target_os = "windows")]
+    let fast_link = if notify_char.properties.contains(CharPropFlags::INDICATE) {
+        match crate::winrt_link::request_throughput(u64::from(peripheral.address())).await {
+            Ok(link) => Some(link),
+            Err(reason) => {
+                eprintln!("shimmerble: could not shorten the connection interval for {}: {}", id, reason);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let pump_shared = shared.clone();
     let pump = tokio::spawn(async move {
         while let Some(n) = notifications.next().await {
@@ -368,7 +387,15 @@ async fn open_link(
 
     lock(&shared.connections).insert(
         handle,
-        Connection { id: id.to_string(), peripheral: peripheral.clone(), write_char, write_type, pump },
+        Connection {
+            id: id.to_string(),
+            peripheral: peripheral.clone(),
+            write_char,
+            write_type,
+            pump,
+            #[cfg(target_os = "windows")]
+            _fast_link: fast_link,
+        },
     );
     Ok(())
 }

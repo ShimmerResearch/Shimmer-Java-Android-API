@@ -45,7 +45,7 @@ fn profile_for(name: &str) -> Option<Profile> {
             label: "Shimmer3R",
             service: uuid("65333333-a115-11e2-9e9a-0800200ca100"),
             write: uuid("65333333-a115-11e2-9e9a-0800200ca102"),
-            notify: uuid("65333333-a115-11e2-9e9a-0800200ca101"),
+            notify: uuid("65333333-a115-11e2-9e9a-0800200ca102"),
         })
     } else if name.contains("Verisense") {
         Some(Profile {

@@ -104,6 +104,17 @@ System Settings > Privacy & Security > Bluetooth. Launching from an IDE may fail
 declare Bluetooth usage. A packaged app (Consensys) needs `NSBluetoothAlwaysUsageDescription` in its
 `Info.plist`.
 
+### Windows: indications and the connection interval
+
+When a characteristic offers indications, btleplug on Windows subscribes with them, even if it offers
+notifications too. Each indication is acknowledged before the next, so the data rate is bounded by
+the connection interval. The Shimmer3's RN4678 offers both, and at Windows' default 60 ms interval it
+cannot keep up with 51.2 Hz: it falls behind and drops whole buffers (75-94% received over 20 s). For
+such links the library asks Windows for its throughput-optimized parameters (15 ms interval) and
+holds the request while connected (`src/winrt_link.rs`; Windows 11). Measured: 100% over 60 s.
+
+The Shimmer3R uses CA102, which offers notifications only, so it is not affected.
+
 ## Third-party licences
 
 btleplug is BSD-3-Clause (with MIT/Apache-2.0 parts), and its dependencies are permissively
