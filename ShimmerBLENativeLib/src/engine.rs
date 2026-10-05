@@ -28,6 +28,9 @@ use uuid::Uuid;
 /// Smallest ATT payload every BLE link supports (default MTU of 23, minus the 3-byte header).
 const MIN_WRITE_CHUNK: usize = 20;
 const DISCONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long to wait for a withheld service if the release cannot be watched for.
+#[cfg(target_os = "windows")]
+const RELEASE_FALLBACK: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Clone)]
 pub struct BleError(pub String);
@@ -259,12 +262,18 @@ impl BleCore {
         };
         let handle = self.next_handle.fetch_add(1, Ordering::SeqCst);
 
+        let withheld = AtomicBool::new(false);
         let attempt = self.block_on_timeout(
             timeout,
-            open_link(&self.shared, &peripheral, id, handle, service, write, notify),
+            open_link(&self.shared, &peripheral, id, handle, service, write, notify, &withheld),
         );
         let result = match attempt {
             Ok(result) => result,
+            Err(_) if withheld.load(Ordering::SeqCst) => err(format!(
+                "connect timed out after {} ms waiting for Windows to release the link: it still holds it \
+                 for a process that ended, and lets go about 15-30 s after that; try again",
+                timeout.as_millis()
+            )),
             Err(_) => err(format!("connect timed out after {} ms", timeout.as_millis())),
         };
         if result.is_err() {
@@ -351,23 +360,52 @@ async fn open_link(
     service: Uuid,
     write: Uuid,
     notify: Uuid,
+    withheld: &AtomicBool,
 ) -> Result<()> {
-    if !peripheral.is_connected().await? {
-        peripheral.connect().await?;
-    }
-    peripheral.discover_services().await?;
-
-    let characteristics = peripheral.characteristics();
-    let find = |uuid: Uuid| {
-        characteristics.iter().find(|c| c.uuid == uuid && c.service_uuid == service).cloned()
-    };
-    let write_char = match find(write) {
-        Some(c) => c,
-        None => return err(format!("write characteristic {} not found in service {}", write, service)),
-    };
-    let notify_char = match find(notify) {
-        Some(c) => c,
-        None => return err(format!("notify characteristic {} not found in service {}", notify, service)),
+    let (write_char, notify_char) = loop {
+        if !peripheral.is_connected().await? {
+            peripheral.connect().await?;
+        }
+        peripheral.discover_services().await?;
+        let characteristics = peripheral.characteristics();
+        let find = |uuid: Uuid| {
+            characteristics.iter().find(|c| c.uuid == uuid && c.service_uuid == service).cloned()
+        };
+        // Present, but with no characteristics: see below.
+        let empty = peripheral.services().iter().any(|s| s.uuid == service)
+            && !characteristics.iter().any(|c| c.service_uuid == service);
+        let withheld_now = cfg!(target_os = "windows") && empty;
+        match (find(write), find(notify)) {
+            (Some(w), Some(n)) => break (w, n),
+            // Windows withholds a service's characteristics (it shows none) while it still holds
+            // the link for a process that was killed: a new process is denied the old one's
+            // services until the link is dropped. Windows drops it once
+            // nobody uses the device (measured 13-23 s after the kill), but every use, a retry
+            // included, keeps it. So release it, wait untouched until Windows lets go, and
+            // connect afresh, once. (btleplug keeps a service it read as empty until it
+            // disconnects, so reading again without reconnecting would not help either.)
+            _ if withheld_now && !withheld.load(Ordering::SeqCst) => {
+                withheld.store(true, Ordering::SeqCst);
+                eprintln!(
+                    "shimmerble: {}: Windows is withholding service {} while it holds the link for a process \
+                     that ended; waiting for it to let go",
+                    id, service
+                );
+                // Its DeviceDisconnected event is handled during the wait, before this handle is
+                // registered, so it cannot drop the connection being opened.
+                peripheral.disconnect().await?;
+                wait_until_released(peripheral).await;
+            }
+            _ if withheld_now => {
+                return err(format!(
+                    "service {} is withheld by Windows: it still holds the link for a process that ended, \
+                     and lets go about 15-30 s after that; try again",
+                    service
+                ))
+            }
+            (None, _) => return err(format!("write characteristic {} not found in service {}", write, service)),
+            (_, None) => return err(format!("notify characteristic {} not found in service {}", notify, service)),
+        }
     };
     let write_type = if write_char.properties.contains(CharPropFlags::WRITE_WITHOUT_RESPONSE) {
         WriteType::WithoutResponse
@@ -419,6 +457,19 @@ async fn open_link(
     );
     Ok(())
 }
+
+/// Returns once Windows no longer holds a link to the device (see open_link): when the device
+/// advertises again. The caller's connect timeout bounds the wait.
+#[cfg(target_os = "windows")]
+async fn wait_until_released(peripheral: &Peripheral) {
+    if let Err(reason) = crate::winrt_retrieve::wait_for_advertisement(u64::from(peripheral.address())).await {
+        eprintln!("shimmerble: cannot watch for the device to be released ({}); retrying shortly", reason);
+        tokio::time::sleep(RELEASE_FALLBACK).await;
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+async fn wait_until_released(_peripheral: &Peripheral) {}
 
 async fn adapter_event_pump(
     adapter: Adapter,

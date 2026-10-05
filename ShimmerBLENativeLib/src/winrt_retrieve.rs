@@ -10,14 +10,23 @@
 //!
 //! It also returns each device's name, which btleplug does not know for a device it never saw
 //! advertise, and by which the Java side recognises a Shimmer.
+//!
+//! And it waits, without touching the device, for Windows to drop such a link (see
+//! engine::open_link).
 
 use std::future::IntoFuture;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use uuid::Uuid;
+use windows::Devices::Bluetooth::Advertisement::{
+    BluetoothLEAdvertisementReceivedEventArgs, BluetoothLEAdvertisementWatcher, BluetoothLEScanningMode,
+};
 use windows::Devices::Bluetooth::GenericAttributeProfile::GattCommunicationStatus;
 use windows::Devices::Bluetooth::{BluetoothCacheMode, BluetoothConnectionStatus, BluetoothLEDevice};
 use windows::Devices::Enumeration::DeviceInformation;
+use windows::Foundation::TypedEventHandler;
 
 /// As btleplug's: a stale device's cached service lookup has been seen to hang for tens of seconds.
 const SERVICES_TIMEOUT: Duration = Duration::from_secs(5);
@@ -68,4 +77,46 @@ async fn exposing(info: &DeviceInformation, services: &[Uuid]) -> Option<(u64, S
     };
     let _ = device.Close();
     found
+}
+
+/// Waits until `address` advertises, which a device does once Windows drops its link to it.
+/// Listens only: any use of the device, even opening it to ask about its link, keeps a link
+/// that nobody else holds from being dropped. The caller bounds the wait.
+pub async fn wait_for_advertisement(address: u64) -> Result<(), String> {
+    let seen = Arc::new(AtomicBool::new(false));
+    let watcher = BluetoothLEAdvertisementWatcher::new().map_err(|e| format!("watcher: {}", e))?;
+    let _ = watcher.SetScanningMode(BluetoothLEScanningMode::Passive);
+    let flag = seen.clone();
+    let handler = TypedEventHandler::<BluetoothLEAdvertisementWatcher, BluetoothLEAdvertisementReceivedEventArgs>::new(
+        move |_, args| {
+            if let Some(args) = args.as_ref() {
+                if args.BluetoothAddress().ok() == Some(address) {
+                    flag.store(true, Ordering::SeqCst);
+                }
+            }
+            Ok(())
+        },
+    );
+    let token = watcher.Received(&handler).map_err(|e| format!("watcher: {}", e))?;
+    watcher.Start().map_err(|e| format!("watcher start: {}", e))?;
+    // Stopped however this ends, the caller's timeout included.
+    let _stop = StopOnDrop { watcher: &watcher, token };
+    while !seen.load(Ordering::SeqCst) {
+        tokio::time::sleep(ADVERTISEMENT_POLL).await;
+    }
+    Ok(())
+}
+
+const ADVERTISEMENT_POLL: Duration = Duration::from_millis(100);
+
+struct StopOnDrop<'a> {
+    watcher: &'a BluetoothLEAdvertisementWatcher,
+    token: i64,
+}
+
+impl Drop for StopOnDrop<'_> {
+    fn drop(&mut self) {
+        let _ = self.watcher.Stop();
+        let _ = self.watcher.RemoveReceived(self.token);
+    }
 }
