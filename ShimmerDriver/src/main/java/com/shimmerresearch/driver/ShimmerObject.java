@@ -45,6 +45,7 @@ import com.shimmerresearch.driverUtilities.ExpansionBoardDetails;
 import com.shimmerresearch.driverUtilities.SensorDetailsRef;
 import com.shimmerresearch.driverUtilities.SensorGroupingDetails;
 import com.shimmerresearch.driverUtilities.SensorDetails;
+import com.shimmerresearch.driverUtilities.SdTimestampAnchor;
 import com.shimmerresearch.driverUtilities.ShimmerSDCardDetails;
 import com.shimmerresearch.driverUtilities.ShimmerVerDetails;
 import com.shimmerresearch.driverUtilities.ShimmerVerObject;
@@ -77,6 +78,7 @@ import com.shimmerresearch.sensors.bmpX80.SensorBMP280;
 import com.shimmerresearch.sensors.bmpX80.SensorBMP390;
 import com.shimmerresearch.sensors.bmpX80.SensorBMP581;
 import com.shimmerresearch.sensors.bmpX80.SensorBMPX80;
+import com.shimmerresearch.sensors.bmpX80.SdHeaderPressureSensorId;
 import com.shimmerresearch.sensors.kionix.SensorKionixAccel;
 import com.shimmerresearch.sensors.kionix.SensorKionixKXRB52042;
 import com.shimmerresearch.sensors.kionix.SensorKionixKXTC92050;
@@ -663,13 +665,13 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 
 	protected boolean mFirstTime = true;
 	
-	/** This variable was originally implemented because the
-	 * initial time in the SD header (i.e., the time when the header
-	 * was created) wasn't equal to the first timestamp in the
-	 * subsequent data packets (i.e., the lower 3 bytes of the
-	 * initial timestamp). This problem has since been addressed in
-	 * firmware whereby the header is updated with the timestamp
-	 * from the first packet. Therefore this variable is redundant. */
+	/** Subtracted, with the header's initial timestamp added, from each
+	 * unwrapped SD timestamp so that the file's records land on their own
+	 * counter time. It is not redundant: the SD header holds the RTC at the
+	 * time the file was created, not the first packet's timestamp - the
+	 * firmware captures the latter but never writes it back - so it is set by
+	 * {@link SdTimestampAnchor#firstTsOffsetFromInitialTsTicks} from the
+	 * header's low bits and the first packet's raw timestamp (DEV-1095). */
 	protected double mFirstTsOffsetFromInitialTsTicks = 0;
 	public int OFFSET_LENGTH = 9;
 	//-------- Timestamp related end --------
@@ -696,6 +698,11 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 	 * {@link #isSupportedBmp581()}. Cleared whenever the expansion board details
 	 * change, so each connection starts from the SR-number rule again. */
 	protected Integer mPressureSensorIdInBand = null;
+	/** The pressure sensor an SD log file's header records at offset 224, or
+	 * null if none has been applied. When present it overrides the SR-number
+	 * rule in {@link #isSupportedBmp581()} and {@link #isSupportedBmp280()}.
+	 * Cleared whenever the expansion board details change. */
+	protected SdHeaderPressureSensorId mPressureSensorIdSdHeader = null;
 
 	// Shimmer3r - Mag
 	private SensorLIS2MDL mSensorLIS2MDL = new SensorLIS2MDL(this);
@@ -2044,7 +2051,7 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 				uncalibratedData[iUP]=(double)newPacketInt[iUP];
 				uncalibratedDataUnits[iUT]=CHANNEL_UNITS.NO_UNITS;
 				uncalibratedDataUnits[iUP]=CHANNEL_UNITS.NO_UNITS;
-				if (mEnableCalibration){
+				if (mEnableCalibration && isPressureSensorCalibratable()){
 					double[] bmp180caldata = mSensorBMPX80.calibratePressureSensorData(UP,UT);
 					objectCluster.addDataToMap(signalNameBmpX80Pressure,CHANNEL_TYPE.CAL.toString(),CHANNEL_UNITS.KPASCAL,bmp180caldata[0]/1000);
 					objectCluster.addDataToMap(signalNameBmpX80Temperature,CHANNEL_TYPE.CAL.toString(),CHANNEL_UNITS.DEGREES_CELSIUS,bmp180caldata[1]);
@@ -2052,6 +2059,12 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 					calibratedData[iUP]=bmp180caldata[0]/1000;
 					calibratedDataUnits[iUT]=CHANNEL_UNITS.DEGREES_CELSIUS;
 					calibratedDataUnits[iUP]=CHANNEL_UNITS.KPASCAL;
+				} else if (mEnableCalibration){
+					// The SD header names a sensor this parser cannot calibrate, or
+					// none fitted. The multimap has no CAL entry, so it reads NaN;
+					// leaving the arrays at 0 would look like a real reading.
+					calibratedData[iUT]=Double.NaN;
+					calibratedData[iUP]=Double.NaN;
 				}
 			}
 
@@ -2838,17 +2851,19 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 		objectCluster.addDataToMap(Shimmer3.ObjectClusterSensorName.SHIMMER_CLOCK,CHANNEL_TYPE.UNCAL.toString(),CHANNEL_UNITS.CLOCK_UNIT,shimmerTimestampTicks);
 		objectCluster.addDataToMap(Shimmer3.ObjectClusterSensorName.SHIMMER_CLOCK,CHANNEL_TYPE.CAL.toString(),CHANNEL_UNITS.CLOCK_UNIT,shimmerTimestampTicks);
 		if(mFirstTime && fwType==COMMUNICATION_TYPE.SD){
-			//this is to make sure the Raw starts from zero for SD data. See comment for mFirstTsOffsetFromInitialTsTicks. 
-			mFirstTsOffsetFromInitialTsTicks = shimmerTimestampTicks;
-			
-			//This is to circumvent a bug with old StroKare firmware. Resolved in firmware v1.0.1 
+			//This is to circumvent a bug with old StroKare firmware. Resolved in firmware v1.0.1
 			if(getFirmwareIdentifier()==FW_ID.STROKARE
 					&& !isThisVerCompatibleWith(FW_ID.STROKARE, 1, 0, 1)){
 				long initialTsTicksOriginal = getInitialTimeStampTicksSd();
 				long initialTsTicksNew = (long) ((initialTsTicksOriginal&0xFFFF000000L)+shimmerTimestampTicks);
 				setInitialTimeStampTicksSd(initialTsTicksNew);
 			}
-			
+
+			//Anchors the file on the first packet's own counter time rather than on
+			//the header's file-creation time. See comment for mFirstTsOffsetFromInitialTsTicks.
+			mFirstTsOffsetFromInitialTsTicks = SdTimestampAnchor.firstTsOffsetFromInitialTsTicks(
+					getInitialTimeStampTicksSd(), shimmerTimestampTicks, mTimeStampTicksMaxValue);
+
 			mFirstTime = false;
 		}
 
@@ -5532,7 +5547,9 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 				
 			}
 			else if(isSupportedNewImuSensors()){
-				mSensorBMPX80 = new SensorBMP280(this);
+				// The barometer follows isSupportedBmp280(), which an SD header's
+				// pressure sensor ID can set apart from the IMU generation
+				mSensorBMPX80 = isSupportedBmp280()? new SensorBMP280(this):new SensorBMP180(this);
 				addSensorClass(mSensorBMPX80);
 				
 				mSensorLSM303 = new SensorLSM303AH(this);
@@ -5548,7 +5565,7 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 			}
 			
 			else{
-				mSensorBMPX80 = new SensorBMP180(this);
+				mSensorBMPX80 = isSupportedBmp280()? new SensorBMP280(this):new SensorBMP180(this);
 				addSensorClass(mSensorBMPX80);
 				
 				mSensorLSM303 = new SensorLSM303DLHC(this);
@@ -10822,9 +10839,17 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 	/** Returns true if the Shimmer is using new sensors. These sensors are:
 	 * <li> Use BMP280 instead of BMP180 as barometer. 
 	 * 
+	 * <p>
+	 * If an SD log file's header names its pressure sensor (see
+	 * {@link #setPressureSensorIdFromSdHeader(int)}), that answer is used
+	 * instead of the board revision.
+	 * 
 	 * @return
 	 */
 	public boolean isSupportedBmp280() {
+		if(mPressureSensorIdSdHeader!=null && mPressureSensorIdSdHeader.isPresent() && getHardwareVersion()==HW_ID.SHIMMER_3){
+			return mPressureSensorIdSdHeader.isSensor(PRESSURE_SENSOR_ID.BMP280);
+		}
 		return isSupportedNewImuSensors();
 	}
 
@@ -10846,18 +10871,27 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 	 * in either direction. Otherwise, e.g. when the firmware NACKs the command
 	 * or is too old to have it, the SR-number rule decides.
 	 *
+	 * <p>
+	 * An SD log file's header names its pressure sensor from
+	 * LogAndStream_Shimmer3R v1.01.018 (see
+	 * {@link #setPressureSensorIdFromSdHeader(int)}), and that overrides the
+	 * SR-number rule in the same way.
+	 *
 	 * @return true if the connected Shimmer3R reported a BMP581, or if its board revision and firmware version indicate BMP581 output support
 	 */
 	public boolean isSupportedBmp581() {
 		if(mPressureSensorIdInBand!=null && getHardwareVersion()==HW_ID.SHIMMER_3R){
 			return mPressureSensorIdInBand==PRESSURE_SENSOR_ID.BMP581;
 		}
+		if(mPressureSensorIdSdHeader!=null && mPressureSensorIdSdHeader.isPresent() && getHardwareVersion()==HW_ID.SHIMMER_3R){
+			return mPressureSensorIdSdHeader.isSensor(PRESSURE_SENSOR_ID.BMP581);
+		}
 		return isSupportedBmp581(getShimmerVerObject(), getExpansionBoardDetails());
 	}
 
 	/** The SR-number rule alone, used when the Shimmer hasn't identified its
-	 * pressure sensor in-band and for SD log files (whose header carries no
-	 * sensor ID). It mirrors the firmware's own fallback,
+	 * pressure sensor in-band and for SD log files whose header doesn't name
+	 * it. It mirrors the firmware's own fallback,
 	 * ShimBrd_isBmp581PresentPerSrNumber() in log-and-stream-common
 	 * Boards/shimmer_boards.c, plus a firmware-version guard.
 	 *
@@ -10922,6 +10956,64 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 		return mPressureSensorIdInBand;
 	}
 
+	/** Applies the pressure sensor an SD log file's header records at offset
+	 * 224. The byte is ignored (the SR-number rule decides, as before) unless
+	 * the firmware is new enough to write it. Call this after the version and
+	 * expansion board details are set, because setting the board clears it,
+	 * and before {@link #sensorAndConfigMapsCreate()}, which builds the
+	 * pressure sensor class from it.
+	 *
+	 * @param headerValue the byte at {@link SdHeaderPressureSensorId#SD_HEADER_INDEX}, 0-255
+	 * @return what the byte means for this file
+	 */
+	public SdHeaderPressureSensorId setPressureSensorIdFromSdHeader(int headerValue) {
+		SdHeaderPressureSensorId sdHeaderId = SdHeaderPressureSensorId.parse(getShimmerVerObject(), headerValue);
+
+		mPressureSensorIdSdHeader = sdHeaderId;
+
+		boolean isShimmer3R = getHardwareVersion()==HW_ID.SHIMMER_3R;
+		boolean isNewerSensorPerSrRule = isShimmer3R?
+				isSupportedBmp581(getShimmerVerObject(), getExpansionBoardDetails()):isSupportedNewImuSensors();
+
+		if(sdHeaderId.isKnown()){
+			boolean isNewerSensorPerHeader = sdHeaderId.isSensor(isShimmer3R? PRESSURE_SENSOR_ID.BMP581:PRESSURE_SENSOR_ID.BMP280);
+			if(isNewerSensorPerHeader!=isNewerSensorPerSrRule){
+				consolePrintLn("Pressure sensor in the SD header, " + sdHeaderId + ", differs from the SR-number rule, using the SD header");
+			}
+			if(sdHeaderId.isInferred()){
+				consolePrintErrLn("Pressure sensor in the SD header, " + sdHeaderId + ", was not confirmed by chip ID");
+			}
+		} else if(sdHeaderId.getState()==SdHeaderPressureSensorId.STATE.UNKNOWN){
+			consolePrintErrLn("Pressure sensor in the SD header, " + sdHeaderId + ", is not one this parser knows, pressure and temperature will be uncalibrated");
+		}
+		return sdHeaderId;
+	}
+
+	/**
+	 * @return the pressure sensor ID applied from an SD log file's header, or
+	 *         null if none has been applied
+	 */
+	public SdHeaderPressureSensorId getPressureSensorIdSdHeader() {
+		return mPressureSensorIdSdHeader;
+	}
+
+	/**
+	 * @return true if an SD log file's header says the pressure sensor was
+	 *         inferred from the SR number rather than confirmed by chip ID
+	 */
+	public boolean isPressureSensorInferred() {
+		return mPressureSensorIdSdHeader!=null && mPressureSensorIdSdHeader.isPresent() && mPressureSensorIdSdHeader.isInferred();
+	}
+
+	/**
+	 * @return false if an SD log file's header names a pressure sensor this
+	 *         parser doesn't know, or says none is fitted, in which case the
+	 *         pressure and temperature channels are emitted uncalibrated
+	 */
+	public boolean isPressureSensorCalibratable() {
+		return mPressureSensorIdSdHeader==null || !mPressureSensorIdSdHeader.isUncalibrated();
+	}
+
 	/**
 	 * @param pressureSensorId a {@link PRESSURE_SENSOR_ID}
 	 * @return the number of coefficient bytes that follow this sensor ID in a
@@ -10947,12 +11039,14 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 		super.setExpansionBoardDetails(eBD);
 		// A different board may carry a different pressure sensor
 		mPressureSensorIdInBand = null;
+		mPressureSensorIdSdHeader = null;
 	}
 
 	@Override
 	public void clearExpansionBoardDetails(){
 		super.clearExpansionBoardDetails();
 		mPressureSensorIdInBand = null;
+		mPressureSensorIdSdHeader = null;
 	}
 
 	/** Returns true if the Shimmer is using new sensors. These sensors are:

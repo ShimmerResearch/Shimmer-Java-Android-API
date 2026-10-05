@@ -17,6 +17,7 @@ import com.shimmerresearch.driverUtilities.ChannelDetails;
 import com.shimmerresearch.driverUtilities.SensorDetails;
 import com.shimmerresearch.driverUtilities.SensorDetailsRef;
 import com.shimmerresearch.driverUtilities.SensorGroupingDetails;
+import com.shimmerresearch.driverUtilities.SdTimestampAnchor;
 import com.shimmerresearch.driverUtilities.ShimmerVerDetails.HW_ID;
 import com.shimmerresearch.driverUtilities.TimestampUnwrap;
 import com.shimmerresearch.driverUtilities.UtilParseData;
@@ -49,6 +50,8 @@ public class SensorShimmerClock extends AbstractSensor {
 	protected transient boolean mLastTimestampRejected = false;
 
 	protected boolean mFirstTime = true;
+	/** Anchors an SD file's records on their own counter time - see
+	 * {@link SdTimestampAnchor} and the matching field in ShimmerObject (DEV-1095). */
 	double mFirstTsOffsetFromInitialTsTicks = 0;
 	double mSystemTimeStamp = 0;
 	public int OFFSET_LENGTH = 9;
@@ -368,8 +371,10 @@ public class SensorShimmerClock extends AbstractSensor {
 						double shimmerTimestampTicks = UtilParseData.parseData(channelByteArray, channelDetails.mDefaultChannelDataType, channelDetails.mDefaultChannelDataEndian);
 						
 						if(mFirstTime && commType==COMMUNICATION_TYPE.SD){
-							//this is to make sure the Raw starts from zero for SD data. See comment for mFirstTsOffsetFromInitialTsTicks. 
-							mFirstTsOffsetFromInitialTsTicks = shimmerTimestampTicks;
+							//Anchors the file on the first packet's own counter time rather than on
+							//the header's file-creation time. See comment for mFirstTsOffsetFromInitialTsTicks.
+							mFirstTsOffsetFromInitialTsTicks = SdTimestampAnchor.firstTsOffsetFromInitialTsTicks(
+									getInitialTimeStampTicksSd(), shimmerTimestampTicks, mTimeStampTicksMaxValue);
 							mFirstTime = false;
 						}
 						
