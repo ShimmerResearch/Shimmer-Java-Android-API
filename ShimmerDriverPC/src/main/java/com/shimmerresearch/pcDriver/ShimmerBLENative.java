@@ -148,6 +148,10 @@ public class ShimmerBLENative extends ShimmerBluetooth implements Serializable {
 	 * over a stream. This happens after a crash: Windows keeps the BLE link open when the process
 	 * that owned it is killed, and the device keeps streaming into it until another process takes
 	 * the link over.
+	 * <p>
+	 * Such a device also keeps the checksum mode its earlier session set, until it is
+	 * disconnected, while the handshake expects checksums off; so they are turned off here too.
+	 * Firmware too old for checksums cannot have them on, and does not ACK the command.
 	 */
 	private void stopStreamLeftRunning() throws NativeBleException {
 		threadSleep(STREAM_CHECK_MS);
@@ -162,7 +166,9 @@ public class ShimmerBLENative extends ShimmerBluetooth implements Serializable {
 			before = mBuffer.size();
 			threadSleep(STREAM_CHECK_MS);
 		} while (mBuffer.size() != before && System.currentTimeMillis() < deadline);
-		// Discard the stream's tail and the stop command's ACK; the handshake starts clean.
+		mCentral.write(mHandle, new byte[] { SET_CRC_COMMAND, (byte) BT_CRC_MODE.OFF.ordinal() });
+		threadSleep(STREAM_CHECK_MS);
+		// Discard the stream's tail and both commands' ACKs; the handshake starts clean.
 		mBuffer = new ThreadSafeByteFifoBuffer(FIFO_CAPACITY);
 	}
 
