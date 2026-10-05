@@ -692,9 +692,14 @@ public class ShimmerVerObject implements Serializable {
 				firmwareIdentifier, firmwareVersionMajor, firmwareVersionMinor, firmwareVersionInternal);
 	}
 	
+	/** Hardware-aware: a hardwareVersion other than
+	 * {@link ShimmerVerDetails#ANY_VERSION} must match the device's. This
+	 * matters because Shimmer3 and Shimmer3R LogAndStream version numbers
+	 * overlap, so the firmware version alone cannot tell them apart. Until
+	 * DEV-1124 the hardware argument was silently ignored. */
 	public static boolean compareVersions(ShimmerVerObject svo, int hardwareVersion, int firmwareIdentifier, int firmwareVersionMajor, int firmwareVersionMinor, int firmwareVersionInternal) {
-		return UtilShimmer.compareVersions(svo.getFirmwareIdentifier(), svo.getFirmwareVersionMajor(), svo.getFirmwareVersionMinor(), svo.getFirmwareVersionInternal(),
-				firmwareIdentifier, firmwareVersionMajor, firmwareVersionMinor, firmwareVersionInternal);
+		return UtilShimmer.compareVersions(svo.getHardwareVersion(), svo.getFirmwareIdentifier(), svo.getFirmwareVersionMajor(), svo.getFirmwareVersionMinor(), svo.getFirmwareVersionInternal(),
+				hardwareVersion, firmwareIdentifier, firmwareVersionMajor, firmwareVersionMinor, firmwareVersionInternal);
 	}
 
 	public int getShimmerExpansionBoardId() {

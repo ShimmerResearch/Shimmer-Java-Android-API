@@ -86,7 +86,32 @@ public class SensorGSRVerisense extends SensorGSR {
 			150.0, 		//Range 1
 			562.0, 		//Range 2
 			1740.0}; 	//Range 3
-	public static final int VERISENSE_PULSE_PLUS_GSR_UNCAL_LIMIT_RANGE3 = 1134;
+	/**
+	 * The amplifier reference of this front end: a 261k/100k divider off the 1.8 V rail, so
+	 * 1.8 x 100 / 361 = 0.4986 V at the op-amp's non-inverting input, on every Verisense revision
+	 * that has it. It was taken as the Shimmer3's 0.5 V until now, which read every resistance about
+	 * 0.5-1% high and an open circuit as about 4.0 GOhm instead of 541 MOhm. The C# API and the web
+	 * SDK divide by 0.4986 V.
+	 * <p>
+	 * The SAADC samples GSR against VDD/4 with a gain of 1/4, so its full scale is the rail itself.
+	 * If the divider is fed from that same rail, the reference sits at code 1134.3 whatever the
+	 * rail's exact level.
+	 */
+	public static final double VERISENSE_PULSE_PLUS_GSR_AMPLIFIER_REF_VOLTAGE = 1.8 * 100.0 / (261.0 + 100.0);
+	/**
+	 * Codes below this, on any range, decode as range 3 at it so that an open circuit reads as open
+	 * ({@link SensorGSR#calibrateGsrDataToKOhmsWithOpenCircuitLimit}; range 3 only until DEV-1070).
+	 * It has to be above the {@link #VERISENSE_PULSE_PLUS_GSR_AMPLIFIER_REF_VOLTAGE 0.4986 V}
+	 * reference (code 1134.3 at this front end's 1.8 V full scale). Anything at or below it decodes
+	 * to a negative resistance, which the auto-range nudge floors at 8 kOhm, reading an open circuit
+	 * as 125 uS. It was 1134 until DEV-1067, one code short.
+	 * <p>
+	 * 1138 is the first code above 0.5 V, which this decode divided by until the reference was
+	 * corrected. It is kept, rather than lowered to 1135, because it is the value the C# API and the
+	 * web SDK use, and because codes 1135-1137 are an open circuit too: on range 3 they decode to
+	 * 0.7-3.0 GOhm.
+	 */
+	public static final int VERISENSE_PULSE_PLUS_GSR_UNCAL_LIMIT_RANGE3 = 1138;
 
 	//--------- Sensor info start --------------
 	public static final SensorDetailsRef SENSOR_GSR_VERISENSE = new SensorDetailsRef(
@@ -124,6 +149,7 @@ public class SensorGSRVerisense extends SensorGSR {
 				|| svo.getHardwareVersion() == HW_ID.VERISENSE_IMU) {
 			setCurrentGsrRefResistorsKohms(VERISENSE_PULSE_PLUS_GSR_REF_RESISTORS_KOHMS);
 			setCurrentGsrUncalLimitRange3(VERISENSE_PULSE_PLUS_GSR_UNCAL_LIMIT_RANGE3);
+			setCurrentGsrAmplifierRefVoltage(VERISENSE_PULSE_PLUS_GSR_AMPLIFIER_REF_VOLTAGE);
 		}
 	}
 	//--------- Constructors for this class end --------------

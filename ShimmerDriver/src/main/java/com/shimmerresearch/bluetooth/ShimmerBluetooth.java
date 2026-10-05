@@ -2625,7 +2625,10 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 		//readExpansionBoardID();
 		
 		if (isBtCrcModeSupported()) {
-			writeBtCommsCrcMode(DEFAULT_BT_CRC_MODE_IF_SUPPORTED);
+			writeBtCommsCrcMode(getBtCrcModeToUseOnConnect());
+		} else if (DEFAULT_BT_CRC_MODE_IF_SUPPORTED!=BT_CRC_MODE.OFF && isBtCrcClearedWhenSensingStops()) {
+			printLogDataForDebugging("Link CRC left off: " + getFirmwareVersionParsed()
+					+ " on a Shimmer3R drops it whenever sensing stops; v1.0.11 and later keep it");
 		}
 		
 		if (RN4678_ERROR_DETECTION_ENABLED && isSupportedRn4678ErrorDetection()) {
@@ -5023,8 +5026,21 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 		return writeBtCommsCrcMode(BT_CRC_MODE.TWO_BYTE_CRC);
 	}
 
+	/**
+	 * Queues SET_CRC_COMMAND. Turning a CRC on is refused wherever
+	 * {@link #isBtCrcModeSupported()} is false, and a 2-byte CRC also wherever
+	 * {@link #isTwoByteCrcOverrunningStatusPush()} is true. Turning it off is
+	 * refused only by firmware without the command.
+	 *
+	 * @param btCrcMode
+	 * @return false if nothing was queued
+	 */
 	public boolean writeBtCommsCrcMode(BT_CRC_MODE btCrcMode) {
-		if (getFirmwareVersionCode() >= 8) {
+		if (btCrcMode==BT_CRC_MODE.TWO_BYTE_CRC && isTwoByteCrcOverrunningStatusPush()) {
+			return false;
+		}
+		boolean isAllowed = btCrcMode==BT_CRC_MODE.OFF ? getFirmwareVersionCode() >= 8 : isBtCrcModeSupported();
+		if (isAllowed) {
 			writeInstruction(new byte[] { SET_CRC_COMMAND, (byte) (btCrcMode.ordinal()) });
 			return true;
 		}
@@ -5034,6 +5050,9 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 	/**
 	 * Sets the default mode that should be used when establishing a connection to
 	 * the Shimmer if the current firmware version supports the CRC feature.
+	 * Shimmer3R LogAndStream before v1.00.011 counts as not supporting it; see
+	 * {@link #isBtCrcModeSupported()}. A 2-byte CRC falls back to 1 byte where
+	 * the firmware cannot take 2; see {@link #isTwoByteCrcOverrunningStatusPush()}.
 	 * 
 	 * @param btCommsCrcMode
 	 */
@@ -5043,9 +5062,9 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 
 	/**
 	 * Gets the default CRC mode that will attempted to be used when establishing a
-	 * connection to the Shimmer. If a connection has already been established and
-	 * the firmware version has been read, this function will return the actual CRC
-	 * mode that's in use.
+	 * connection to the Shimmer. This is the setting, not necessarily what a
+	 * connected Shimmer uses, which {@link #getCurrentBtCommsCrcMode()} returns: on
+	 * some firmware the driver leaves the CRC off, or uses 1 byte in place of 2.
 	 * 
 	 * @return
 	 */
@@ -5080,11 +5099,86 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 	/**
 	 * Response only valid if a connection has been established and the firmware
 	 * version has been read from the sensor.
+	 * <p>
+	 * False on Shimmer3R LogAndStream before v1.00.011 although it has
+	 * SET_CRC_COMMAND, because it drops the CRC whenever sensing stops; see
+	 * {@link #isBtCrcClearedWhenSensingStops()}.
 	 * 
 	 * @return
 	 */
 	public boolean isBtCrcModeSupported() {
-		return getFirmwareVersionCode() >= 8;
+		return getFirmwareVersionCode() >= 8 && !isBtCrcClearedWhenSensingStops();
+	}
+
+	/**
+	 * True for Shimmer3R LogAndStream before v1.00.011. Those releases turn the
+	 * Bluetooth link CRC off by themselves whenever sensing stops
+	 * (S4Sens_stopSensing, s4_sensing.c:354 at v1.00.010): after STOP_STREAMING,
+	 * STOP_SDBT or STOP_LOGGING, and when the user button or docking ends SD
+	 * logging, without telling the host. The stop's own ACK still carries the CRC
+	 * and every reply after it is bare, so a host still expecting the CRC loses
+	 * sync after every stop, including stops it did not ask for. c8016de3 removed
+	 * the clear: v1.00.011 and later clear it only at startup and on disconnect,
+	 * and no Shimmer3 release clears it at a stop.
+	 * <p>
+	 * Shimmer3 and Shimmer3R LogAndStream version numbers overlap, so this follows
+	 * the hardware the device reports. The Shimmer3R v1.00.008 side build for
+	 * older Consensys reports a Shimmer3 and is let through, as it is by the web
+	 * SDK's keepsLinkCrcWhenSensingStops().
+	 * <p>
+	 * Derived from the firmware source; not yet run against a Shimmer3R on
+	 * v1.00.010 or earlier.
+	 *
+	 * @return
+	 */
+	public boolean isBtCrcClearedWhenSensingStops() {
+		return getHardwareVersion()==HW_ID.SHIMMER_3R
+				&& getFirmwareIdentifier()==FW_ID.LOGANDSTREAM
+				&& !isThisVerCompatibleWith(HW_ID.SHIMMER_3R, FW_ID.LOGANDSTREAM, 1, 0, 11);
+	}
+
+	/**
+	 * True for Shimmer3R LogAndStream v1.00.024 to v1.00.049, where a 2-byte link
+	 * CRC overruns the unsolicited status push. Those releases build the push in a
+	 * six-byte buffer, uint8_t selfcmd[6] (ShimBt_instreamStatusRespSend,
+	 * log-and-stream-common Comms/shimmer_bt_uart.c:2262 at f39be8c1f). The push is
+	 * the ACK prefix, 0x8A 0x71 and two status bytes, so a 2-byte CRC makes seven
+	 * bytes and the seventh lands past the end of the buffer: the sensor hardfaults
+	 * (DEV-621). v1.00.050 sized the buffer for it. The firmware pushes on docking
+	 * and undocking, the user button, a trial-duration expiry and a low-battery
+	 * stop, so the fault can come at any point in a session.
+	 * <p>
+	 * A 1-byte CRC, one status byte (v1.00.023 and earlier, and every Shimmer3) or
+	 * the ACK prefix turned off (SET_INSTREAM_RESPONSE_ACK_PREFIX_STATE, 0xA3) each
+	 * make the push six bytes, which fits. This driver keeps the prefix, because its
+	 * in-stream parsers expect it, so the 2-byte CRC is what has to go.
+	 * <p>
+	 * Derived from the firmware source; not yet run against a Shimmer3R on
+	 * v1.00.024 to v1.00.049.
+	 *
+	 * @return
+	 */
+	public boolean isTwoByteCrcOverrunningStatusPush() {
+		// Two status bytes: Shimmer3R LogAndStream v1.00.024 and later
+		return isSupportedUSBPluggedInStatus()
+				&& !isThisVerCompatibleWith(HW_ID.SHIMMER_3R, FW_ID.LOGANDSTREAM, 1, 0, 50);
+	}
+
+	/**
+	 * The CRC mode to ask for when connecting: the default, except that a 2-byte
+	 * default falls back to 1 byte wherever
+	 * {@link #isTwoByteCrcOverrunningStatusPush()} is true. One byte is the low
+	 * byte of the same CRC, so the link keeps its check.
+	 *
+	 * @return
+	 */
+	protected BT_CRC_MODE getBtCrcModeToUseOnConnect() {
+		if (DEFAULT_BT_CRC_MODE_IF_SUPPORTED==BT_CRC_MODE.TWO_BYTE_CRC && isTwoByteCrcOverrunningStatusPush()) {
+			printLogDataForDebugging("Link CRC cut to 1 byte: " + getFirmwareVersionParsed()
+					+ " on a Shimmer3R overruns its status push with 2; v1.0.50 and later take 2");
+			return BT_CRC_MODE.ONE_BYTE_CRC;
+		}
+		return DEFAULT_BT_CRC_MODE_IF_SUPPORTED;
 	}
 
 	/**** DISABLE FUNCTIONS *****/
