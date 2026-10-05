@@ -21,6 +21,7 @@ public class API_00028_Shimmer3RProtocolTest {
 	private static final byte[] GET_SHIMMER_VERSION = { 0x3F };
 	private static final byte[] GET_FW_VERSION = { 0x2E };
 	private static final byte[] STOP_STREAMING = { 0x20 };
+	private static final byte[] SET_CRC_OFF = { (byte) 0x8B, 0x00 };
 	/** ACK, GET_SHIMMER_VERSION_RESPONSE, hardware version 10 (Shimmer3R). */
 	private static final byte[] SHIMMER3R_VERSION_REPLY = { (byte) 0xFF, 0x25, 0x0A };
 	/** Stands in for data packets from a stream left running; their content does not matter. */
@@ -74,10 +75,28 @@ public class API_00028_Shimmer3RProtocolTest {
 
 		ProtocolOutput out = p.tick(quiet);
 
-		assertArrayEquals(GET_SHIMMER_VERSION, out.getWrites().get(0));
 		assertTrue(messages(out, ProtocolEvent.Type.DISCARDED).get(0).contains("dropped " + 2 * STREAM_BYTES.length + " byte(s)"));
-		// None of those bytes is mistaken for the reply.
-		assertArrayEquals(GET_FW_VERSION, p.receive(SHIMMER3R_VERSION_REPLY, quiet + 10).getWrites().get(0));
+		// The earlier session's checksums go first, then the handshake starts as usual.
+		assertArrayEquals(SET_CRC_OFF, out.getWrites().get(0));
+		assertArrayEquals(GET_SHIMMER_VERSION, p.receive(new byte[] { (byte) 0xFF }, quiet + 10).getWrites().get(0));
+		// None of the dropped bytes is mistaken for the reply.
+		assertArrayEquals(GET_FW_VERSION, p.receive(SHIMMER3R_VERSION_REPLY, quiet + 20).getWrites().get(0));
+	}
+
+	@Test
+	public void firmwareThatDoesNotAckChecksumsOffIsNotFailed() {
+		Shimmer3RProtocol p = new Shimmer3RProtocol();
+		p.connect(T0);
+		p.receive(STREAM_BYTES, T0 + 10);
+		long quiet = T0 + 10 + Shimmer3RProtocol.SETTLE_MS;
+		assertArrayEquals(SET_CRC_OFF, p.tick(quiet).getWrites().get(0));
+
+		ProtocolOutput out = p.tick(quiet + Shimmer3RProtocol.DEFAULT_TIMEOUT_MS);
+
+		assertTrue(messages(out, ProtocolEvent.Type.ERROR).isEmpty());
+		assertTrue(messages(out, ProtocolEvent.Type.DISCARDED).get(0).contains("no ACK to SET_CRC_OFF"));
+		assertArrayEquals(GET_SHIMMER_VERSION, out.getWrites().get(0));
+		assertEquals(Shimmer3RProtocol.State.CONNECTING, p.getState());
 	}
 
 	@Test

@@ -78,13 +78,20 @@ public final class Shimmer3RProtocol {
 		final Byte responseCode;
 		final Response response;
 		final long timeoutMs;
+		/** If it times out, carry on with the next command rather than fail. */
+		final boolean optional;
 
 		Command(String name, byte[] bytes, Byte responseCode, Response response, long timeoutMs) {
+			this(name, bytes, responseCode, response, timeoutMs, false);
+		}
+
+		Command(String name, byte[] bytes, Byte responseCode, Response response, long timeoutMs, boolean optional) {
 			this.name = name;
 			this.bytes = bytes;
 			this.responseCode = responseCode;
 			this.response = response;
 			this.timeoutMs = timeoutMs;
+			this.optional = optional;
 		}
 	}
 
@@ -244,7 +251,13 @@ public final class Shimmer3RProtocol {
 			return out;
 		}
 		if (mInFlight != null && nowMs >= mDeadline) {
-			failed(out, "no " + (mAckSeen ? "response" : "ACK") + " to " + mInFlight.name + " within " + mInFlight.timeoutMs + " ms");
+			String why = "no " + (mAckSeen ? "response" : "ACK") + " to " + mInFlight.name + " within " + mInFlight.timeoutMs + " ms";
+			if (mInFlight.optional) {
+				out.event(ProtocolEvent.discarded(why + "; carrying on"));
+				complete(nowMs, out);
+			} else {
+				failed(out, why);
+			}
 		}
 		return out;
 	}
@@ -267,6 +280,14 @@ public final class Shimmer3RProtocol {
 		mSettleGiveUpAt = Long.MAX_VALUE;
 		if (mSettleBytes > 0) {
 			out.event(ProtocolEvent.discarded("the device was already streaming; stopped it and dropped " + mSettleBytes + " byte(s)"));
+		}
+		if (mStopSent) {
+			// The earlier session probably turned checksums on, and the device keeps them until it
+			// is disconnected, so its replies would carry checksum bytes this handshake does not
+			// expect yet (and one that happens to be 0xFF reads as an ACK). Turn them off first.
+			// Firmware too old for checksums cannot have them on, and does not ACK this: carry on.
+			mQueue.add(new Command("SET_CRC_OFF", new byte[] { ShimmerObject.SET_CRC_COMMAND, (byte) BT_CRC_MODE.OFF.ordinal() },
+					null, null, DEFAULT_TIMEOUT_MS, true));
 		}
 		mQueue.add(new Command("GET_SHIMMER_VERSION", new byte[] { ShimmerObject.GET_SHIMMER_VERSION_COMMAND_NEW },
 				ShimmerObject.GET_SHIMMER_VERSION_RESPONSE, fixed(1, this::onHardwareVersion), DEFAULT_TIMEOUT_MS));
