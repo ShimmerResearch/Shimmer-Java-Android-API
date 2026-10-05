@@ -55,6 +55,10 @@ import java.util.TimeZone;
 import java.util.Timer;
 import java.util.TimerTask;
 
+import java.util.concurrent.atomic.AtomicBoolean;
+
+import javax.swing.SwingUtilities;
+
 import org.apache.commons.collections.buffer.CircularFifoBuffer;
 
 import com.shimmerresearch.driver.FormatCluster;
@@ -82,9 +86,16 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 
 	public HashMap<String,Double> mMapofHalfWindowSize = new HashMap<String,Double>();
 	
-	public static float DEFAULT_LINE_THICKNESS=2;
+	/** DEV-896: 1 px (was 2). jchart2d draws one drawLine per point with antialiasing off; a 2 px
+	 * stroke makes Java2D rasterise each segment as a filled shape instead of a plain line: one full
+	 * paint of 2560 points into a 3600x1800 chart measured 9.2 ms at 2 px against 2.3 ms at 1 px.
+	 * Live traces are visibly thinner. */
+	public static float DEFAULT_LINE_THICKNESS=1;
 	
-	protected double mCurrentXValue = 0;
+	/** X value (for the time axis: System_Timestamp_Plot, epoch ms) of the most recently plotted
+	 * sample. Written by the data thread in filterDataAndPlot(); volatile because the live-viewport
+	 * frame clock reads it on the EDT (DEV-896). */
+	protected volatile double mCurrentXValue = 0;
 	protected boolean mIsPlotPaused = false;
 	public boolean mIsLegendLabelsPainted = true;
 	public boolean mIsScaleLabelsPainted = true;
@@ -412,6 +423,7 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 	 * @param chart the Chart to be cleared
 	 */
 	public void removeAllSignals(){
+		stopLiveViewportFrameClock(); //DEV-896: also the frame-close path (InternalFrameWithPlotManager.frameClosed())
 		mCurrentXValue=0;
 		super.removeAllSignals();
 		if (mChart!=null){
@@ -539,6 +551,10 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 		x.setRangePolicy(new RangePolicyFixedViewport(new Range(minX, maxY)));
 	}
 	
+	/** Anchors the X window's right edge to the newest plotted sample. Allocates a new range policy
+	 * per call, so it is for explicit, occasional callers (window change, pause, static contents).
+	 * Live time-axis plots should use the frame clock instead of calling this per sample - see
+	 * {@link #setLiveViewportFrameClockEnabled(boolean)} (DEV-896). */
 	public void setXAxisRangeBasedOnXDuration(){
 		setXAxisRange(mCurrentXValue-(mXAxisTimeDuration*1000), mCurrentXValue);
 	}
@@ -552,6 +568,289 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 		minTime=minTime+samplingDurationInMs;
 		setXAxisRange(minTime, mCurrentXValue);
 	}
+	
+	//---------------------- DEV-896: live X viewport frame clock START -----------------------//
+	//
+	// Live time-axis plots used to move the X window from the data thread, once per sample: the
+	// window's right edge was the newest sample's X, so it advanced in whatever bursts the data
+	// arrived in (Bluetooth delivers 10-30 samples at once), and Chart2D's own 50 ms repaint timer
+	// then showed those bursts as 20 fps jumps. Here one Swing Timer per plot manager moves the
+	// window instead, on the EDT, by the real time elapsed since the previous frame, and repaints
+	// the chart right after, so every frame shows exactly one even step.
+	//
+	// The window trails the newest data by VIEWPORT_LATENCY_MS (a playout delay). It is NOT
+	// anchored to System.currentTimeMillis(): the time axis plots System_Timestamp_Plot, which is
+	// the device's own clock offset once, at the first packet, onto the PC epoch (see
+	// SystemTimestampPlot / SensorShimmerClock). So it is epoch ms, but it carries that first
+	// packet's latency and drifts with the device crystal (20 ppm is 72 ms per hour), and the PC
+	// clock can be stepped by NTP. Instead the right edge is a playout clock that advances with
+	// System.nanoTime() and is steered gently toward "newest X + time since it arrived - latency",
+	// which needs no common epoch, follows drift, and cannot jump with the wall clock.
+	//
+	// Threading: the data thread only writes mCurrentXValue and mLastLiveSampleNanos (volatile)
+	// and, when the clock is not running, posts one start request to the EDT. Everything else runs
+	// on the EDT. The tick never takes the mListofPropertiestoPlot or mListofTraces monitors; it
+	// only takes the chart monitor (through jchart2d's property-change and repaint-flag methods),
+	// so it cannot invert the list -> chart lock order that filterDataAndPlot() relies on.
+	//
+	// Lifecycle (DEV-895/DEV-717: an idle app must not tick at 60 fps): the timer runs only while
+	// live time-axis samples are arriving into a chart that is showing. It stops itself on the
+	// first tick at which no sample has arrived for FRAME_CLOCK_IDLE_STOP_MS, the plot is paused,
+	// the chart is not showing (tab switched, frame iconified or closed), the X axis is not the
+	// time axis, or the data was cleared (mCurrentXValue back to 0, which removeAllSignals() and
+	// clearAllDataBuffer() do). removeAllSignals() - which InternalFrameWithPlotManager.frameClosed()
+	// calls - also stops it immediately. A stopped javax.swing.Timer is no longer referenced by
+	// Swing's TimerQueue, so it cannot pin this manager, its chart or the owning frame.
+	
+	/** Frame clock period: one X-window update and one chart repaint per tick, ~60 fps. If 60 fps
+	 * proves too heavy for the EDT at UHD with many plots open, 33 (~30 fps) is the fallback; the
+	 * motion stays time-correct at any rate because each tick advances by the real elapsed time. */
+	public static final int FRAME_INTERVAL_MS = 16;
+	/** Playout delay: the live window's right edge trails "newest sample's X + time since it
+	 * arrived" by this much. It absorbs Bluetooth bursts and the IOThread -> callback deque ->
+	 * plot-thread hops, so data scrolls in evenly instead of in jumps; a sample becomes visible
+	 * roughly this long after it was plotted. */
+	public static final double VIEWPORT_LATENCY_MS = 200;
+	/** The frame clock stops once no live sample has arrived for this long. */
+	public static final long FRAME_CLOCK_IDLE_STOP_MS = 2000;
+	/** Extra history a live trace needs while the frame clock runs. A trace sized to exactly the
+	 * window would leave a blank strip of up to ~VIEWPORT_LATENCY_MS at the window's left edge,
+	 * because the window now trails the newest sample. See getLiveViewportTraceMarginInSeconds(). */
+	public static final double LIVE_VIEWPORT_TRACE_MARGIN_MS = 2*VIEWPORT_LATENCY_MS;
+	/** Beyond this distance from its target the playout clock snaps instead of slewing: on the
+	 * first tick, after a long stall, or when the X values jump (new session, clock reset). */
+	private static final double FRAME_CLOCK_RESYNC_MS = 1000;
+	/** Share of the remaining error the playout clock corrects per tick (~0.3 s time constant). */
+	private static final double FRAME_CLOCK_CORRECTION_GAIN = 0.05;
+	/** Largest correction per tick, as a share of that tick's elapsed time: a frame's X step stays
+	 * within +-10% of real time while the clock converges. */
+	private static final double FRAME_CLOCK_MAX_SLEW = 0.1;
+	/** Chart2D's own repaint timer delay while the frame clock repaints the chart itself. Kept long
+	 * so that timer does not add a second, unsynchronised stream of paints; restored on stop. */
+	private static final int FRAME_CLOCK_CHART_PAINT_LATENCY_MS = 250;
+	/** At most one start request per this interval from the data thread. */
+	private static final long FRAME_CLOCK_START_REQUEST_MIN_INTERVAL_NS = 100L*1000*1000;
+	
+	private volatile boolean mIsLiveViewportFrameClockEnabled = false;
+	/** System.nanoTime() when the data thread last moved mCurrentXValue. Data thread writes. */
+	private volatile long mLastLiveSampleNanos = 0;
+	private volatile javax.swing.Timer mFrameClockTimer = null;
+	/** Written on the EDT only; read by the data thread to decide whether to request a start. */
+	private volatile boolean mIsFrameClockRunning = false;
+	private final AtomicBoolean mIsFrameClockStartPending = new AtomicBoolean(false);
+	/** Data thread only. */
+	private long mLastFrameClockStartRequestNanos = System.nanoTime() - FRAME_CLOCK_START_REQUEST_MIN_INTERVAL_NS;
+	//EDT-only state below
+	private double mFrameClockViewportEndX = Double.NaN;
+	private long mLastFrameClockTickNanos = 0;
+	private Chart2D mFrameClockChart = null;
+	private int mFrameClockSavedPaintLatency = -1;
+	/** Installed on the X axis once, then only its Range is swapped per tick (no per-frame policy
+	 * allocation). Replaced only if something else installed a different policy in between. */
+	private RangePolicyFixedViewport mFrameClockRangePolicy = null;
+	private Range mFrameClockSpareRange = null;
+	
+	/** Lets a frame clock, rather than each incoming sample, move this plot's X window while the X
+	 * axis is the time axis. Enable it before signals are added, so callers that size traces from
+	 * {@link #getLiveViewportTraceMarginInSeconds()} see the margin. Non-time X axes (frequency/FFT,
+	 * value) are unaffected: the clock never runs for them. */
+	public void setLiveViewportFrameClockEnabled(boolean enabled){
+		mIsLiveViewportFrameClockEnabled = enabled;
+		if(!enabled){
+			stopLiveViewportFrameClock();
+		}
+	}
+	
+	public boolean isLiveViewportFrameClockEnabled(){
+		return mIsLiveViewportFrameClockEnabled;
+	}
+	
+	public boolean isLiveViewportFrameClockRunning(){
+		return mIsFrameClockRunning;
+	}
+	
+	/** Extra seconds of history a live trace should hold beyond the X window, 0 when the frame
+	 * clock is disabled. */
+	public double getLiveViewportTraceMarginInSeconds(){
+		return mIsLiveViewportFrameClockEnabled ? (LIVE_VIEWPORT_TRACE_MARGIN_MS/1000.0) : 0;
+	}
+	
+	/** Stops the frame clock now; it restarts by itself when live samples arrive again. Safe from
+	 * any thread: off the EDT the timer is stopped directly (javax.swing.Timer.stop() is
+	 * thread-safe) and the rest of the teardown, which touches the chart, is posted to the EDT. */
+	public void stopLiveViewportFrameClock(){
+		if(SwingUtilities.isEventDispatchThread()){
+			stopFrameClockOnEdt(false);
+		}
+		else{
+			javax.swing.Timer timer = mFrameClockTimer;
+			if(timer!=null){
+				timer.stop();
+			}
+			SwingUtilities.invokeLater(new Runnable(){
+				@Override
+				public void run() {
+					stopFrameClockOnEdt(false);
+				}
+			});
+		}
+	}
+	
+	/** Data thread, once per sample that moved mCurrentXValue on a time X axis. Cheap on purpose:
+	 * a nanoTime() read, a volatile write and, only while the clock is stopped, a throttled check. */
+	private void noteLiveSampleForFrameClock(){
+		long nowNanos = System.nanoTime();
+		mLastLiveSampleNanos = nowNanos;
+		if(!mIsFrameClockRunning
+				&& (nowNanos-mLastFrameClockStartRequestNanos) >= FRAME_CLOCK_START_REQUEST_MIN_INTERVAL_NS){
+			Chart2D chart = mChart;
+			//isShowing() off the EDT is a benign racy read: at worst one request is skipped or wasted.
+			//Checking it here keeps a hidden plot from posting a start request per sample.
+			if(chart!=null && chart.isShowing() && mIsFrameClockStartPending.compareAndSet(false, true)){
+				mLastFrameClockStartRequestNanos = nowNanos;
+				SwingUtilities.invokeLater(new Runnable(){
+					@Override
+					public void run() {
+						startFrameClockOnEdt();
+					}
+				});
+			}
+		}
+	}
+	
+	private boolean isFrameClockWanted(){
+		return mIsLiveViewportFrameClockEnabled && isXAxisTime() && !mIsPlotPaused && mCurrentXValue!=0;
+	}
+	
+	/** EDT. */
+	private void startFrameClockOnEdt(){
+		mIsFrameClockStartPending.set(false);
+		Chart2D chart = mChart;
+		if(mIsFrameClockRunning || !isFrameClockWanted() || chart==null || !chart.isShowing()){
+			return;
+		}
+		if(mFrameClockTimer==null){
+			javax.swing.Timer timer = new javax.swing.Timer(FRAME_INTERVAL_MS, new java.awt.event.ActionListener(){
+				@Override
+				public void actionPerformed(java.awt.event.ActionEvent e) {
+					onFrameClockTick();
+				}
+			});
+			timer.setCoalesce(true);
+			mFrameClockTimer = timer;
+		}
+		mFrameClockViewportEndX = Double.NaN;
+		mFrameClockChart = chart;
+		mFrameClockSavedPaintLatency = chart.getMinPaintLatency();
+		chart.setMinPaintLatency(FRAME_CLOCK_CHART_PAINT_LATENCY_MS);
+		mIsFrameClockRunning = true;
+		mFrameClockTimer.start();
+	}
+	
+	/** EDT.
+	 * @param snapToNewestSample leave the window ending at the newest sample, as the old
+	 * sample-driven path did, so nothing received stays hidden behind the playout delay. */
+	private void stopFrameClockOnEdt(boolean snapToNewestSample){
+		javax.swing.Timer timer = mFrameClockTimer;
+		if(timer!=null){
+			timer.stop();
+		}
+		boolean wasRunning = mIsFrameClockRunning;
+		mIsFrameClockRunning = false;
+		mFrameClockViewportEndX = Double.NaN;
+		Chart2D chart = mFrameClockChart;
+		mFrameClockChart = null;
+		if(chart!=null && mFrameClockSavedPaintLatency>0){
+			chart.setMinPaintLatency(mFrameClockSavedPaintLatency);
+		}
+		mFrameClockSavedPaintLatency = -1;
+		
+		double latestX = mCurrentXValue;
+		if(wasRunning && snapToNewestSample && chart!=null && chart==mChart && latestX!=0){
+			applyLiveViewport(chart, latestX-(mXAxisTimeDuration*1000), latestX);
+			chart.repaint();
+		}
+	}
+	
+	/** EDT, once per FRAME_INTERVAL_MS while the clock runs. */
+	private void onFrameClockTick(){
+		if(!mIsFrameClockRunning){
+			return; //an event already queued when the timer was stopped
+		}
+		Chart2D chart = mChart;
+		if(chart==null || chart!=mFrameClockChart || !mIsLiveViewportFrameClockEnabled || !isXAxisTime() || !chart.isShowing()){
+			stopFrameClockOnEdt(true);
+			return;
+		}
+		//Read the arrival time before X: the data thread writes X first, so a fresh arrival time
+		//implies a fresh X.
+		long lastSampleNanos = mLastLiveSampleNanos;
+		double latestX = mCurrentXValue;
+		if(latestX==0){
+			stopFrameClockOnEdt(false); //cleared: leave the axis to whoever cleared it
+			return;
+		}
+		long nowNanos = System.nanoTime();
+		if(mIsPlotPaused || (nowNanos-lastSampleNanos) > FRAME_CLOCK_IDLE_STOP_MS*1000*1000){
+			stopFrameClockOnEdt(true);
+			return;
+		}
+		double end = computeLiveViewportEnd(nowNanos, latestX, lastSampleNanos);
+		applyLiveViewport(chart, end-(mXAxisTimeDuration*1000), end);
+		//This tick paints the chart itself, now, so each frame shows exactly one step. Clearing
+		//the flag stops Chart2D's own timer from scheduling a second paint for the same changes.
+		chart.setRequestedRepaint(false);
+		chart.repaint();
+	}
+	
+	/** EDT (or a test driving it directly). Advances the playout clock to nowNanos and returns the
+	 * X window's new right edge.
+	 * @param latestX X of the newest plotted sample
+	 * @param lastSampleNanos System.nanoTime() when that sample was plotted */
+	double computeLiveViewportEnd(long nowNanos, double latestX, long lastSampleNanos){
+		double sinceSampleMs = (nowNanos-lastSampleNanos)/1e6;
+		double target = latestX + sinceSampleMs - VIEWPORT_LATENCY_MS;
+		double previousEnd = mFrameClockViewportEndX;
+		double end;
+		if(Double.isNaN(previousEnd) || Math.abs(target-previousEnd) > FRAME_CLOCK_RESYNC_MS){
+			end = Math.min(target, latestX);
+		}
+		else{
+			double frameMs = Math.max(0, (nowNanos-mLastFrameClockTickNanos)/1e6);
+			double predicted = previousEnd + frameMs;
+			double maxCorrection = frameMs*FRAME_CLOCK_MAX_SLEW;
+			double correction = (target-predicted)*FRAME_CLOCK_CORRECTION_GAIN;
+			correction = Math.max(-maxCorrection, Math.min(maxCorrection, correction));
+			end = predicted + correction;
+			//Never run ahead of the newest sample (a stall freezes the window, as before), and
+			//never scroll backwards (with several devices in one plot mCurrentXValue alternates
+			//between their slightly different timestamps).
+			end = Math.max(previousEnd, Math.min(end, latestX));
+		}
+		mFrameClockViewportEndX = end;
+		mLastFrameClockTickNanos = nowNanos;
+		return end;
+	}
+	
+	/** EDT. Sets the X window without allocating a range policy per frame: the policy installed
+	 * on the axis is kept and only its Range swapped (ARangePolicy.setRange() fires the property
+	 * change that marks the chart for repaint). Protected so a test harness can observe frames. */
+	protected void applyLiveViewport(Chart2D chart, double minX, double maxX){
+		IAxis<?> axisX = chart.getAxisX();
+		if(mFrameClockRangePolicy==null || axisX.getRangePolicy()!=mFrameClockRangePolicy){
+			mFrameClockRangePolicy = new RangePolicyFixedViewport(new Range(minX, maxX));
+			mFrameClockSpareRange = new Range(minX, maxX);
+			axisX.setRangePolicy(mFrameClockRangePolicy);
+			return;
+		}
+		Range spare = mFrameClockSpareRange;
+		mFrameClockSpareRange = mFrameClockRangePolicy.getRange();
+		spare.setMin(minX);
+		spare.setMax(maxX);
+		mFrameClockRangePolicy.setRange(spare);
+	}
+	
+	//---------------------- DEV-896: live X viewport frame clock END -----------------------//
 	
 	public void setYAxisRange(double miny,double maxy){
 		IAxis<?> yAxisLeft = mChart.getAxisY();
@@ -2173,6 +2472,8 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 				//DEV-896: stash rather than propagate, so the deferred work still gets replayed on the
 				//"Trace does not exist" path (it used to run inline, before the batching).
 				Exception pendingException = null;
+				//DEV-896: whether this sample moved mCurrentXValue, i.e. is live data for the frame clock.
+				boolean isCurrentXValueUpdated = false;
 				try {
 				while (entries.hasNext()) {
 				synchronized(chartMonitor){
@@ -2260,6 +2561,7 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 						}
 
 						mCurrentXValue = xData;
+						isCurrentXValueUpdated = true;
 
 						//DEV-896: record instead of printing/updating Swing here - see DeferredPlotAction.
 						//The trace size is read now, under the monitor, so the deferred debug line
@@ -2346,6 +2648,12 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 
 				if(isDummyPointAddedToFillTrace) {
 					isFirstPointOnFillTrace = false;
+				}
+				
+				//DEV-896: the frame clock, not this per-sample path, moves the X window of a live
+				//time-axis plot (see setLiveViewportFrameClockEnabled()).
+				if(isCurrentXValueUpdated && isXAxisTime && mIsLiveViewportFrameClockEnabled){
+					noteLiveSampleForFrameClock();
 				}
 			}
 		}
