@@ -128,6 +128,15 @@ lookup itself, skipping such devices, and passes the matches to btleplug by addr
 (`src/winrt_retrieve.rs`). It also reports their names, which btleplug does not know for a device
 it never saw advertise, and by which Shimmers are recognised.
 
+Such a link cannot be used at once: until Windows drops it, it denies a new process the old one's
+services (the service shows no characteristics). Windows drops it once nothing uses the device,
+13-23 s after the kill (measured, Windows 11), but any use restarts that wait, so retrying keeps
+the link held: retries every second held it for over a minute. `connect` therefore releases the
+link, listens for the device to advertise again (which it does as soon as Windows drops the link)
+without touching it, and then connects afresh. If the caller's timeout ends first, the error says
+so and to try again; the next attempt connects normally. Measured: with a 20 s timeout, an
+immediate reconnect timed out at 20 s with that message, and the retry connected in 1 s.
+
 ## Third-party licences
 
 btleplug is BSD-3-Clause (with MIT/Apache-2.0 parts), and its dependencies are permissively
