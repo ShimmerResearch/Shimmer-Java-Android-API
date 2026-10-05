@@ -22,12 +22,12 @@ from .host import ProtocolHost
 
 log = logging.getLogger(__name__)
 
-# The Shimmer3R's serial service. Writes go to CA102 and notifications come from CA101, as the
-# native BLE transport (DEV-1132) uses them; the Android and Swift APIs use the opposite pair, and
-# both have worked against devices, so the firmware may accept either.
+# The Shimmer3R's serial service. CA102 offers notify and write without response, CA101 indicate and
+# write; the firmware sends on whichever is subscribed. CA102 is used both ways: notifications are
+# not acknowledged one by one, so they have more headroom than CA101's indications.
 SERVICE_UUID = "65333333-a115-11e2-9e9a-0800200ca100"
 WRITE_UUID = "65333333-a115-11e2-9e9a-0800200ca102"
-NOTIFY_UUID = "65333333-a115-11e2-9e9a-0800200ca101"
+NOTIFY_UUID = "65333333-a115-11e2-9e9a-0800200ca102"
 
 
 class ShimmerError(Exception):
