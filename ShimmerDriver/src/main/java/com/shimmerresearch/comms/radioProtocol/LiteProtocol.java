@@ -327,7 +327,11 @@ public class LiteProtocol extends AbstractCommsProtocol{
 				} catch (ShimmerException dE) {
 //					stop=true;
 
-					killConnection(dE);
+					// DEV-895: once stop is set, an error here is the teardown interrupt surfacing
+					// (e.g. as ERR_WRITING_DATA from txBytes), not a real link failure.
+					if(!stop){
+						killConnection(dE);
+					}
 //					e.printStackTrace();
 					//TODO send event up the ladder
 				}

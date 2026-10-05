@@ -434,7 +434,9 @@ public class ShimmerPC extends ShimmerBluetooth implements Serializable{
 		} catch (SerialPortException | NullPointerException ex) {
 			consolePrintException(ex.getMessage(), ex.getStackTrace());
 
-			connectionLost();
+			if(!isOnStoppedIoThread()){
+				connectionLost();
+			}
 //			e.printStackTrace();
 		}
 		return false;
@@ -450,7 +452,9 @@ public class ShimmerPC extends ShimmerBluetooth implements Serializable{
 			}
 		} catch (SerialPortException | NullPointerException ex) {
 			consolePrintException(ex.getMessage(), ex.getStackTrace());
-			connectionLost();
+			if(!isOnStoppedIoThread()){
+				connectionLost();
+			}
 			return 0;
 		}
 	}
@@ -467,7 +471,9 @@ public class ShimmerPC extends ShimmerBluetooth implements Serializable{
 		} catch (SerialPortException | NullPointerException ex) {
 			consolePrintLn("Tried to writeBytes but port is closed");
 			consolePrintException(ex.getMessage(), ex.getStackTrace());
-			connectionLost();
+			if(!isOnStoppedIoThread()){
+				connectionLost();
+			}
 		}
 	}
 
@@ -491,7 +497,9 @@ public class ShimmerPC extends ShimmerBluetooth implements Serializable{
 				}
 			}
 		} catch (SerialPortException | NullPointerException e) {
-			connectionLost();
+			if(!isOnStoppedIoThread()){
+				connectionLost();
+			}
 			consolePrintLn("Tried to readBytes but serial port error");
 			consolePrintException(e.getMessage(), e.getStackTrace());
 //			e.printStackTrace();
@@ -505,7 +513,9 @@ public class ShimmerPC extends ShimmerBluetooth implements Serializable{
 			// ShimmerBluetooth
 			if(mBluetoothRadioState==BT_STATE.CONNECTING
 					|| mBluetoothRadioState==BT_STATE.CONFIGURING){
-				connectionLost();
+				if(!isOnStoppedIoThread()){
+					connectionLost();
+				}
 			}
 		}
 		return null;
@@ -595,6 +605,15 @@ public class ShimmerPC extends ShimmerBluetooth implements Serializable{
 		}
 	}
 
+	/** DEV-895: true when running on an IOThread whose stop flag is set, i.e. the failure is the
+	 *  expected consequence of closeConnection() closing the port under a reader that outlived the
+	 *  bounded join. Reporting CONNECTION_LOST then would turn a user disconnect into an
+	 *  auto-reconnect downstream. */
+	private boolean isOnStoppedIoThread(){
+		Thread t = Thread.currentThread();
+		return (t instanceof IOThread) && ((IOThread)t).stop;
+	}
+
 	@Override
 	protected void connectionLost() {
 		disconnectNoException();
@@ -640,7 +659,11 @@ public class ShimmerPC extends ShimmerBluetooth implements Serializable{
 					}
 				}
 
-				mIOThread = null;
+				// Only clear the field if it still refers to the thread we stopped, so a
+				// late closeConnection() cannot clobber a reconnect's new IOThread.
+				if (mIOThread == ioThread) {
+					mIOThread = null;
+				}
 			}
 			// Not nested under the IOThread block: a concurrent caller may already have
 			// nulled mIOThread while the ProcessingThread is still running.
@@ -663,8 +686,10 @@ public class ShimmerPC extends ShimmerBluetooth implements Serializable{
 							consolePrintLn("Warning: ProcessingThread did not terminate within join timeout");
 						}
 					}
+					if (mPThread == pThread) {
+						mPThread = null;
+					}
 				}
-				mPThread = null;
 			}
 			mIsStreaming = false;
 			mIsInitialised = false;

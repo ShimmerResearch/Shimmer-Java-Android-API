@@ -290,8 +290,19 @@ public class ShimmerGRPC extends ShimmerBluetooth implements Serializable{
 			// Remote gRPC service is not available, so disconnect Shimmer device
 			sre.printStackTrace();
 			System.out.println("ERROR: Lost connection to GRPC Server");	
-			connectionLost();
+			if(!isOnStoppedIoThread()){
+				connectionLost();
+			}
 		}
+	}
+
+	/** DEV-895: true when running on an IOThread whose stop flag is set, i.e. the failure is the
+	 *  expected consequence of closeConnection() tearing down under an IOThread that outlived the
+	 *  bounded join. Reporting CONNECTION_LOST then would turn a user disconnect into an
+	 *  auto-reconnect downstream. */
+	private boolean isOnStoppedIoThread(){
+		Thread t = Thread.currentThread();
+		return (t instanceof IOThread) && ((IOThread)t).stop;
 	}
 
 	@Override
@@ -570,7 +581,11 @@ public class ShimmerGRPC extends ShimmerBluetooth implements Serializable{
 	                    consolePrintLn("Warning: IOThread did not terminate within join timeout");
 	                }
 	            }
-	            mIOThread = null;
+	            // Only clear the field if it still refers to the thread we stopped, so a
+	            // late closeConnection() cannot clobber a reconnect's new IOThread.
+	            if (mIOThread == ioThread) {
+	                mIOThread = null;
+	            }
 	        }
 	        // Not nested under the IOThread block: a concurrent caller may already have
 	        // nulled mIOThread while the ProcessingThread is still running.
@@ -590,8 +605,10 @@ public class ShimmerGRPC extends ShimmerBluetooth implements Serializable{
 	                        consolePrintLn("Warning: ProcessingThread did not terminate within join timeout");
 	                    }
 	                }
+	                if (mPThread == pThread) {
+	                    mPThread = null;
+	                }
 	            }
-	            mPThread = null;
 	        }
 	        mIsStreaming = false;
 	        mIsInitialised = false;
