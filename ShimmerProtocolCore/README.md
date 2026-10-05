@@ -40,8 +40,11 @@ whatever range is configured, because `SensorLSM303DLHC.setLSM303MagRange` updat
 wide-range accel's calibration in use instead of the mag's.
 
 Live on Windows (`examples/live.rs`, over the `shimmerble` transport): Shimmer3R-2F31, handshake
-749 ms, 1029 samples in 20 s, none missing. Shimmer3-3E36 streamed with none missing but did not act
-on STOP_STREAMING, and kept ignoring commands from any host until reset; under investigation.
+750 ms, 517 samples in 10 s, none missing, decoded: at rest |accel| 9.65 m/s^2 on its nominal
+calibration, gyro within 0.03 deg/s of zero. Shimmer3-3E36 streamed with none missing but did not
+act on STOP_STREAMING, and kept ignoring commands from any host; later its Bluetooth module still
+advertised and accepted connections, but its firmware answered nothing (no ACK to
+GET_SHIMMER_VERSION, from the Java state machine either). It needs a power cycle, then a retest.
 
 The WebAssembly build of the framer runs in Node, identical to Java on both recordings
 (`wasm/run_framing.mjs`); Android and iOS static libraries compile.
