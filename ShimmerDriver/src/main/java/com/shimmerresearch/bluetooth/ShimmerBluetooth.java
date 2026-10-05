@@ -293,6 +293,13 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 		}
 	}
 	
+	/**
+	 * With a link CRC on, the firmware sends one after a bare ACK too (the reply
+	 * to a SET command). It is the CRC of the single byte 0xFF: F4 65, low byte
+	 * first.
+	 */
+	private static final byte[] BARE_ACK_CRC = ShimmerCrc.shimmerUartCrcCalc(new byte[] {ACK_COMMAND_PROCESSED}, 1);
+	
 	public enum SHIMMER_FEATURE {
 		NONE,
 		RN4678_ERROR_DETECTION,
@@ -958,6 +965,30 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 		//Data packet followed by an ACK (suggesting an ACK in response to a SET BT command or else a BT response command)
 		else if(bufferTemp[0]==DATA_PACKET 
 				&& bufferTemp[getPacketSizeWithCrc()+1]==ACK_COMMAND_PROCESSED){
+			
+			//With a link CRC on, a bare ACK is followed by its own CRC rather than
+			//by the next packet
+			if(isBareAckCrcSoFar(bufferTemp)){
+				int bareAckEnd = getPacketSizeWithCrc()+2+mBtCommsCrcModeCurrent.getNumCrcBytes();
+				if(bufferTemp.length<bareAckEnd){
+					return; //wait for the rest of the ACK's CRC
+				}
+				
+				//Firstly handle the data packet. If its CRC fails, only the packet is
+				//dropped: the ACK's own CRC has already checked out.
+				if(checkCrc(bufferTemp, getPacketSize()+1)){
+					processDataPacket(bufferTemp);
+				}
+				else {
+					printLogDataForDebugging("CRC error in the data packet before an ACK, packet discarded");
+				}
+				clearBytesFromStartOfBuffers(bufferTemp, bareAckEnd);
+				
+				//Then handle the ACK from the last SET command
+				processAckWhileStreaming();
+				return;
+			}
+			
 			if(mByteArrayOutputStream.size()>getPacketSizeWithCrc()+2){
 				
 				if(bufferTemp[getPacketSizeWithCrc()+2]==DATA_PACKET){
@@ -966,16 +997,7 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 					clearSingleDataPacketFromBuffers(bufferTemp, getPacketSizeWithCrc()+2);
 					
 					//Then handle the ACK from the last SET command
-					if(isKnownSetCommand(mCurrentCommand)){
-						stopTimerCheckForAckOrResp(); //cancel the ack timer
-						mWaitForAck=false;
-						
-						processAckFromSetCommand(mCurrentCommand);
-						
-						mTransactionCompleted = true;
-						setInstructionStackLock(false);
-					}
-					printLogDataForDebugging("Ack Received for Command: \t\t\t" + btCommandToString(mCurrentCommand));
+					processAckWhileStreaming();
 				}
 				
 				//this is for LogAndStream support, command is transmitted and ack received
@@ -1048,6 +1070,10 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 		return mBtResponseMap.containsKey(response);
 	}
 
+	/**
+	 * Checks the CRC of the data packet at the start of bufferTemp. It leaves the
+	 * buffers alone, so the caller decides what to discard.
+	 */
 	public boolean checkCrc(byte[] bufferTemp, int length) {
 		byte[] crcCalc = ShimmerCrc.shimmerUartCrcCalc(bufferTemp, length);
 
@@ -1061,11 +1087,43 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 		if (mBtCommsCrcModeCurrent == BT_CRC_MODE.TWO_BYTE_CRC) {
 			// + 2 as this is the location of the CRC's MSB
 			if (bufferTemp[getPacketSize() + 2] != crcCalc[1]) {
-				discardBufferBytesToNextPacket();
 				return false;
 			}
 		}
 		return true;
+	}
+	
+	/**
+	 * Whether the bytes received so far after the ACK that follows a data packet
+	 * are the CRC on a bare ACK. Nothing else can start that way: an in-stream
+	 * response starts 0x8A, a data packet 0x00, and no response opcode is 0xF4.
+	 */
+	private boolean isBareAckCrcSoFar(byte[] bufferTemp) {
+		int crcStart = getPacketSizeWithCrc()+2;
+		int numCrcBytesReceived = Math.min(bufferTemp.length-crcStart, mBtCommsCrcModeCurrent.getNumCrcBytes());
+		if(numCrcBytesReceived<=0){
+			return false;
+		}
+		for(int i=0;i<numCrcBytesReceived;i++){
+			if(bufferTemp[crcStart+i]!=BARE_ACK_CRC[i]){
+				return false;
+			}
+		}
+		return true;
+	}
+	
+	/** Handles a bare ACK received while streaming: the reply to the last SET command */
+	private void processAckWhileStreaming() {
+		if(isKnownSetCommand(mCurrentCommand)){
+			stopTimerCheckForAckOrResp(); //cancel the ack timer
+			mWaitForAck=false;
+			
+			processAckFromSetCommand(mCurrentCommand);
+			
+			mTransactionCompleted = true;
+			setInstructionStackLock(false);
+		}
+		printLogDataForDebugging("Ack Received for Command: \t\t\t" + btCommandToString(mCurrentCommand));
 	}
 	
 	private void clearCrcBytesFromBuffer(byte responseCommand) {
@@ -1291,6 +1349,21 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 					consolePrintException(e.getMessage(), e.getStackTrace());
 				}
 			}
+		}
+	}
+
+	/**
+	 * Clears the first numBytes bytes from mByteArrayOutputStream, with their
+	 * PC timestamps, and keeps any bytes after them
+	 * 
+	 * @param bufferTemp the contents of mByteArrayOutputStream
+	 * @param numBytes
+	 */
+	private void clearBytesFromStartOfBuffers(byte[] bufferTemp, int numBytes) {
+		mByteArrayOutputStream.reset();
+		mByteArrayOutputStream.write(bufferTemp, numBytes, bufferTemp.length-numBytes);
+		if(mEnablePCTimeStamps) {
+			mListofPCTimeStamps.subList(0, Math.min(numBytes, mListofPCTimeStamps.size())).clear();
 		}
 	}
 
