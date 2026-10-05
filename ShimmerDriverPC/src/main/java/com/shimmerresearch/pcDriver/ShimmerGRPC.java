@@ -571,26 +571,27 @@ public class ShimmerGRPC extends ShimmerBluetooth implements Serializable{
 	                }
 	            }
 	            mIOThread = null;
-
-	            if (mUseProcessingThread) {
-	                ProcessingThread pThread = mPThread;
-	                if (pThread != null) {
-	                    pThread.stop = true;
-	                    if (Thread.currentThread() != pThread) {
-	                        // Interrupt before joining - see the IOThread teardown above.
-	                        pThread.interrupt();
-	                        try {
-	                            pThread.join(2000);
-	                        } catch (InterruptedException e) {
-	                            Thread.currentThread().interrupt();
-	                        }
-	                        if (pThread.isAlive()) {
-	                            consolePrintLn("Warning: ProcessingThread did not terminate within join timeout");
-	                        }
+	        }
+	        // Not nested under the IOThread block: a concurrent caller may already have
+	        // nulled mIOThread while the ProcessingThread is still running.
+	        if (mUseProcessingThread) {
+	            ProcessingThread pThread = mPThread;
+	            if (pThread != null) {
+	                pThread.stop = true;
+	                if (Thread.currentThread() != pThread) {
+	                    // Interrupt before joining - see the IOThread teardown above.
+	                    pThread.interrupt();
+	                    try {
+	                        pThread.join(2000);
+	                    } catch (InterruptedException e) {
+	                        Thread.currentThread().interrupt();
+	                    }
+	                    if (pThread.isAlive()) {
+	                        consolePrintLn("Warning: ProcessingThread did not terminate within join timeout");
 	                    }
 	                }
-	                mPThread = null;
 	            }
+	            mPThread = null;
 	        }
 	        mIsStreaming = false;
 	        mIsInitialised = false;

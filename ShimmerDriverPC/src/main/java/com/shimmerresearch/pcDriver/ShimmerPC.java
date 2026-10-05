@@ -641,29 +641,30 @@ public class ShimmerPC extends ShimmerBluetooth implements Serializable{
 				}
 
 				mIOThread = null;
-
-				if(mUseProcessingThread){
-					ProcessingThread pThread = mPThread;
-					if (pThread != null) {
-						pThread.stop = true;
-						// buildAndSendMsg() runs on the ProcessingThread and dispatches to app
-						// listeners, so a listener calling disconnect() would self-join here -
-						// guard the same way as the IOThread above.
-						if (Thread.currentThread() != pThread) {
-							// Interrupt before joining - see the IOThread teardown above.
-							pThread.interrupt();
-							try {
-								pThread.join(2000);
-							} catch (InterruptedException e) {
-								Thread.currentThread().interrupt();
-							}
-							if (pThread.isAlive()) {
-								consolePrintLn("Warning: ProcessingThread did not terminate within join timeout");
-							}
+			}
+			// Not nested under the IOThread block: a concurrent caller may already have
+			// nulled mIOThread while the ProcessingThread is still running.
+			if(mUseProcessingThread){
+				ProcessingThread pThread = mPThread;
+				if (pThread != null) {
+					pThread.stop = true;
+					// buildAndSendMsg() runs on the ProcessingThread and dispatches to app
+					// listeners, so a listener calling disconnect() would self-join here -
+					// guard the same way as the IOThread above.
+					if (Thread.currentThread() != pThread) {
+						// Interrupt before joining - see the IOThread teardown above.
+						pThread.interrupt();
+						try {
+							pThread.join(2000);
+						} catch (InterruptedException e) {
+							Thread.currentThread().interrupt();
+						}
+						if (pThread.isAlive()) {
+							consolePrintLn("Warning: ProcessingThread did not terminate within join timeout");
 						}
 					}
-					mPThread = null;
 				}
+				mPThread = null;
 			}
 			mIsStreaming = false;
 			mIsInitialised = false;

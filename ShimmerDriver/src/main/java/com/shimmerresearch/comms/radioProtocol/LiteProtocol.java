@@ -253,31 +253,38 @@ public class LiteProtocol extends AbstractCommsProtocol{
 	}
 
 	private void stopIoThread() {
-		if(mIOThread!=null){
-			mIOThread.stop=true;
+		// Snapshot the field: a concurrent teardown may null mIOThread between the
+		// null check and the interrupt/join/isAlive calls below.
+		IOThread ioThread = mIOThread;
+		if(ioThread!=null){
+			ioThread.stop=true;
 			// Bounded wait for the thread to actually exit its loop before dropping the
 			// reference. Guard against the self-join case: killConnection() can reach here
 			// synchronously from within IOThread.run()'s catch block (error-driven teardown),
 			// and a thread joining itself would just burn the full timeout.
-			if(Thread.currentThread() != mIOThread){
+			if(Thread.currentThread() != ioThread){
 				// Interrupt before joining: run() now exits promptly on
 				// Thread.currentThread().isInterrupted(), and any idle Thread.sleep()/
 				// queue poll() it's waiting in will wake immediately - making shutdown
 				// faster and more deterministic than waiting out the bounded join first.
-				mIOThread.interrupt();
+				ioThread.interrupt();
 				try {
-					mIOThread.join(2000);
+					ioThread.join(2000);
 				} catch (InterruptedException e) {
 					Thread.currentThread().interrupt();
 				}
-				if (mIOThread.isAlive()) {
+				if (ioThread.isAlive()) {
 					// Still not terminated after the interrupt + bounded join - most likely
 					// blocked in a non-interruptible native serial read. Just warn; a second
 					// interrupt() here wouldn't unblock it either.
 					printLogDataForDebugging("Warning: IOThread did not terminate within join timeout; it may be blocked in a non-interruptible read");
 				}
 			}
-			mIOThread = null;
+			// Only clear the field if it still refers to the thread we stopped, so a
+			// newly started IOThread is not clobbered.
+			if (mIOThread == ioThread) {
+				mIOThread = null;
+			}
 		}
 	}
 
