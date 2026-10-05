@@ -187,15 +187,35 @@ impl BleCore {
     /// that owned it was killed. Returns how many were found.
     pub fn retrieve_connected(&self, services: Vec<Uuid>) -> Result<usize> {
         let found = self.rt.block_on(self.retrieve(services))?;
-        for peripheral in &found {
-            self.rt.block_on(report_peripheral(&self.shared, peripheral));
+        for (peripheral, name) in &found {
+            self.rt.block_on(report_peripheral(&self.shared, peripheral, name.as_deref()));
         }
         Ok(found.len())
     }
 
-    async fn retrieve(&self, services: Vec<Uuid>) -> Result<Vec<Peripheral>> {
+    /// The connected devices that expose any of `services`, each with its name where the
+    /// platform lookup knows it and btleplug may not.
+    #[cfg(target_os = "windows")]
+    async fn retrieve(&self, services: Vec<Uuid>) -> Result<Vec<(Peripheral, Option<String>)>> {
+        // btleplug's own service lookup fails outright here if any connected device cannot be
+        // opened (see winrt_retrieve), so find the matches first, then retrieve them by address.
+        let matches = crate::winrt_retrieve::connected_with_services(&services).await.map_err(BleError)?;
+        let mut found = Vec::new();
+        for (address, name) in matches {
+            let address = btleplug::api::BDAddr::try_from(address).map_err(|e| BleError(e.to_string()))?;
+            let options =
+                RetrievePeripheralsOptions { identifiers: Some(vec![PeripheralId::from(address)]), services: None };
+            if let Some(peripheral) = self.adapter.retrieve_peripherals(options).await?.into_iter().next() {
+                found.push((peripheral, Some(name)));
+            }
+        }
+        Ok(found)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    async fn retrieve(&self, services: Vec<Uuid>) -> Result<Vec<(Peripheral, Option<String>)>> {
         let options = RetrievePeripheralsOptions { identifiers: None, services: Some(services) };
-        Ok(self.adapter.retrieve_peripherals(options).await?)
+        Ok(self.adapter.retrieve_peripherals(options).await?.into_iter().map(|p| (p, None)).collect())
     }
 
     /// Looks up one device that is connected to this machine by its ID, and makes it
@@ -430,11 +450,13 @@ async fn adapter_event_pump(
 
 async fn report_device(adapter: &Adapter, shared: &Shared, pid: PeripheralId) {
     if let Ok(peripheral) = adapter.peripheral(&pid).await {
-        report_peripheral(shared, &peripheral).await;
+        report_peripheral(shared, &peripheral, None).await;
     }
 }
 
-async fn report_peripheral(shared: &Shared, peripheral: &Peripheral) {
+/// Reports a device as found. `known_name` is used when btleplug has no name for it, as for a
+/// connected device it never saw advertise.
+async fn report_peripheral(shared: &Shared, peripheral: &Peripheral, known_name: Option<&str>) {
     let props = match peripheral.properties().await {
         Ok(Some(props)) => props,
         _ => return,
@@ -445,6 +467,10 @@ async fn report_peripheral(shared: &Shared, peripheral: &Peripheral) {
 
     let address = props.address.to_string();
     let address = if address == "00:00:00:00:00:00" { String::new() } else { address };
-    let name = props.local_name.or(props.advertisement_name).unwrap_or_default();
+    let name = props
+        .local_name
+        .or(props.advertisement_name)
+        .or_else(|| known_name.map(String::from))
+        .unwrap_or_default();
     shared.send(Event::DeviceFound { id, name, address, rssi: props.rssi });
 }
