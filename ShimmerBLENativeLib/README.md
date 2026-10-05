@@ -34,7 +34,8 @@ Design rules that matter when changing it:
   through its constructor (`EVENT_CTOR_SIG` in `lib.rs`). Rename or move either Java class, or
   change that constructor, and the library breaks.
 - **Devices are scanned before they are connected.** btleplug cannot connect to an address it has
-  not seen advertising on Windows or macOS.
+  not seen advertising on Windows or macOS. A device already connected to this machine does not
+  advertise; `retrieve_connected` reports those (see "Windows: devices it still holds").
 - **Device IDs are opaque strings**: the MAC address on Windows, a CoreBluetooth UUID on macOS
   (macOS never exposes MAC addresses). Devices are matched by advertised name, which also picks
   the BLE service (`BleUartProfile`).
@@ -114,6 +115,18 @@ such links the library asks Windows for its throughput-optimized parameters (15 
 holds the request while connected (`src/winrt_link.rs`; Windows 11). Measured: 100% over 60 s.
 
 The Shimmer3R uses CA102, which offers notifications only, so it is not affected.
+
+### Windows: devices it still holds
+
+Windows keeps a BLE link open after the process that owned it is killed, and a connected device
+does not advertise, so a scan alone never finds it again. `BleCentral.startScan()` therefore also
+asks for the Shimmer devices already connected (`retrieve_connected`). btleplug 0.13.3's own lookup
+fails outright on Windows if any connected device cannot be opened as a BLE device (HRESULT
+0x80070057, "The provided device ID is not a valid BluetoothLEDevice object"), which an ordinary
+PC's other Bluetooth devices cause, and then no held Shimmer is found at all. The library does that
+lookup itself, skipping such devices, and passes the matches to btleplug by address
+(`src/winrt_retrieve.rs`). It also reports their names, which btleplug does not know for a device
+it never saw advertise, and by which Shimmers are recognised.
 
 ## Third-party licences
 

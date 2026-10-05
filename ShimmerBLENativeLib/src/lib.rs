@@ -10,6 +10,8 @@
 pub mod engine;
 #[cfg(target_os = "windows")]
 mod winrt_link;
+#[cfg(target_os = "windows")]
+mod winrt_retrieve;
 
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::{Mutex, OnceLock};
