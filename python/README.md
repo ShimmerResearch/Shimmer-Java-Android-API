@@ -58,6 +58,21 @@ Decoded: the timestamp, low-noise accel, gyro (including the on-the-fly offset c
 battery, and the per-packet channels the Java adds. Other channels are sized correctly in the packet
 layout but not decoded: wide-range accel, ADCs, pressure, GSR, ExG, bridge amp.
 
-Not yet: writing configuration, reconnecting by address to a device that Windows still holds
-connected (it does not advertise, and bleak finds devices by scanning), and the TCXO sampling clock
-of the EXG unified board revision 1, special revision 1.
+Not yet: writing configuration, and the TCXO sampling clock of the EXG unified board revision 1,
+special revision 1.
+
+## A device left connected (Windows)
+
+Windows keeps a BLE link open when the process that owned it dies, so after a crash the device
+stops advertising and a scan cannot find it, often while it is still streaming. `ble.py` handles
+this:
+
+- By name, it first asks Windows for connected devices with that name (opening only a match:
+  Windows also lists connected devices that cannot be opened as BLE devices). By address, it opens
+  the device directly, without scanning.
+- For 8-20 s after such a process dies, Windows denies the Shimmer3R service to a new connection,
+  and bleak's service discovery can fail outright. The transport retries for up to 30 s.
+- The protocol then stops the stream left running and turns checksums off before its handshake.
+
+Tested by killing a streaming process and reconnecting 2 s later, by name and by address: ready
+in about 11 s, then streaming normally.

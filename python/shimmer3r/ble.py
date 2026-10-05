@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 from typing import AsyncIterator
 
 from bleak import BleakClient, BleakScanner
+from bleak.exc import BleakDeviceNotFoundError
 from bleak.backends.device import BLEDevice
 
 from .events import Discarded, Error, Initialised, LinkLost, Sample, State, StateChanged
@@ -32,22 +34,87 @@ class ShimmerError(Exception):
     """The protocol failed or the link was lost."""
 
 
+async def _windows_connected_device(name: str) -> BLEDevice | None:
+    """A device Windows holds connected, by name. Such a device does not advertise, so a scan
+    cannot find it; typically its link was left open by an earlier process, which Windows keeps
+    when that process dies. The protocol then stops whatever it is still streaming.
+
+    Only a device whose name matches is opened: Windows also lists connected devices that cannot
+    be opened as BLE devices, and opening those fails ("not a valid BluetoothLEDevice")."""
+    from winrt.windows.devices.bluetooth import BluetoothConnectionStatus, BluetoothLEDevice
+    from winrt.windows.devices.enumeration import DeviceInformation
+
+    selector = BluetoothLEDevice.get_device_selector_from_connection_status(
+        BluetoothConnectionStatus.CONNECTED
+    )
+    for info in await DeviceInformation.find_all_async_aqs_filter(selector):
+        if not (info.name or "").startswith(name):
+            continue
+        try:
+            device = await BluetoothLEDevice.from_id_async(info.id)
+        except OSError as e:
+            log.info("cannot open %s, which Windows lists as connected: %s", info.name, e)
+            continue
+        if device is None:
+            continue
+        hex12 = f"{device.bluetooth_address:012X}"
+        device.close()
+        return BLEDevice(":".join(hex12[i : i + 2] for i in range(0, 12, 2)), info.name, None)
+    return None
+
+
 class BleTransport:
     """Moves bytes between a bleak connection and a ProtocolHost."""
+
+    RETRY_S = 2.0
 
     def __init__(self, device: BLEDevice | str) -> None:
         self._device = device
         self._client: BleakClient | None = None
+        self._open = False
         self._closing = False
 
-    async def open(self, host: ProtocolHost, timeout: float = 20.0) -> None:
+    async def open(
+        self, host: ProtocolHost, timeout: float = 20.0, release_s: float = 30.0
+    ) -> None:
+        """Connects and subscribes.
+
+        For about 20 s after a process that had the device open dies, Windows denies a new
+        connection the Shimmer3R service ("access denied", so the service looks absent), and
+        bleak's service discovery can itself fail in that time. Either way this disconnects and
+        tries again, for up to ``release_s``."""
+
         def disconnected(_: BleakClient) -> None:
-            if not self._closing:
+            if self._open and not self._closing:
                 host.on_link_lost("disconnected")
 
-        self._client = BleakClient(self._device, disconnected, timeout=timeout)
-        await self._client.connect()
+        loop = asyncio.get_running_loop()
+        give_up = loop.time() + release_s
+        while True:
+            self._client = BleakClient(self._device, disconnected, timeout=timeout)
+            try:
+                await self._client.connect()
+                why = "service not available"
+                if self._client.services.get_characteristic(NOTIFY_UUID) is not None:
+                    break
+            except BleakDeviceNotFoundError:
+                raise
+            except Exception as e:  # bleak's discovery can fail while Windows releases the service
+                why = f"{type(e).__name__}: {e}"
+            try:
+                await self._client.disconnect()
+            except Exception:
+                pass
+            if loop.time() >= give_up:
+                raise ShimmerError(
+                    f"cannot open the Shimmer3R service after {release_s:.0f} s: {why}"
+                )
+            log.info(
+                "Shimmer3R service not ready (%s; held by a process that ended?); retrying", why
+            )
+            await asyncio.sleep(self.RETRY_S)
         await self._client.start_notify(NOTIFY_UUID, lambda _, data: host.on_bytes(data))
+        self._open = True
 
     @property
     def mtu(self) -> int:
@@ -130,19 +197,25 @@ class Shimmer3R:
             self._pump.cancel()
 
     async def _find(self) -> BLEDevice | str:
-        is_mac = ":" in self._target
-        is_apple_uuid = len(self._target) == 36 and self._target.count("-") == 4
+        target = self._target
+        is_mac = ":" in target
+        is_apple_uuid = len(target) == 36 and target.count("-") == 4  # macOS has no MAC addresses
+        if is_mac and sys.platform == "win32":
+            # Opened by address without a scan, so this works while Windows holds it connected.
+            return BLEDevice(target.upper(), None, None)
         if is_mac or is_apple_uuid:
-            return (
-                self._target
-            )  # macOS has no MAC addresses; CoreBluetooth gives each device a UUID
-        name = self._target
+            return target
+        if sys.platform == "win32":
+            held = await _windows_connected_device(target)
+            if held is not None:
+                log.info("%s is already connected to this PC; using that link", held.name)
+                return held
         device = await BleakScanner.find_device_by_filter(
-            lambda d, ad: bool(ad.local_name) and ad.local_name.startswith(name),
+            lambda d, ad: bool(ad.local_name) and ad.local_name.startswith(target),
             timeout=self._scan_timeout,
         )
         if device is None:
-            raise ShimmerError(f"{name} not found within {self._scan_timeout:.0f} s")
+            raise ShimmerError(f"{target} not found within {self._scan_timeout:.0f} s")
         return device
 
     async def _dispatch(self) -> None:
