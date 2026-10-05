@@ -655,6 +655,42 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 	private static final double FRAME_CLOCK_CATCH_UP_FULL_MS = VIEWPORT_LATENCY_MS;
 	/** Share of the remaining error corrected per tick while catching up. */
 	private static final double FRAME_CLOCK_CATCH_UP_GAIN = 0.15;
+	
+	// Anchored fallback. The playout clock assumes X advances about 1 ms per wall-clock ms and
+	// that new X arrives well within VIEWPORT_LATENCY_MS. Neither holds for Consensys DB playback
+	// (PlaybackSession replays at ~1.3x at "x1", because its timer period is truncated, and 2-4x+
+	// at x2/x4) or for low-rate series (e.g. the 2 Hz fusion-response plot): the clock would then
+	// snap forward repeatedly, or freeze and rubber-band. So, from the arrivals of the newest X,
+	// the clock estimates the X rate and the spacing between new X values over windows of at
+	// least FRAME_CLOCK_RATE_WINDOW_MS, and when either is out of range - in the window itself and
+	// in its EWMA - for FRAME_CLOCK_MODE_SWITCH_WINDOWS windows in a row it switches to anchored mode: each tick the
+	// window's right edge is simply the newest X (the old behaviour, but still one update and one
+	// paint per tick). It switches back, with hysteresis, the same way.
+	/** Minimum span of newest-X arrivals per rate/spacing estimate. */
+	private static final long FRAME_CLOCK_RATE_WINDOW_MS = 500;
+	/** EWMA weight of each new window's rate and spacing. */
+	private static final double FRAME_CLOCK_RATE_EWMA_ALPHA = 0.5;
+	/** Consecutive windows a mode switch must be wanted for (a one-off X jump or a stall changes
+	 * one window only). */
+	private static final int FRAME_CLOCK_MODE_SWITCH_WINDOWS = 2;
+	/** Anchor when the X rate (X ms per wall-clock ms) is above / below these. */
+	private static final double FRAME_CLOCK_ANCHOR_RATE_HIGH = 1.5;
+	private static final double FRAME_CLOCK_ANCHOR_RATE_LOW = 0.67;
+	/** Leave anchored mode only when the rate is back between these. */
+	private static final double FRAME_CLOCK_UNANCHOR_RATE_HIGH = 1.2;
+	private static final double FRAME_CLOCK_UNANCHOR_RATE_LOW = 0.83;
+	/** Anchor when new X values arrive further apart than this. Above VIEWPORT_LATENCY_MS the
+	 * playout clock rubber-bands (freezes at the newest sample, then catches up); at or just below
+	 * it, e.g. a 5 Hz series, it still scrolls evenly, so the threshold is 1.2x the latency rather
+	 * than below it. */
+	private static final double FRAME_CLOCK_ANCHOR_SPACING_MS = 1.2*VIEWPORT_LATENCY_MS;
+	/** Leave anchored mode only when new X values arrive closer together than this. */
+	private static final double FRAME_CLOCK_UNANCHOR_SPACING_MS = 0.75*VIEWPORT_LATENCY_MS;
+	/** Anchored because X runs fast (playback): the right edge may advance at most this many times
+	 * the estimated X rate per tick, so two deliveries landing in one tick (e.g. a 15.6 ms playback
+	 * timer against 16 ms frames) are spread over the next frames instead of showing as one double
+	 * step. Anchored for sparse data at ~1x rate, the edge jumps straight to the newest X. */
+	private static final double FRAME_CLOCK_ANCHORED_MAX_SPEED_FACTOR = 1.5;
 	/** Chart2D's own repaint timer delay while the frame clock repaints the chart itself. Kept long
 	 * so that timer does not add a second, unsynchronised stream of paints; restored on stop. */
 	private static final int FRAME_CLOCK_CHART_PAINT_LATENCY_MS = 250;
@@ -688,6 +724,19 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 	private long mLastFrameClockStartRequestNanos = System.nanoTime() - FRAME_CLOCK_START_REQUEST_MIN_INTERVAL_NS;
 	//EDT-only state below
 	private double mFrameClockViewportEndX = Double.NaN;
+	/** Anchored fallback state (see FRAME_CLOCK_ANCHOR_*). */
+	private boolean mIsFrameClockAnchored = false;
+	/** Just left anchored mode: hold the window still until the playout target catches up with it,
+	 * instead of stepping back by up to VIEWPORT_LATENCY_MS. */
+	private boolean mIsFrameClockHoldingAfterAnchor = false;
+	private boolean mIsFrameClockRateBaseSet = false;
+	private double mFrameClockRateBaseX = 0;
+	private long mFrameClockRateBaseNanos = 0;
+	private long mFrameClockRateLastSeenNanos = 0;
+	private int mFrameClockRateUpdatesInWindow = 0;
+	private double mFrameClockRateEwma = Double.NaN;
+	private double mFrameClockSpacingEwmaMs = Double.NaN;
+	private int mFrameClockModeSwitchVotes = 0;
 	private long mLastFrameClockTickNanos = 0;
 	private Chart2D mFrameClockChart = null;
 	private int mFrameClockSavedPaintLatency = -1;
@@ -754,7 +803,7 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 			Chart2D chart = mChart;
 			//isShowing() off the EDT is a benign racy read: at worst one request is skipped or wasted.
 			//Checking it here keeps a hidden plot from posting a start request per sample.
-			if(chart!=null && chart.isShowing() && mIsFrameClockStartPending.compareAndSet(false, true)){
+			if(chart!=null && isChartDisplayed(chart) && mIsFrameClockStartPending.compareAndSet(false, true)){
 				mLastFrameClockStartRequestNanos = nowNanos;
 				SwingUtilities.invokeLater(new Runnable(){
 					@Override
@@ -782,6 +831,16 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 		}
 	}
 	
+	/** Showing, and its top-level frame not iconified (an iconified JFrame's components still
+	 * report isShowing()). Off the EDT this is a benign racy read. */
+	private static boolean isChartDisplayed(Chart2D chart){
+		if(!chart.isShowing()){
+			return false;
+		}
+		java.awt.Window window = SwingUtilities.getWindowAncestor(chart);
+		return !(window instanceof java.awt.Frame) || (((java.awt.Frame)window).getExtendedState() & java.awt.Frame.ICONIFIED)==0;
+	}
+	
 	private boolean isFrameClockWanted(){
 		return mIsLiveViewportFrameClockEnabled && isXAxisTime() && !mIsPlotPaused && mFrameClockNewestX!=0;
 	}
@@ -790,7 +849,7 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 	private void startFrameClockOnEdt(){
 		mIsFrameClockStartPending.set(false);
 		Chart2D chart = mChart;
-		if(mIsFrameClockRunning || !isFrameClockWanted() || chart==null || !chart.isShowing()){
+		if(mIsFrameClockRunning || !isFrameClockWanted() || chart==null || !isChartDisplayed(chart)){
 			return;
 		}
 		if(mFrameClockTimer==null){
@@ -825,6 +884,7 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 		boolean wasRunning = mIsFrameClockRunning;
 		mIsFrameClockRunning = false;
 		mFrameClockViewportEndX = Double.NaN;
+		resetFrameClockRateEstimate();
 		Chart2D chart = mFrameClockChart;
 		mFrameClockChart = null;
 		if(chart!=null && mFrameClockSavedPaintLatency>0){
@@ -845,7 +905,11 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 			return; //an event already queued when the timer was stopped
 		}
 		Chart2D chart = mChart;
-		if(chart==null || chart!=mFrameClockChart || !mIsLiveViewportFrameClockEnabled || !isXAxisTime() || !chart.isShowing()){
+		if(!isXAxisTime()){
+			stopFrameClockOnEdt(false); //do not put a time window on a value/frequency axis
+			return;
+		}
+		if(chart==null || chart!=mFrameClockChart || !mIsLiveViewportFrameClockEnabled || !isChartDisplayed(chart)){
 			stopFrameClockOnEdt(true);
 			return;
 		}
@@ -875,14 +939,30 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 	 * @param latestX newest X plotted (mFrameClockNewestX)
 	 * @param lastSampleNanos System.nanoTime() when that X was plotted */
 	double computeLiveViewportEnd(long nowNanos, double latestX, long lastSampleNanos){
+		updateFrameClockRateEstimate(latestX, lastSampleNanos);
 		double sinceSampleMs = (nowNanos-lastSampleNanos)/1e6;
 		double target = latestX + sinceSampleMs - VIEWPORT_LATENCY_MS;
 		double previousEnd = mFrameClockViewportEndX;
 		double end;
-		if(Double.isNaN(previousEnd) || Math.abs(target-previousEnd) > FRAME_CLOCK_RESYNC_MS){
+		if(mIsFrameClockAnchored){
+			//X does not advance like wall-clock time, or arrives too sparsely: follow it directly.
+			end = latestX;
+			if(!Double.isNaN(previousEnd) && mFrameClockRateEwma>FRAME_CLOCK_UNANCHOR_RATE_HIGH
+					&& latestX>=previousEnd && latestX-previousEnd<=FRAME_CLOCK_RESYNC_MS){
+				double frameMs = Math.max(0, (nowNanos-mLastFrameClockTickNanos)/1e6);
+				end = Math.min(latestX, previousEnd + frameMs*mFrameClockRateEwma*FRAME_CLOCK_ANCHORED_MAX_SPEED_FACTOR);
+			}
+			mIsFrameClockHoldingAfterAnchor = true;
+		}
+		else if(Double.isNaN(previousEnd) || Math.abs(target-previousEnd) > FRAME_CLOCK_RESYNC_MS){
 			end = Math.min(target, latestX);
+			mIsFrameClockHoldingAfterAnchor = false;
+		}
+		else if(mIsFrameClockHoldingAfterAnchor && target<previousEnd){
+			end = previousEnd;
 		}
 		else{
+			mIsFrameClockHoldingAfterAnchor = false;
 			double frameMs = Math.max(0, (nowNanos-mLastFrameClockTickNanos)/1e6);
 			double predicted = previousEnd + frameMs;
 			double error = target-predicted;
@@ -902,6 +982,79 @@ public class BasicPlotManagerPC extends AbstractPlotManager {
 		mFrameClockViewportEndX = end;
 		mLastFrameClockTickNanos = nowNanos;
 		return end;
+	}
+	
+	/** EDT. Updates the X-rate and X-spacing estimates from the newest X and its arrival time, and
+	 * switches between playout and anchored mode (see FRAME_CLOCK_ANCHOR_*). Windows are measured
+	 * between arrivals, so a stall followed by buffered data still reads as rate ~1. */
+	private void updateFrameClockRateEstimate(double newestX, long newestXNanos){
+		if(newestX==0){
+			return; //no data yet
+		}
+		if(!mIsFrameClockRateBaseSet || newestX<mFrameClockRateBaseX){ //first sample, or X went back
+			startFrameClockRateWindow(newestX, newestXNanos);
+			return;
+		}
+		if(newestXNanos!=mFrameClockRateLastSeenNanos){
+			mFrameClockRateLastSeenNanos = newestXNanos;
+			mFrameClockRateUpdatesInWindow++;
+		}
+		double windowMs = (newestXNanos-mFrameClockRateBaseNanos)/1e6;
+		if(windowMs<FRAME_CLOCK_RATE_WINDOW_MS || mFrameClockRateUpdatesInWindow==0){
+			return;
+		}
+		double rate = (newestX-mFrameClockRateBaseX)/windowMs;
+		double spacingMs = windowMs/mFrameClockRateUpdatesInWindow;
+		if(Double.isNaN(mFrameClockRateEwma)){
+			mFrameClockRateEwma = rate;
+			mFrameClockSpacingEwmaMs = spacingMs;
+		}
+		else{
+			mFrameClockRateEwma += FRAME_CLOCK_RATE_EWMA_ALPHA*(rate-mFrameClockRateEwma);
+			mFrameClockSpacingEwmaMs += FRAME_CLOCK_RATE_EWMA_ALPHA*(spacingMs-mFrameClockSpacingEwmaMs);
+		}
+		startFrameClockRateWindow(newestX, newestXNanos);
+		
+		//A switch is wanted only when both this window and the smoothed estimate call for it: the
+		//EWMA alone would carry a one-off X jump (one window at e.g. 3x) into the next window too.
+		boolean isSwitchWanted;
+		if(mIsFrameClockAnchored){
+			isSwitchWanted = isFrameClockRateNormal(rate, spacingMs) && isFrameClockRateNormal(mFrameClockRateEwma, mFrameClockSpacingEwmaMs);
+		}
+		else{
+			isSwitchWanted = isFrameClockRateAbnormal(rate, spacingMs) && isFrameClockRateAbnormal(mFrameClockRateEwma, mFrameClockSpacingEwmaMs);
+		}
+		mFrameClockModeSwitchVotes = isSwitchWanted ? mFrameClockModeSwitchVotes+1 : 0;
+		if(mFrameClockModeSwitchVotes>=FRAME_CLOCK_MODE_SWITCH_WINDOWS){
+			mIsFrameClockAnchored = !mIsFrameClockAnchored;
+			mFrameClockModeSwitchVotes = 0;
+		}
+	}
+	
+	private static boolean isFrameClockRateAbnormal(double rate, double spacingMs){
+		return rate>FRAME_CLOCK_ANCHOR_RATE_HIGH || rate<FRAME_CLOCK_ANCHOR_RATE_LOW || spacingMs>FRAME_CLOCK_ANCHOR_SPACING_MS;
+	}
+	
+	private static boolean isFrameClockRateNormal(double rate, double spacingMs){
+		return rate>=FRAME_CLOCK_UNANCHOR_RATE_LOW && rate<=FRAME_CLOCK_UNANCHOR_RATE_HIGH && spacingMs<FRAME_CLOCK_UNANCHOR_SPACING_MS;
+	}
+	
+	private void startFrameClockRateWindow(double newestX, long newestXNanos){
+		mIsFrameClockRateBaseSet = true;
+		mFrameClockRateBaseX = newestX;
+		mFrameClockRateBaseNanos = newestXNanos;
+		mFrameClockRateLastSeenNanos = newestXNanos;
+		mFrameClockRateUpdatesInWindow = 0;
+	}
+	
+	/** EDT. Back to playout mode with no estimate, e.g. when the clock stops. */
+	private void resetFrameClockRateEstimate(){
+		mIsFrameClockAnchored = false;
+		mIsFrameClockHoldingAfterAnchor = false;
+		mIsFrameClockRateBaseSet = false;
+		mFrameClockRateEwma = Double.NaN;
+		mFrameClockSpacingEwmaMs = Double.NaN;
+		mFrameClockModeSwitchVotes = 0;
 	}
 	
 	/** EDT. Sets the X window without allocating a range policy per frame: the policy installed
