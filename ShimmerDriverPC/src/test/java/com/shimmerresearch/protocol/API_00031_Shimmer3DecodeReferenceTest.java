@@ -12,15 +12,14 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 
-import org.junit.Assume;
 import org.junit.Test;
 
 import com.shimmerresearch.driver.FormatCluster;
 import com.shimmerresearch.driver.ObjectCluster;
 
 /**
- * Keeps the Shimmer3 decode references of the Rust core ({@code ShimmerProtocolCore/tests/data/})
- * in step with the Java decoder (DEV-1134). The recorded Shimmer3 carries its own calibration and
+ * Keeps the Shimmer3 decode references of the protocol core (the shimmer-protocol-core
+ * repository's {@code tests/data/}) in step with the Java decoder (DEV-1134). The recorded Shimmer3 carries its own calibration and
  * the newer sensors, so its replay never exercises a Shimmer3's default calibrations, the older
  * sensors (KXRB5-2042, MPU9150, LSM303DLHC) or a calibration dump. Each case here takes the
  * recorded device's config bytes with InfoMem calibration blanked, gives it an expansion board
@@ -28,13 +27,15 @@ import com.shimmerresearch.driver.ObjectCluster;
  * whose sizes differ from a Shimmer3R's. Each file holds the inputs as hex and every channel of
  * every decoded packet.
  * <p>
- * Fails if a file is stale. The current output is always written to
- * {@code build/rust-reference/}; copy it over the stale one. Skipped once the Rust core has moved
- * out of this repository.
+ * The current output is always written to {@code build/rust-reference/}. Where the team's layout
+ * puts a checkout of shimmer-protocol-core beside this repository's ({@code C:\dev\} holding both
+ * {@code java\Shimmer-Java-Android-API} and {@code shimmer-protocol-core}), this fails if the
+ * files there are stale: copy the current output over them. Without that checkout, as in CI, only
+ * the output is written.
  */
 public class API_00031_Shimmer3DecodeReferenceTest {
 
-	private static final File DATA = new File("../ShimmerProtocolCore/tests/data");
+	private static final File DATA = new File("../../../shimmer-protocol-core/tests/data");
 	private static final File CURRENT = new File("build/rust-reference");
 
 	private static final int ANALOG_ACCEL = 2, MPU9X50_GYRO = 30, LSM303_MAG = 32;
@@ -70,7 +71,6 @@ public class API_00031_Shimmer3DecodeReferenceTest {
 	}
 
 	private static void check(String name, byte[] expansionBoard, byte[] dump) throws Exception {
-		Assume.assumeTrue("the Rust core is not in this repository", DATA.getParentFile().isDirectory());
 		LogAndStreamProtocol recorded = new LogAndStreamProtocol();
 		ProtocolReplay.run(recorded, RecordedSession.load(API_00027_LogAndStreamProtocolMatchesDriverTest.SHIMMER3_SESSION));
 		byte[] config = recorded.getDeviceModel().getShimmerInfoMemBytesOriginal().clone();
@@ -137,6 +137,9 @@ public class API_00031_Shimmer3DecodeReferenceTest {
 		current.getParentFile().mkdirs();
 		Files.write(current.toPath(), text.getBytes(StandardCharsets.UTF_8));
 
+		if (!DATA.isDirectory()) {
+			return; // no shimmer-protocol-core checkout beside this one
+		}
 		// git may have checked the file out with CRLF line endings.
 		String committed = reference.isFile()
 				? new String(Files.readAllBytes(reference.toPath()), StandardCharsets.UTF_8).replace("\r\n", "\n")
