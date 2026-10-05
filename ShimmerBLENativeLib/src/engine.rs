@@ -28,6 +28,9 @@ use uuid::Uuid;
 /// Smallest ATT payload every BLE link supports (default MTU of 23, minus the 3-byte header).
 const MIN_WRITE_CHUNK: usize = 20;
 const DISCONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+/// Longer than service discovery takes, even through btleplug's 5 s fallback for drivers that
+/// hang on uncached requests; past it, discovery is taken to have stalled on a withheld service.
+const DISCOVERY_STALL: Duration = Duration::from_secs(10);
 /// How long to wait for a withheld service if the release cannot be watched for.
 #[cfg(target_os = "windows")]
 const RELEASE_FALLBACK: Duration = Duration::from_secs(15);
@@ -366,20 +369,28 @@ async fn open_link(
         if !peripheral.is_connected().await? {
             peripheral.connect().await?;
         }
-        peripheral.discover_services().await?;
-        let characteristics = peripheral.characteristics();
+        // Discovery can also stall on a withheld service: btleplug falls back from an uncached
+        // read to a cached one that it gives no time limit.
+        let stalled = match tokio::time::timeout(DISCOVERY_STALL, peripheral.discover_services()).await {
+            Ok(discovered) => {
+                discovered?;
+                false
+            }
+            Err(_) => true,
+        };
+        let characteristics = if stalled { Default::default() } else { peripheral.characteristics() };
         let find = |uuid: Uuid| {
             characteristics.iter().find(|c| c.uuid == uuid && c.service_uuid == service).cloned()
         };
         // Present, but with no characteristics: see below.
         let empty = peripheral.services().iter().any(|s| s.uuid == service)
             && !characteristics.iter().any(|c| c.service_uuid == service);
-        let withheld_now = cfg!(target_os = "windows") && empty;
+        let withheld_now = cfg!(target_os = "windows") && (stalled || empty);
         match (find(write), find(notify)) {
             (Some(w), Some(n)) => break (w, n),
-            // Windows withholds a service's characteristics (it shows none) while it still holds
-            // the link for a process that was killed: a new process is denied the old one's
-            // services until the link is dropped. Windows drops it once
+            // Windows withholds a service's characteristics (it shows none, or discovery stalls)
+            // while it still holds the link for a process that was killed: a new process is
+            // denied the old one's services until the link is dropped. Windows drops it once
             // nobody uses the device (measured 13-23 s after the kill), but every use, a retry
             // included, keeps it. So release it, wait untouched until Windows lets go, and
             // connect afresh, once. (btleplug keeps a service it read as empty until it
