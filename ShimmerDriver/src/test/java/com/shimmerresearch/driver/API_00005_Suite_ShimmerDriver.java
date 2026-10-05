@@ -7,6 +7,7 @@ import org.junit.runners.Suite.SuiteClasses;
 import com.shimmerresearch.algorithms.API_00002_Filters;
 import com.shimmerresearch.driverUtilities.API_00009_TimestampUnwrapTest;
 import com.shimmerresearch.driverUtilities.API_00010_TimestampUnwrapVectorsTest;
+import com.shimmerresearch.driverUtilities.API_00012_SdTimestampAnchorTest;
 import com.shimmerresearch.verisense.API_00004_VerisenseConfigByteParsingAndGeneration;
 import com.shimmerresearch.verisense.communication.API_00003_VerisenseProtocolByteCommunicationTest;
 
@@ -16,7 +17,8 @@ import com.shimmerresearch.verisense.communication.API_00003_VerisenseProtocolBy
 	API_00003_VerisenseProtocolByteCommunicationTest.class,
 	API_00004_VerisenseConfigByteParsingAndGeneration.class,
 	API_00009_TimestampUnwrapTest.class,
-	API_00010_TimestampUnwrapVectorsTest.class
+	API_00010_TimestampUnwrapVectorsTest.class,
+	API_00012_SdTimestampAnchorTest.class
 })
 
 public class API_00005_Suite_ShimmerDriver {
