@@ -1,0 +1,4 @@
+[toolchain]
+# The same toolchain as ShimmerBLENativeLib.
+channel = "1.99.0"
+profile = "minimal"

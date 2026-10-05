@@ -1,0 +1,18 @@
+[package]
+name = "shimmer-protocol"
+version = "0.1.0"
+edition = "2021"
+description = "The Shimmer LogAndStream protocol core: no I/O, so it builds for desktop, mobile and WebAssembly (DEV-1134 spike)"
+publish = false
+
+[lib]
+# rlib for Rust users and tests. Build the other kinds per target with
+# `cargo rustc --lib --crate-type cdylib|staticlib --target ...` (see README).
+crate-type = ["rlib"]
+
+[dependencies]
+# None, deliberately: no I/O, no async runtime, no platform code.
+
+[profile.release]
+codegen-units = 1
+lto = true
