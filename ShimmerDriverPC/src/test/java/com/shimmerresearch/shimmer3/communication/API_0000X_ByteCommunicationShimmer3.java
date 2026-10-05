@@ -5,6 +5,7 @@ import org.junit.FixMethodOrder;
 import org.junit.Test;
 import org.junit.runners.MethodSorters;
 
+import com.shimmerresearch.bluetooth.ShimmerBluetooth.BT_CRC_MODE;
 import com.shimmerresearch.bluetooth.ShimmerBluetooth.BT_STATE;
 import com.shimmerresearch.driver.BasicProcessWithCallBack;
 import com.shimmerresearch.driver.CallbackObject;
@@ -64,6 +65,9 @@ public class API_0000X_ByteCommunicationShimmer3 extends BasicProcessWithCallBac
     	if (!(mDevice.getHardwareVersion()==HW_ID.SHIMMER_3)) {
     		assert(false);
     	}
+    	// A Shimmer3 keeps the link CRC when sensing stops, so connecting turns
+    	// on the driver default (DEV-976)
+    	assertEquals(BT_CRC_MODE.ONE_BYTE_CRC, mDevice.getCurrentBtCommsCrcMode());
     	
     	System.out.println(mDevice.getHardwareVersionParsed());
     	if (!mDevice.getHardwareVersionParsed().equals("Shimmer3")) {
