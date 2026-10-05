@@ -4,14 +4,19 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.BooleanSupplier;
 
-import org.junit.BeforeClass;
 import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.junit.runners.Parameterized;
+import org.junit.runners.Parameterized.Parameters;
 
 import com.shimmerresearch.bluetooth.ShimmerBluetooth;
 import com.shimmerresearch.driver.BasicProcessWithCallBack;
@@ -24,36 +29,61 @@ import com.shimmerresearch.driverUtilities.UtilShimmer;
 import com.shimmerresearch.pcDriver.ShimmerPC;
 
 /**
- * The DEV-1134 Shimmer3R protocol state machine against today's driver, on the same recorded
+ * The DEV-1134 LogAndStream protocol state machine against today's driver, on the same recorded
  * session and with no hardware: every packet the state machine decodes must carry the same
- * values, raw and calibrated, as the packet today's driver decodes from the same bytes.
+ * values, raw and calibrated, as the packet today's driver decodes from the same bytes. Run for a
+ * recorded Shimmer3R and a recorded Shimmer3 (whose stream has gaps: see the recording's header).
  * <p>
  * Today's driver (ShimmerPC) runs in real time over {@link ReplayByteCommunication}; the state
  * machine runs on a simulated clock through {@link ProtocolReplay}.
  */
+@RunWith(Parameterized.class)
 public class API_00027_LogAndStreamProtocolMatchesDriverTest {
 
 	static final String SESSION = "/protocol/shimmer3r_2f31_handshake_stream10s.bytes.log";
+	static final String SHIMMER3_SESSION = "/protocol/shimmer3_3e36_handshake_stream10s.bytes.log";
 
 	/** Channels derived from the PC clock or aggregated over the run, not from the packet's bytes. */
 	private static final String[] NOT_PER_PACKET = { "System_Timestamp", "Packet_Reception_Rate", "Event_Marker" };
 
-	private static List<ObjectCluster> sReference;
+	@Parameters(name = "{0}")
+	public static Collection<Object[]> sessions() {
+		return Arrays.asList(new Object[][] {
+				{ "Shimmer3R", SESSION, HW_ID.SHIMMER_3R, 400 },
+				// Fewer packets: over its BLE link this device drops some (about 6% in these 10 s).
+				{ "Shimmer3", SHIMMER3_SESSION, HW_ID.SHIMMER_3, 350 } });
+	}
 
-	@BeforeClass
-	public static void runTodaysDriver() throws Exception {
-		sReference = TodaysDriver.decode(RecordedSession.load(SESSION));
+	/** Today's driver is slow to run (real time), so once per session. */
+	private static final Map<String, List<ObjectCluster>> REFERENCES = new HashMap<String, List<ObjectCluster>>();
+
+	private final String mSession;
+	private final int mHardwareVersion;
+	private final int mMinPackets;
+	private final List<ObjectCluster> mReference;
+
+	public API_00027_LogAndStreamProtocolMatchesDriverTest(String device, String session, int hardwareVersion, int minPackets)
+			throws Exception {
+		mSession = session;
+		mHardwareVersion = hardwareVersion;
+		mMinPackets = minPackets;
+		synchronized (REFERENCES) {
+			if (!REFERENCES.containsKey(session)) {
+				REFERENCES.put(session, TodaysDriver.decode(RecordedSession.load(session), hardwareVersion));
+			}
+			mReference = REFERENCES.get(session);
+		}
 	}
 
 	@Test
 	public void todaysDriverDecodesTheRecordedSession() {
-		assertTrue("expected roughly 10 s of 51.2 Hz packets, got " + sReference.size(), sReference.size() > 400);
+		assertTrue("expected roughly 10 s of 51.2 Hz packets, got " + mReference.size(), mReference.size() > mMinPackets);
 	}
 
 	@Test
 	public void stateMachineCompletesTheHandshakeAndStreams() throws Exception {
 		LogAndStreamProtocol protocol = new LogAndStreamProtocol();
-		ProtocolReplay replay = ProtocolReplay.run(protocol, RecordedSession.load(SESSION));
+		ProtocolReplay replay = ProtocolReplay.run(protocol, RecordedSession.load(mSession));
 		print(replay);
 
 		assertEquals(Collections.emptyList(), errors(replay));
@@ -64,12 +94,12 @@ public class API_00027_LogAndStreamProtocolMatchesDriverTest {
 
 	@Test
 	public void stateMachineDecodesTheSameValuesAsTodaysDriver() throws Exception {
-		ProtocolReplay replay = ProtocolReplay.run(new LogAndStreamProtocol(), RecordedSession.load(SESSION));
+		ProtocolReplay replay = ProtocolReplay.run(new LogAndStreamProtocol(), RecordedSession.load(mSession));
 		List<ObjectCluster> mine = replay.samples;
 
 		// Pair packets by their device timestamp, so a packet one side missed does not shift the rest.
 		Map<Double, ObjectCluster> reference = new LinkedHashMap<Double, ObjectCluster>();
-		for (ObjectCluster oc : sReference) {
+		for (ObjectCluster oc : mReference) {
 			reference.put(rawTimestamp(oc), oc);
 		}
 		int paired = 0;
@@ -94,17 +124,17 @@ public class API_00027_LogAndStreamProtocolMatchesDriverTest {
 				}
 			}
 		}
-		System.out.println("state machine " + mine.size() + " packets, driver " + sReference.size() + ", paired " + paired);
+		System.out.println("state machine " + mine.size() + " packets, driver " + mReference.size() + ", paired " + paired);
 		differences.forEach(System.out::println);
 
 		assertEquals(Collections.emptyList(), differences);
 		// Today's driver can lose a packet or two at the start of streaming; the rest must pair up.
-		assertTrue("only " + paired + " of " + sReference.size() + " packets paired", paired >= sReference.size() - 2);
+		assertTrue("only " + paired + " of " + mReference.size() + " packets paired", paired >= mReference.size() - 2);
 	}
 
 	@Test
 	public void howTheBytesAreSplitMakesNoDifference() throws Exception {
-		RecordedSession session = RecordedSession.load(SESSION);
+		RecordedSession session = RecordedSession.load(mSession);
 		ProtocolReplay whole = ProtocolReplay.run(new LogAndStreamProtocol(), session);
 		ProtocolReplay oneByteAtATime = ProtocolReplay.run(new LogAndStreamProtocol(), session.splitIntoSingleBytes());
 
@@ -119,7 +149,7 @@ public class API_00027_LogAndStreamProtocolMatchesDriverTest {
 
 	@Test
 	public void aCorruptedPacketIsDroppedAndDecodingResumes() throws Exception {
-		RecordedSession session = RecordedSession.load(SESSION);
+		RecordedSession session = RecordedSession.load(mSession);
 		// The 3rd notification after START_STREAMING; byte 5 is inside its first packet's data.
 		int notification = session.firstRxAfter((byte) 0x07) + 2;
 		ProtocolReplay clean = ProtocolReplay.run(new LogAndStreamProtocol(), session);
@@ -186,7 +216,7 @@ public class API_00027_LogAndStreamProtocolMatchesDriverTest {
 		private final List<ObjectCluster> mPackets = Collections.synchronizedList(new ArrayList<ObjectCluster>());
 		private volatile boolean mInitialised = false;
 
-		static List<ObjectCluster> decode(RecordedSession session) throws Exception {
+		static List<ObjectCluster> decode(RecordedSession session, int hardwareVersion) throws Exception {
 			TodaysDriver collector = new TodaysDriver();
 			ReplayByteCommunication replay = new ReplayByteCommunication(session);
 			ShimmerPC device = new ShimmerPC("REPLAY");
@@ -195,7 +225,7 @@ public class API_00027_LogAndStreamProtocolMatchesDriverTest {
 			try {
 				device.connect("REPLAY", "");
 				waitUntil("fully initialised", 30000, () -> collector.mInitialised);
-				assertEquals(HW_ID.SHIMMER_3R, device.getHardwareVersion());
+				assertEquals(hardwareVersion, device.getHardwareVersion());
 				device.startStreaming();
 				waitUntil("streaming", 15000, device::isStreaming);
 				waitUntil("first packet", 15000, () -> !collector.mPackets.isEmpty());
