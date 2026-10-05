@@ -4,8 +4,11 @@
 //! Linux, Android, iOS and WebAssembly. Each platform supplies only its transport, as with the
 //! Java `LogAndStreamProtocol` this follows.
 //!
-//! So far: the Shimmer UART checksum and the data-stream framer.
+//! So far: the checksum, the stream framer, and the protocol state machine with a device model
+//! that knows identity, firmware rules and packet layout (calibrated decoding is next).
 
 pub mod crc;
 pub mod ffi;
 pub mod framing;
+pub mod model;
+pub mod protocol;

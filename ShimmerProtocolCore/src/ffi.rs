@@ -69,7 +69,14 @@ pub unsafe extern "C" fn shimmer_framer_push(
     out: *mut u8,
     out_packets: usize,
 ) -> usize {
-    let frames = (*framer).push(std::slice::from_raw_parts(bytes, len));
+    let mut frames = (*framer).push(std::slice::from_raw_parts(bytes, len));
+    // Framing pauses at an ACK; carry on with the rest of the bytes.
+    let mut paused = frames.last() == Some(&Frame::Ack);
+    while paused {
+        let more = (*framer).push(&[]);
+        paused = more.last() == Some(&Frame::Ack);
+        frames.extend(more);
+    }
     let mut n = 0;
     for frame in frames {
         if let Frame::Packet(payload) = frame {

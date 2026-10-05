@@ -89,6 +89,10 @@ impl StreamFramer {
                 self.ack_expected = false;
                 self.report_dropped(&mut out);
                 out.push(Frame::Ack);
+                // An ACK changes what the bytes after it mean (after STOP_STREAMING's, they are
+                // no longer stream), so stop: the caller continues with `push(&[])` or takes them
+                // back with `take_buffered`.
+                break;
             } else {
                 at += 1;
                 self.dropped += 1;
@@ -96,6 +100,11 @@ impl StreamFramer {
         }
         self.rx.drain(..at);
         out
+    }
+
+    /// The bytes received but not yet framed, which the framer gives up.
+    pub fn take_buffered(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.rx)
     }
 
     fn report_dropped(&mut self, out: &mut Vec<Frame>) {
