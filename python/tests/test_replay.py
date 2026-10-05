@@ -3,7 +3,7 @@ with the Java decoder's for the same recording (tests/data/java_reference.csv, k
 the Java API_00030_PythonReferenceTest). Ports of the Java API_00027 tests where they apply."""
 
 from shimmer3r.events import Discarded, State
-from shimmer3r.protocol import START_STREAMING_COMMAND, Shimmer3RProtocol
+from shimmer3r.protocol import START_STREAMING_COMMAND, LogAndStreamProtocol
 from support import (
     Replay,
     corrupt_rx,
@@ -15,7 +15,7 @@ from support import (
 
 
 def test_the_handshake_completes_and_streams():
-    p = Shimmer3RProtocol()
+    p = LogAndStreamProtocol()
     r = Replay.run(load_session(), p)
 
     assert r.errors() == []

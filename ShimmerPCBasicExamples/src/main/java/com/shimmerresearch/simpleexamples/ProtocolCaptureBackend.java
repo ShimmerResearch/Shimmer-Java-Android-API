@@ -8,13 +8,14 @@ import com.shimmerresearch.driver.ble.nativeble.NativeBleDevice;
 import com.shimmerresearch.driver.ble.nativeble.NativeBleException;
 import com.shimmerresearch.protocol.ProtocolEvent;
 import com.shimmerresearch.protocol.ProtocolHost;
-import com.shimmerresearch.protocol.Shimmer3RProtocol;
-import com.shimmerresearch.protocol.Shimmer3RProtocol.State;
+import com.shimmerresearch.protocol.LogAndStreamProtocol;
+import com.shimmerresearch.protocol.LogAndStreamProtocol.State;
 
 /**
- * The DEV-1134 protocol state machine ({@link Shimmer3RProtocol}) over native BLE. The
+ * The DEV-1134 protocol state machine ({@link LogAndStreamProtocol}) over native BLE. The
  * {@link ProtocolHost} runs the protocol; all this class adds is the BLE link and the mapping of
- * events onto the capture app. Shimmer3R only, and it cannot change the device's configuration yet.
+ * events onto the capture app. Shimmer3 (LogAndStream v1.1.3 onwards) and Shimmer3R; it cannot
+ * change the device's configuration yet.
  */
 class ProtocolCaptureBackend implements CaptureBackend {
 
@@ -34,8 +35,8 @@ class ProtocolCaptureBackend implements CaptureBackend {
 	@Override
 	public void connect(final NativeBleDevice device, final Listener listener) {
 		mListener = listener;
-		if (device.getProfile() != BleUartProfile.SHIMMER3R) {
-			listener.onError("The DEV-1134 state machine supports Shimmer3R only; " + device.getName() + " is not one.");
+		if (device.getProfile() != BleUartProfile.SHIMMER3R && device.getProfile() != BleUartProfile.SHIMMER3) {
+			listener.onError("The DEV-1134 state machine supports Shimmer3 and Shimmer3R; " + device.getName() + " is neither.");
 			return;
 		}
 		Thread t = new Thread(() -> connectBlocking(device), "ProtocolCapture-connect");
@@ -50,7 +51,7 @@ class ProtocolCaptureBackend implements CaptureBackend {
 			ProtocolHost host = new ProtocolHost(bytes -> mCentral.write(mHandle, bytes), this::onEvent);
 			mHost = host;
 			mListener.onState("CONNECTING (BLE)");
-			mHandle = mCentral.connect(device.getId(), BleUartProfile.SHIMMER3R, CONNECT_TIMEOUT_MS,
+			mHandle = mCentral.connect(device.getId(), device.getProfile(), CONNECT_TIMEOUT_MS,
 					new BleConnectionListener() {
 						@Override
 						public void onBytes(byte[] data) {

@@ -52,7 +52,7 @@ import info.monitorenter.gui.chart.Chart2D;
  * library, with a choice of driver:
  * <ul>
  * <li><b>Today's driver</b> - ShimmerBLENative (ShimmerBluetooth), as DEV-1132 built it;</li>
- * <li><b>New state machine</b> - the DEV-1134 I/O-free Shimmer3R protocol prototype.</li>
+ * <li><b>New state machine</b> - the DEV-1134 I/O-free LogAndStream protocol prototype.</li>
  * </ul>
  * Both write the same CSV format, so recordings from the same device can be compared directly.
  * The state machine cannot change the configuration yet: set the device up in driver mode
@@ -65,7 +65,7 @@ import info.monitorenter.gui.chart.Chart2D;
 public class ShimmerBLECaptureExample {
 
 	private static final String MODE_DRIVER = "Today's driver (ShimmerBLENative)";
-	private static final String MODE_STATE_MACHINE = "New state machine (DEV-1134, Shimmer3R only)";
+	private static final String MODE_STATE_MACHINE = "New state machine (DEV-1134)";
 
 	private final JFrame mFrame = new JFrame("Shimmer BLE Capture (native)");
 	private final DefaultListModel<NativeBleDevice> mDeviceModel = new DefaultListModel<NativeBleDevice>();

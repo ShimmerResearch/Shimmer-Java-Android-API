@@ -11,12 +11,14 @@ import com.shimmerresearch.comms.wiredProtocol.ShimmerCrc;
 import com.shimmerresearch.driver.ObjectCluster;
 import com.shimmerresearch.driver.ShimmerDevice;
 import com.shimmerresearch.driver.ShimmerObject;
-import com.shimmerresearch.driverUtilities.ShimmerVerDetails.HW_ID;
 import com.shimmerresearch.driverUtilities.UtilShimmer;
 import com.shimmerresearch.exceptions.ShimmerException;
 
 /**
- * The Shimmer3R Bluetooth protocol as an I/O-free state machine (DEV-1134 prototype).
+ * The LogAndStream firmware's Bluetooth protocol as an I/O-free state machine (DEV-1134
+ * prototype), for Shimmer3 (LogAndStream v1.1.3 onwards) and Shimmer3R. The protocol is the
+ * firmware's, which both build on log-and-stream-common; what differs between the two devices
+ * (firmware support, the inquiry layout, sensors and calibration) is the {@link LogAndStreamModel}'s.
  * <p>
  * The host owns the transport and the clock. It calls {@link #connect}, then passes every
  * received chunk to {@link #receive} and calls {@link #tick} when {@link #nextDeadline} is due.
@@ -26,7 +28,7 @@ import com.shimmerresearch.exceptions.ShimmerException;
  * <p>
  * Times are wall-clock milliseconds (System.currentTimeMillis): SET_RWC sends the clock to the
  * device. Decoding and calibration are delegated unchanged to the existing driver code through
- * {@link Shimmer3RModel}.
+ * {@link LogAndStreamModel}.
  * <p>
  * The handshake starts only once the link has been quiet for {@link #SETTLE_MS}. Windows keeps a
  * BLE link open after the process that owned it dies, so a new session can inherit a device that
@@ -34,11 +36,10 @@ import com.shimmerresearch.exceptions.ShimmerException;
  * one link: after {@link #linkLost} it stays {@link State#DISCONNECTED}, and a new connection
  * needs a new object.
  * <p>
- * Scope: Shimmer3R with firmware that reads config bytes and the calibration dump over Bluetooth.
  * Not handled yet: unsolicited status responses, in-stream commands while streaming, and writes
  * longer than the link's MTU (none of today's commands are).
  */
-public final class Shimmer3RProtocol {
+public final class LogAndStreamProtocol {
 
 	public enum State {
 		DISCONNECTED, CONNECTING, READY, STARTING, STREAMING, STOPPING, FAILED
@@ -54,11 +55,6 @@ public final class Shimmer3RProtocol {
 	public static final long SETTLE_GIVE_UP_MS = 3000;
 	/** The most bytes the firmware returns per config-byte or calibration-dump read. */
 	static final int MEM_CHUNK = 128;
-	/** Config bytes (firmware code 6) and the calibration dump (7) over Bluetooth. */
-	static final int MIN_FIRMWARE_VERSION_CODE = 7;
-	/** Shimmer3R inquiry: 11 settings bytes, the 10th of which is the channel count. */
-	static final int INQUIRY_SETTINGS_LENGTH = 11;
-	static final int INQUIRY_CHANNEL_COUNT_INDEX = 9;
 
 	private static final byte ACK = ShimmerObject.ACK_COMMAND_PROCESSED;
 	private static final byte DATA_PACKET = ShimmerObject.DATA_PACKET;
@@ -95,7 +91,7 @@ public final class Shimmer3RProtocol {
 		}
 	}
 
-	private final Shimmer3RModel mModel = new Shimmer3RModel();
+	private final LogAndStreamModel mModel = new LogAndStreamModel();
 	private final Deque<Command> mQueue = new ArrayDeque<Command>();
 	private final RxBuffer mRx = new RxBuffer();
 	private State mState = State.DISCONNECTED;
@@ -150,7 +146,7 @@ public final class Shimmer3RProtocol {
 	public ProtocolOutput connect(long nowMs) {
 		ProtocolOutput out = new ProtocolOutput();
 		if (mLinkLost) {
-			out.event(ProtocolEvent.error("this link was lost; use a new Shimmer3RProtocol for a new connection"));
+			out.event(ProtocolEvent.error("this link was lost; use a new LogAndStreamProtocol for a new connection"));
 			return out;
 		}
 		if (mState != State.DISCONNECTED) {
@@ -341,7 +337,7 @@ public final class Shimmer3RProtocol {
 	private void onQueueEmpty(ProtocolOutput out) {
 		if (mState == State.CONNECTING) {
 			setState(State.READY, out);
-			out.event(ProtocolEvent.initialised("Shimmer3R " + mModel.getFirmwareVersionParsed() + ", "
+			out.event(ProtocolEvent.initialised(mModel.deviceName() + " " + mModel.getFirmwareVersionParsed() + ", "
 					+ mModel.getSamplingRateShimmer() + " Hz, packet size " + mModel.getPacketSize()));
 		}
 	}
@@ -474,20 +470,27 @@ public final class Shimmer3RProtocol {
 
 	private void onHardwareVersion(byte[] payload, long nowMs, ProtocolOutput out) {
 		mModel.applyHardwareVersion(payload[0]);
-		if (mModel.getHardwareVersion() != HW_ID.SHIMMER_3R) {
-			failed(out, "device reports hardware version " + (payload[0] & 0xFF) + ", not a Shimmer3R");
+		if (!mModel.isSupportedHardware()) {
+			failed(out, "device reports hardware version " + (payload[0] & 0xFF) + ", not a Shimmer3 or Shimmer3R");
 		}
 	}
 
 	private void onFirmwareVersion(byte[] payload, long nowMs, ProtocolOutput out) {
 		mModel.applyFirmwareVersion(payload);
-		if (mModel.getFirmwareVersionCode() < MIN_FIRMWARE_VERSION_CODE) {
-			failed(out, "firmware " + mModel.getFirmwareVersionParsed() + " cannot send its config and calibration over Bluetooth");
+		String unsupported = mModel.unsupportedFirmware();
+		if (unsupported != null) {
+			failed(out, unsupported);
 			return;
 		}
-		// The rest of the handshake depends on the firmware, so it is queued only now.
 		mQueue.add(new Command("GET_DAUGHTER_CARD_ID", new byte[] { ShimmerObject.GET_DAUGHTER_CARD_ID_COMMAND, 0x03, 0x00 },
 				ShimmerObject.DAUGHTER_CARD_ID_RESPONSE, lengthPrefixed(1, this::onExpansionBoard), DEFAULT_TIMEOUT_MS));
+	}
+
+	private void onExpansionBoard(byte[] payload, long nowMs, ProtocolOutput out) {
+		// [length, id, revision, special revision], as the driver splits it.
+		mModel.applyExpansionBoard(Arrays.copyOfRange(payload, 1, 4));
+		// The rest of the handshake depends on the firmware and, for the pressure sensor, on the
+		// expansion board, so it is queued only now.
 		if (mModel.isBtCrcModeSupported()) {
 			mQueue.add(new Command("SET_CRC", new byte[] { ShimmerObject.SET_CRC_COMMAND, (byte) BT_CRC_MODE.ONE_BYTE_CRC.ordinal() },
 					null, null, DEFAULT_TIMEOUT_MS));
@@ -500,21 +503,18 @@ public final class Shimmer3RProtocol {
 			mQueue.add(memRead("GET_INFOMEM", ShimmerObject.GET_INFOMEM_COMMAND, start + offset, size,
 					ShimmerObject.INFOMEM_RESPONSE, lengthPrefixed(1, this::onConfigBytes)));
 		}
-		mQueue.add(new Command("GET_PRESSURE_CALIBRATION_COEFFICIENTS",
-				new byte[] { ShimmerObject.GET_PRESSURE_CALIBRATION_COEFFICIENTS_COMMAND },
-				ShimmerObject.PRESSURE_CALIBRATION_COEFFICIENTS_RESPONSE, lengthPrefixed(1, this::onPressureCoefficients),
-				DEFAULT_TIMEOUT_MS));
+		if (mModel.readsPressureCoefficients()) {
+			mQueue.add(new Command("GET_PRESSURE_CALIBRATION_COEFFICIENTS",
+					new byte[] { ShimmerObject.GET_PRESSURE_CALIBRATION_COEFFICIENTS_COMMAND },
+					ShimmerObject.PRESSURE_CALIBRATION_COEFFICIENTS_RESPONSE, lengthPrefixed(1, this::onPressureCoefficients),
+					DEFAULT_TIMEOUT_MS));
+		}
 		mCalibDump = new byte[0];
 		mCalibDumpLength = -1;
 		mQueue.add(calibDumpRead(0, MEM_CHUNK));
 		mQueue.add(new Command("INQUIRY", new byte[] { ShimmerObject.INQUIRY_COMMAND }, ShimmerObject.INQUIRY_RESPONSE,
 				inquiryResponse(), DEFAULT_TIMEOUT_MS));
 		mQueue.add(new Command("SET_RWC", new byte[] { ShimmerObject.SET_RWC_COMMAND }, null, null, DEFAULT_TIMEOUT_MS));
-	}
-
-	private void onExpansionBoard(byte[] payload, long nowMs, ProtocolOutput out) {
-		// [length, id, revision, special revision], as the driver splits it.
-		mModel.applyExpansionBoard(Arrays.copyOfRange(payload, 1, 4));
 	}
 
 	private void onConfigBytes(byte[] payload, long nowMs, ProtocolOutput out) {
@@ -568,10 +568,11 @@ public final class Shimmer3RProtocol {
 		return new Response() {
 			@Override
 			public int length(RxBuffer rx, int start) {
-				if (rx.size() < start + INQUIRY_SETTINGS_LENGTH) {
+				int settings = mModel.inquirySettingsLength();
+				if (rx.size() < start + settings) {
 					return -1;
 				}
-				return INQUIRY_SETTINGS_LENGTH + (rx.get(start + INQUIRY_CHANNEL_COUNT_INDEX) & 0xFF);
+				return settings + (rx.get(start + mModel.inquiryChannelCountIndex()) & 0xFF);
 			}
 
 			@Override

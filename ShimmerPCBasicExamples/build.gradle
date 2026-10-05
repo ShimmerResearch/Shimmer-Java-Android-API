@@ -93,7 +93,7 @@ task runProtocolLive(type: JavaExec) {
     group = 'native ble'
     description = 'Drives a real Shimmer3R with the DEV-1134 protocol state machine over native BLE'
     classpath = sourceSets.main.runtimeClasspath
-    mainClass = 'com.shimmerresearch.simpleexamples.bletest.Shimmer3RProtocolLiveTest'
+    mainClass = 'com.shimmerresearch.simpleexamples.bletest.LogAndStreamProtocolLiveTest'
 }
 
 // Both capture-app backends (today's driver, new state machine) on a real device, headless.

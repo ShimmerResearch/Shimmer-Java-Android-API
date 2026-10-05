@@ -2,7 +2,7 @@
 decoding. The protocol feeds it the parsed handshake replies and asks it to decode data packets;
 nothing here does I/O.
 
-Ported from the Java driver code that Shimmer3RModel reuses: ShimmerObject (configuration,
+Ported from the Java driver code that LogAndStreamModel reuses: ShimmerObject (configuration,
 inquiry, buildMsg), ShimmerDevice (calibration dump, packet counters), ShimmerVerObject,
 UtilCalibration, CalibDetailsKinematic, TimestampUnwrap, SensorLSM6DSV and SensorLIS2MDL. The
 arithmetic follows the Java expression for expression, so the doubles come out identical.

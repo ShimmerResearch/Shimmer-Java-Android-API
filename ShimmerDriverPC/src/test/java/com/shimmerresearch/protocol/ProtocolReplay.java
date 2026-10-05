@@ -8,7 +8,7 @@ import com.shimmerresearch.driver.ObjectCluster;
 import com.shimmerresearch.protocol.RecordedSession.Entry;
 
 /**
- * Drives a {@link Shimmer3RProtocol} with a {@link RecordedSession} on a simulated clock: each
+ * Drives a {@link LogAndStreamProtocol} with a {@link RecordedSession} on a simulated clock: each
  * write is answered from the recording ({@link SessionResponder}), delayed as recorded, and the
  * clock jumps straight to the next delivery or protocol deadline. Nothing sleeps, so a 10 s
  * recording replays in milliseconds and every run is identical.
@@ -50,12 +50,12 @@ final class ProtocolReplay {
 	}
 
 	/** Connects, starts streaming once ready, and runs until the recording is exhausted. */
-	static ProtocolReplay run(Shimmer3RProtocol protocol, RecordedSession session) {
+	static ProtocolReplay run(LogAndStreamProtocol protocol, RecordedSession session) {
 		ProtocolReplay replay = new ProtocolReplay(session);
 		replay.handle(protocol.connect(replay.mNow));
 		boolean started = false;
-		while (protocol.getState() != Shimmer3RProtocol.State.FAILED) {
-			if (!started && protocol.getState() == Shimmer3RProtocol.State.READY) {
+		while (protocol.getState() != LogAndStreamProtocol.State.FAILED) {
+			if (!started && protocol.getState() == LogAndStreamProtocol.State.READY) {
 				started = true;
 				replay.handle(protocol.startStreaming(replay.mNow));
 				continue;

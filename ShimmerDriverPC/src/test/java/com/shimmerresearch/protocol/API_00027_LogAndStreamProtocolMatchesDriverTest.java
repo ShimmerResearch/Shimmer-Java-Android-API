@@ -31,7 +31,7 @@ import com.shimmerresearch.pcDriver.ShimmerPC;
  * Today's driver (ShimmerPC) runs in real time over {@link ReplayByteCommunication}; the state
  * machine runs on a simulated clock through {@link ProtocolReplay}.
  */
-public class API_00027_Shimmer3RProtocolMatchesDriverTest {
+public class API_00027_LogAndStreamProtocolMatchesDriverTest {
 
 	static final String SESSION = "/protocol/shimmer3r_2f31_handshake_stream10s.bytes.log";
 
@@ -52,19 +52,19 @@ public class API_00027_Shimmer3RProtocolMatchesDriverTest {
 
 	@Test
 	public void stateMachineCompletesTheHandshakeAndStreams() throws Exception {
-		Shimmer3RProtocol protocol = new Shimmer3RProtocol();
+		LogAndStreamProtocol protocol = new LogAndStreamProtocol();
 		ProtocolReplay replay = ProtocolReplay.run(protocol, RecordedSession.load(SESSION));
 		print(replay);
 
 		assertEquals(Collections.emptyList(), errors(replay));
-		assertEquals(Shimmer3RProtocol.State.STREAMING, protocol.getState());
+		assertEquals(LogAndStreamProtocol.State.STREAMING, protocol.getState());
 		assertEquals(51.2, protocol.getSamplingRate(), 1e-9);
 		assertEquals(Collections.emptyList(), unanswered(replay));
 	}
 
 	@Test
 	public void stateMachineDecodesTheSameValuesAsTodaysDriver() throws Exception {
-		ProtocolReplay replay = ProtocolReplay.run(new Shimmer3RProtocol(), RecordedSession.load(SESSION));
+		ProtocolReplay replay = ProtocolReplay.run(new LogAndStreamProtocol(), RecordedSession.load(SESSION));
 		List<ObjectCluster> mine = replay.samples;
 
 		// Pair packets by their device timestamp, so a packet one side missed does not shift the rest.
@@ -105,8 +105,8 @@ public class API_00027_Shimmer3RProtocolMatchesDriverTest {
 	@Test
 	public void howTheBytesAreSplitMakesNoDifference() throws Exception {
 		RecordedSession session = RecordedSession.load(SESSION);
-		ProtocolReplay whole = ProtocolReplay.run(new Shimmer3RProtocol(), session);
-		ProtocolReplay oneByteAtATime = ProtocolReplay.run(new Shimmer3RProtocol(), session.splitIntoSingleBytes());
+		ProtocolReplay whole = ProtocolReplay.run(new LogAndStreamProtocol(), session);
+		ProtocolReplay oneByteAtATime = ProtocolReplay.run(new LogAndStreamProtocol(), session.splitIntoSingleBytes());
 
 		assertEquals(Collections.emptyList(), errors(oneByteAtATime));
 		assertEquals(whole.samples.size(), oneByteAtATime.samples.size());
@@ -122,8 +122,8 @@ public class API_00027_Shimmer3RProtocolMatchesDriverTest {
 		RecordedSession session = RecordedSession.load(SESSION);
 		// The 3rd notification after START_STREAMING; byte 5 is inside its first packet's data.
 		int notification = session.firstRxAfter((byte) 0x07) + 2;
-		ProtocolReplay clean = ProtocolReplay.run(new Shimmer3RProtocol(), session);
-		ProtocolReplay corrupted = ProtocolReplay.run(new Shimmer3RProtocol(), session.corruptRx(notification, 5));
+		ProtocolReplay clean = ProtocolReplay.run(new LogAndStreamProtocol(), session);
+		ProtocolReplay corrupted = ProtocolReplay.run(new LogAndStreamProtocol(), session.corruptRx(notification, 5));
 
 		assertEquals(Collections.emptyList(), errors(corrupted));
 		assertEquals("exactly the corrupted packet is lost", clean.samples.size() - 1, corrupted.samples.size());

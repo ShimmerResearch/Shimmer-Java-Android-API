@@ -13,7 +13,7 @@ link open after the process that owned it dies, so a new session can inherit a d
 still streaming; if bytes arrive in that time it is told to stop, and its checksums are turned
 off, first. One object serves one link: after ``link_lost()`` it stays DISCONNECTED.
 
-A port of the Java com.shimmerresearch.protocol.Shimmer3RProtocol (DEV-1134). Keep them in step.
+A port of the Java com.shimmerresearch.protocol.LogAndStreamProtocol (DEV-1134). Keep them in step.
 """
 
 from __future__ import annotations
@@ -105,7 +105,7 @@ def rtc_bytes(now_ms: int) -> bytes:
     return int(now_ms * 32.768).to_bytes(8, "little", signed=True)
 
 
-class Shimmer3RProtocol:
+class LogAndStreamProtocol:
     DEFAULT_TIMEOUT_MS = 2000
     LONG_TIMEOUT_MS = 5000
     SETTLE_MS = 300
@@ -167,7 +167,7 @@ class Shimmer3RProtocol:
         out = Output()
         if self._link_lost:
             out.events.append(
-                Error("this link was lost; use a new Shimmer3RProtocol for a new connection")
+                Error("this link was lost; use a new LogAndStreamProtocol for a new connection")
             )
             return out
         if self._state is not State.DISCONNECTED:

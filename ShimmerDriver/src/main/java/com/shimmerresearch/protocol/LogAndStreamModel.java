@@ -12,13 +12,16 @@ import com.shimmerresearch.driver.ShimmerMsg;
 import com.shimmerresearch.driver.calibration.CalibDetails.CALIB_READ_SOURCE;
 import com.shimmerresearch.driver.shimmer2r3.ConfigByteLayoutShimmer3;
 import com.shimmerresearch.driverUtilities.ExpansionBoardDetails;
+import com.shimmerresearch.driverUtilities.ShimmerVerDetails.FW_ID;
 import com.shimmerresearch.driverUtilities.ShimmerVerDetails.HW_ID;
 import com.shimmerresearch.driverUtilities.ShimmerVerObject;
 import com.shimmerresearch.exceptions.ShimmerException;
+import com.shimmerresearch.sensors.AbstractSensor.SENSORS;
 
 /**
- * The Shimmer3R device model behind {@link Shimmer3RProtocol}: configuration, calibration and
- * packet decoding, reused unchanged from the existing driver.
+ * The device model behind {@link LogAndStreamProtocol}, for a Shimmer3 or a Shimmer3R:
+ * configuration, calibration and packet decoding, reused unchanged from the existing driver, which
+ * already handles both. It also answers the few questions where the handshake differs between them.
  * <p>
  * It is a {@link ShimmerBluetooth} that is never connected. The protocol state machine feeds it
  * the parsed handshake responses through the same methods ShimmerBluetooth's own response
@@ -26,13 +29,13 @@ import com.shimmerresearch.exceptions.ShimmerException;
  * I/O, starts a thread or runs a timer. Commands the driver code queues internally (for instance
  * in {@link #prepareForStreaming()}) are never sent.
  */
-final class Shimmer3RModel extends ShimmerBluetooth {
+final class LogAndStreamModel extends ShimmerBluetooth {
 
 	private static final long serialVersionUID = 4120931754310295612L;
 
 	private final transient SystemTimestampPlot mSystemTimestampPlot = new SystemTimestampPlot();
 
-	Shimmer3RModel() {
+	LogAndStreamModel() {
 		super();
 		mUseProcessingThread = false;
 	}
@@ -56,6 +59,57 @@ final class Shimmer3RModel extends ShimmerBluetooth {
 	/** DAUGHTER_CARD_ID_RESPONSE: the three expansion board ID bytes. */
 	void applyExpansionBoard(byte[] three) {
 		setExpansionBoardDetailsAndCreateSensorMap(new ExpansionBoardDetails(three));
+	}
+
+	// --- Where Shimmer3 and Shimmer3R differ ----------------------------------------------------
+
+	boolean isSupportedHardware() {
+		return getHardwareVersion() == HW_ID.SHIMMER_3 || getHardwareVersion() == HW_ID.SHIMMER_3R;
+	}
+
+	String deviceName() {
+		return getHardwareVersion() == HW_ID.SHIMMER_3R ? "Shimmer3R" : "Shimmer3";
+	}
+
+	/**
+	 * Null if this firmware is supported, otherwise why not. Shimmer3 needs LogAndStream v1.1.3
+	 * (LogAndStream_Shimmer3_v1.01.003) or later: the paths older firmware needs, such as reading
+	 * calibration sensor by sensor, are not ported. Every Shimmer3R LogAndStream release reads its
+	 * config and calibration over Bluetooth. Valid after the firmware version.
+	 */
+	String unsupportedFirmware() {
+		if (getFirmwareIdentifier() != FW_ID.LOGANDSTREAM) {
+			return "firmware " + getFirmwareVersionParsed() + " is not LogAndStream";
+		}
+		if (getHardwareVersion() == HW_ID.SHIMMER_3 && !getShimmerVerObject().compareVersions(FW_ID.LOGANDSTREAM, 1, 1, 3)) {
+			return "Shimmer3 firmware " + getFirmwareVersionParsed() + " is older than LogAndStream v1.1.3; update the firmware";
+		}
+		return null;
+	}
+
+	/** INQUIRY_RESPONSE: the settings bytes before the channel list, as ShimmerBluetooth reads them. */
+	int inquirySettingsLength() {
+		return getHardwareVersion() == HW_ID.SHIMMER_3R ? 11 : 8;
+	}
+
+	/** INQUIRY_RESPONSE: which settings byte holds the channel count. */
+	int inquiryChannelCountIndex() {
+		return getHardwareVersion() == HW_ID.SHIMMER_3R ? 9 : 6;
+	}
+
+	/**
+	 * Whether the handshake asks for the pressure calibration coefficients, as
+	 * ShimmerBluetooth.readPressureCalibrationCoefficients decides. Every supported Shimmer3
+	 * firmware does (code 9). A Shimmer3R does, except on v1.01.006 with a BMP581 by SR number:
+	 * that version NACKs the command there, and the handshake would time out. Valid after the
+	 * expansion board.
+	 */
+	boolean readsPressureCoefficients() {
+		if (getHardwareVersion() == HW_ID.SHIMMER_3R) {
+			return !isSupportedBmp581(getShimmerVerObject(), getExpansionBoardDetails())
+					|| getShimmerVerObject().compareVersions(FW_ID.LOGANDSTREAM, 1, 1, 7);
+		}
+		return getFirmwareVersionCode() >= 9;
 	}
 
 	/** Length of the config bytes (InfoMem) for this firmware. Valid after the firmware version. */
@@ -94,6 +148,13 @@ final class Shimmer3RModel extends ShimmerBluetooth {
 				return "a Shimmer3R carries a BMP390 or BMP581, not sensor ID " + sensorId;
 			}
 			setPressureSensorIdInBand(sensorId);
+		} else {
+			SENSORS reported = sensorId == PRESSURE_SENSOR_ID.BMP180 ? SENSORS.BMP180
+					: sensorId == PRESSURE_SENSOR_ID.BMP280 ? SENSORS.BMP280
+					: sensorId == PRESSURE_SENSOR_ID.BMP390 ? SENSORS.BMP390 : SENSORS.BMP581;
+			if (!mSensorBMPX80.mSensorType.equals(reported)) {
+				return "coefficients are for a " + reported + " but the driver is using a " + mSensorBMPX80.mSensorType;
+			}
 		}
 		// A BMP581 self-compensates, so it has no coefficients to apply.
 		if (coefficients.length > 0) {
@@ -147,7 +208,7 @@ final class Shimmer3RModel extends ShimmerBluetooth {
 
 	@Override
 	public void connect(String address, String bluetoothLibrary) {
-		throw new UnsupportedOperationException("Shimmer3RModel is never connected; Shimmer3RProtocol does the I/O");
+		throw new UnsupportedOperationException("LogAndStreamModel is never connected; LogAndStreamProtocol does the I/O");
 	}
 
 	@Override
@@ -252,7 +313,7 @@ final class Shimmer3RModel extends ShimmerBluetooth {
 
 	@Override
 	public ShimmerDevice deepClone() {
-		throw new UnsupportedOperationException("Shimmer3RModel is internal to Shimmer3RProtocol");
+		throw new UnsupportedOperationException("LogAndStreamModel is internal to LogAndStreamProtocol");
 	}
 
 	// As in ShimmerGRPC and ShimmerBLENative.

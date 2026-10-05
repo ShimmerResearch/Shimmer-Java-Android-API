@@ -33,8 +33,8 @@ public class API_00030_PythonReferenceTest {
 	@Test
 	public void pythonReferenceMatchesTheJavaDecoder() throws Exception {
 		Assume.assumeTrue("the Python port is not in this repository", REFERENCE.getParentFile().isDirectory());
-		List<ObjectCluster> samples = ProtocolReplay.run(new Shimmer3RProtocol(),
-				RecordedSession.load(API_00027_Shimmer3RProtocolMatchesDriverTest.SESSION)).samples;
+		List<ObjectCluster> samples = ProtocolReplay.run(new LogAndStreamProtocol(),
+				RecordedSession.load(API_00027_LogAndStreamProtocolMatchesDriverTest.SESSION)).samples;
 		String csv = toCsv(samples);
 		CURRENT.getParentFile().mkdirs();
 		Files.write(CURRENT.toPath(), csv.getBytes(StandardCharsets.UTF_8));
@@ -64,14 +64,14 @@ public class API_00030_PythonReferenceTest {
 	@Test
 	public void pythonCalibrationReferenceMatchesTheJavaDecoder() throws Exception {
 		Assume.assumeTrue("the Python port is not in this repository", REFERENCE.getParentFile().isDirectory());
-		Shimmer3RProtocol recorded = new Shimmer3RProtocol();
-		ProtocolReplay.run(recorded, RecordedSession.load(API_00027_Shimmer3RProtocolMatchesDriverTest.SESSION));
+		LogAndStreamProtocol recorded = new LogAndStreamProtocol();
+		ProtocolReplay.run(recorded, RecordedSession.load(API_00027_LogAndStreamProtocolMatchesDriverTest.SESSION));
 		byte[] config = recorded.getDeviceModel().getShimmerInfoMemBytesOriginal().clone();
 		java.util.Arrays.fill(config, 34, 97, (byte) 0xFF); // LN accel, gyro and mag InfoMem calibration
 		config[118] &= ~0x20; // GYRO_ON_THE_FLY_CAL off
 		byte[] dump = craftedCalibrationDump();
 
-		Shimmer3RModel model = new Shimmer3RModel();
+		LogAndStreamModel model = new LogAndStreamModel();
 		model.applyHardwareVersion((byte) 10);
 		model.applyFirmwareVersion(new byte[] { 3, 0, 1, 0, 1, 16 });
 		model.applyExpansionBoard(new byte[] { 0x30, 0x08, 0x01 });

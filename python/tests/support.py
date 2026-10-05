@@ -12,7 +12,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from shimmer3r.events import Error, Event, Sample, State
-from shimmer3r.protocol import SET_RWC_COMMAND, Output, Shimmer3RProtocol
+from shimmer3r.protocol import SET_RWC_COMMAND, Output, LogAndStreamProtocol
 
 DATA = Path(__file__).parent / "data"
 SESSION = DATA / "shimmer3r_2f31_handshake_stream10s.bytes.log"
@@ -133,9 +133,9 @@ class Replay:
     _order: itertools.count = field(default_factory=itertools.count)
 
     @classmethod
-    def run(cls, entries: list[Entry], protocol: Shimmer3RProtocol | None = None) -> "Replay":
+    def run(cls, entries: list[Entry], protocol: LogAndStreamProtocol | None = None) -> "Replay":
         """Connects, starts streaming once ready, and runs until the recording is exhausted."""
-        p = protocol or Shimmer3RProtocol()
+        p = protocol or LogAndStreamProtocol()
         r = cls(SessionResponder(entries))
         r._handle(p.connect(r.now))
         started = False

@@ -1,7 +1,7 @@
 # shimmer3r (Python): DEV-1134 prototype
 
 A Shimmer-led Python API for the Shimmer3R over Bluetooth LE. It is a port of the Java
-`Shimmer3RProtocol` design (DEV-1134), built to find out what porting the protocol to another
+`LogAndStreamProtocol` design (DEV-1134), built to find out what porting the protocol to another
 language costs.
 
 **This folder is temporary.** It lives here, on the DEV-1134 branch only and never on `master`,
@@ -22,8 +22,8 @@ Shimmer3R ──notification──► ble.py ──on_bytes()──► host.py �
 
 | Module | Does | Port of (Java) |
 |---|---|---|
-| `protocol.py` | The state machine: bytes in, writes and events out. No I/O, threads or clock. | `Shimmer3RProtocol` |
-| `model.py` | Identity, config bytes, calibration, packet decoding | What `Shimmer3RModel` reuses from the driver |
+| `protocol.py` | The state machine: bytes in, writes and events out. No I/O, threads or clock. | `LogAndStreamProtocol` |
+| `model.py` | Identity, config bytes, calibration, packet decoding | What `LogAndStreamModel` reuses from the driver |
 | `host.py` | One asyncio loop: feeds bytes in, sends writes, runs timeouts, queues events | `ProtocolHost` |
 | `ble.py` | bleak transport and the `Shimmer3R` class an app uses. The only module that knows Bluetooth. | `ProtocolCaptureBackend` |
 | `crc.py`, `events.py` | Checksum; events and samples | `ShimmerCrc`; `ProtocolEvent` |

@@ -21,18 +21,18 @@ public final class ProtocolEvent {
 	}
 
 	public final Type type;
-	public final Shimmer3RProtocol.State state;
+	public final LogAndStreamProtocol.State state;
 	public final ObjectCluster sample;
 	public final String message;
 
-	private ProtocolEvent(Type type, Shimmer3RProtocol.State state, ObjectCluster sample, String message) {
+	private ProtocolEvent(Type type, LogAndStreamProtocol.State state, ObjectCluster sample, String message) {
 		this.type = type;
 		this.state = state;
 		this.sample = sample;
 		this.message = message;
 	}
 
-	static ProtocolEvent stateChanged(Shimmer3RProtocol.State state) {
+	static ProtocolEvent stateChanged(LogAndStreamProtocol.State state) {
 		return new ProtocolEvent(Type.STATE_CHANGED, state, null, null);
 	}
 

@@ -12,7 +12,7 @@ import java.util.concurrent.TimeUnit;
 import com.shimmerresearch.driver.ShimmerDevice;
 
 /**
- * Runs a {@link Shimmer3RProtocol} for an application, so that a transport only moves bytes.
+ * Runs a {@link LogAndStreamProtocol} for an application, so that a transport only moves bytes.
  * <p>
  * Every call into the protocol happens on one thread, so the protocol needs no lock, and a
  * {@link #TICK_MS} timer drives its timeouts. Events reach the {@link Listener} in order on a
@@ -38,14 +38,14 @@ public final class ProtocolHost {
 		void onEvent(ProtocolEvent event);
 	}
 
-	/** Wall-clock milliseconds, as {@link Shimmer3RProtocol} expects. Replaceable in tests. */
+	/** Wall-clock milliseconds, as {@link LogAndStreamProtocol} expects. Replaceable in tests. */
 	interface Clock {
 		long nowMs();
 	}
 
 	public static final long TICK_MS = 20;
 
-	private final Shimmer3RProtocol mProtocol = new Shimmer3RProtocol();
+	private final LogAndStreamProtocol mProtocol = new LogAndStreamProtocol();
 	private final Transport mTransport;
 	private final Listener mListener;
 	private final Clock mClock;
@@ -54,7 +54,7 @@ public final class ProtocolHost {
 	private ScheduledFuture<?> mTicker;
 
 	// Copies for other threads, refreshed after every call into the protocol.
-	private volatile Shimmer3RProtocol.State mState = Shimmer3RProtocol.State.DISCONNECTED;
+	private volatile LogAndStreamProtocol.State mState = LogAndStreamProtocol.State.DISCONNECTED;
 	private volatile double mSamplingRate = Double.NaN;
 	private volatile boolean mClosed = false;
 
@@ -84,7 +84,7 @@ public final class ProtocolHost {
 		post(() -> apply(mProtocol.receive(copy, mClock.nowMs())));
 	}
 
-	/** The transport lost the link. The protocol ends in {@link Shimmer3RProtocol.State#DISCONNECTED}. */
+	/** The transport lost the link. The protocol ends in {@link LogAndStreamProtocol.State#DISCONNECTED}. */
 	public void onLinkLost(String reason) {
 		post(() -> {
 			stopTicker();
@@ -110,7 +110,7 @@ public final class ProtocolHost {
 		mEventThread.shutdown();
 	}
 
-	public Shimmer3RProtocol.State getState() {
+	public LogAndStreamProtocol.State getState() {
 		return mState;
 	}
 
@@ -118,7 +118,7 @@ public final class ProtocolHost {
 		return mSamplingRate;
 	}
 
-	/** See {@link Shimmer3RProtocol#getDeviceModel()}: complete once the state is READY. */
+	/** See {@link LogAndStreamProtocol#getDeviceModel()}: complete once the state is READY. */
 	public ShimmerDevice getDeviceModel() {
 		return mProtocol.getDeviceModel();
 	}

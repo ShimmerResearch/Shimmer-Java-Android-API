@@ -1,4 +1,4 @@
-"""Runs a Shimmer3RProtocol for an application, so that a transport only moves bytes.
+"""Runs a LogAndStreamProtocol for an application, so that a transport only moves bytes.
 
 Every call into the protocol happens on the asyncio event loop, which is one thread, so the
 protocol needs no lock; a 20 ms ticker drives its timeouts. Writes go out in order through one
@@ -20,7 +20,7 @@ from typing import Callable, Protocol
 
 from .events import Error, Event, State
 from .model import Shimmer3RModel
-from .protocol import Output, Shimmer3RProtocol
+from .protocol import Output, LogAndStreamProtocol
 
 
 class Transport(Protocol):
@@ -36,7 +36,7 @@ class ProtocolHost:
     TICK_S = 0.020
 
     def __init__(self, transport: Transport, clock: Callable[[], int] = now_ms) -> None:
-        self._protocol = Shimmer3RProtocol()
+        self._protocol = LogAndStreamProtocol()
         self._transport = transport
         self._clock = clock
         self._writes: asyncio.Queue[bytes] = asyncio.Queue()

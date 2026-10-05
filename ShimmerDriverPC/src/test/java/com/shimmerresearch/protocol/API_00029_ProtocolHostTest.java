@@ -77,7 +77,7 @@ public class API_00029_ProtocolHostTest {
 	private ProtocolHost mHost;
 
 	private ProtocolHost start(ProtocolHost.Listener listener) throws Exception {
-		mDevice = new RecordedDevice(RecordedSession.load(API_00027_Shimmer3RProtocolMatchesDriverTest.SESSION));
+		mDevice = new RecordedDevice(RecordedSession.load(API_00027_LogAndStreamProtocolMatchesDriverTest.SESSION));
 		mHost = new ProtocolHost(mDevice, listener);
 		mDevice.host = mHost;
 		mHost.connect();
@@ -96,19 +96,19 @@ public class API_00029_ProtocolHostTest {
 
 	@Test
 	public void theHostStreamsTheSameSamplesAsTheStateMachineOnItsOwn() throws Exception {
-		List<ObjectCluster> reference = ProtocolReplay.run(new Shimmer3RProtocol(),
-				RecordedSession.load(API_00027_Shimmer3RProtocolMatchesDriverTest.SESSION)).samples;
+		List<ObjectCluster> reference = ProtocolReplay.run(new LogAndStreamProtocol(),
+				RecordedSession.load(API_00027_LogAndStreamProtocolMatchesDriverTest.SESSION)).samples;
 		Recorder recorder = new Recorder();
 		ProtocolHost host = start(recorder);
 
 		waitUntil(() -> !recorder.ofType(ProtocolEvent.Type.INITIALISED).isEmpty());
-		assertEquals(Shimmer3RProtocol.State.READY, host.getState());
+		assertEquals(LogAndStreamProtocol.State.READY, host.getState());
 		assertEquals(51.2, host.getSamplingRate(), 1e-9);
 		host.startStreaming();
 		waitUntil(() -> recorder.ofType(ProtocolEvent.Type.SAMPLE).size() >= reference.size());
 
 		assertEquals(Collections.emptyList(), messages(recorder.ofType(ProtocolEvent.Type.ERROR)));
-		assertEquals(Shimmer3RProtocol.State.STREAMING, host.getState());
+		assertEquals(LogAndStreamProtocol.State.STREAMING, host.getState());
 		assertEquals(Collections.emptyList(), mDevice.responder.getUnanswered());
 		List<ProtocolEvent> samples = recorder.ofType(ProtocolEvent.Type.SAMPLE);
 		assertEquals(reference.size(), samples.size());
@@ -130,7 +130,7 @@ public class API_00029_ProtocolHostTest {
 		int writesBefore = mDevice.writeThreads.size();
 
 		host.onLinkLost("device switched off");
-		waitUntil(() -> host.getState() == Shimmer3RProtocol.State.DISCONNECTED
+		waitUntil(() -> host.getState() == LogAndStreamProtocol.State.DISCONNECTED
 				&& !recorder.ofType(ProtocolEvent.Type.LINK_LOST).isEmpty());
 		host.startStreaming();
 		Thread.sleep(200);
@@ -140,7 +140,7 @@ public class API_00029_ProtocolHostTest {
 		ProtocolEvent secondLast = recorder.events.get(recorder.events.size() - 2);
 		ProtocolEvent last = recorder.events.get(recorder.events.size() - 1);
 		assertEquals(ProtocolEvent.Type.LINK_LOST, secondLast.type);
-		assertEquals(Shimmer3RProtocol.State.DISCONNECTED, last.state);
+		assertEquals(LogAndStreamProtocol.State.DISCONNECTED, last.state);
 		assertEquals("nothing is written after the link is lost", writesBefore, mDevice.writeThreads.size());
 	}
 
@@ -156,7 +156,7 @@ public class API_00029_ProtocolHostTest {
 
 		waitUntil(() -> !recorder.ofType(ProtocolEvent.Type.INITIALISED).isEmpty());
 
-		assertEquals(Shimmer3RProtocol.State.READY, host.getState());
+		assertEquals(LogAndStreamProtocol.State.READY, host.getState());
 	}
 
 	private static double rawTimestamp(ObjectCluster oc) {

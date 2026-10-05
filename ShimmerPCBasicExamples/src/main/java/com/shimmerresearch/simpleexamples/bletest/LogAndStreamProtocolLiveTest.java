@@ -10,19 +10,19 @@ import com.shimmerresearch.driver.ble.nativeble.NativeBleDevice;
 import com.shimmerresearch.driver.ble.nativeble.NativeBleEvent;
 import com.shimmerresearch.protocol.ProtocolEvent;
 import com.shimmerresearch.protocol.ProtocolHost;
-import com.shimmerresearch.protocol.Shimmer3RProtocol;
-import com.shimmerresearch.protocol.Shimmer3RProtocol.State;
+import com.shimmerresearch.protocol.LogAndStreamProtocol;
+import com.shimmerresearch.protocol.LogAndStreamProtocol.State;
 
 /**
- * DEV-1134: the Shimmer3R protocol state machine driving a real device over the native BLE
+ * DEV-1134: the LogAndStream protocol state machine driving a real Shimmer3 or Shimmer3R over the native BLE
  * transport (DEV-1132). The {@link ProtocolHost} runs the protocol; this class only opens the
  * link and passes bytes to it.
  *
  * <pre>
- * Shimmer3RProtocolLiveTest &lt;device name&gt; [seconds to stream] [device ID if not advertising]
+ * LogAndStreamProtocolLiveTest &lt;device name&gt; [seconds to stream] [device ID if not advertising]
  * </pre>
  */
-public class Shimmer3RProtocolLiveTest {
+public class LogAndStreamProtocolLiveTest {
 
 	private static final long HANDSHAKE_TIMEOUT_MS = 30000;
 	private static final long STATE_TIMEOUT_MS = 10000;
@@ -34,12 +34,12 @@ public class Shimmer3RProtocolLiveTest {
 
 	public static void main(String[] args) throws Exception {
 		if (args.length < 1) {
-			System.err.println("usage: Shimmer3RProtocolLiveTest <device name> [seconds] [device ID]");
+			System.err.println("usage: LogAndStreamProtocolLiveTest <device name> [seconds] [device ID]");
 			System.exit(2);
 		}
 		int seconds = args.length > 1 ? Integer.parseInt(args[1]) : 10;
 		String knownId = args.length > 2 ? args[2] : null;
-		boolean ok = new Shimmer3RProtocolLiveTest().run(args[0], seconds, knownId);
+		boolean ok = new LogAndStreamProtocolLiveTest().run(args[0], seconds, knownId);
 		System.exit(ok ? 0 : 1);
 	}
 
@@ -60,7 +60,7 @@ public class Shimmer3RProtocolLiveTest {
 		long[] handle = { 0 };
 		ProtocolHost host = new ProtocolHost(bytes -> central.write(handle[0], bytes), this::onEvent);
 		long started = System.currentTimeMillis();
-		handle[0] = central.connect(device.getId(), BleUartProfile.SHIMMER3R, 20000, new BleConnectionListener() {
+		handle[0] = central.connect(device.getId(), device.getProfile(), 20000, new BleConnectionListener() {
 			@Override
 			public void onBytes(byte[] data) {
 				host.onBytes(data);
@@ -82,7 +82,7 @@ public class Shimmer3RProtocolLiveTest {
 				return report(host, 0);
 			}
 			System.out.println("handshake done in " + (System.currentTimeMillis() - handshakeStarted) + " ms (including "
-					+ Shimmer3RProtocol.SETTLE_MS + " ms waiting for a quiet link)");
+					+ LogAndStreamProtocol.SETTLE_MS + " ms waiting for a quiet link)");
 			host.startStreaming();
 			if (!waitFor(host, State.STREAMING, STATE_TIMEOUT_MS)) {
 				return report(host, 0);
