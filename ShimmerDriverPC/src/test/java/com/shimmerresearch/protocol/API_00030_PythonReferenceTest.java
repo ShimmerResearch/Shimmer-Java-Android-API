@@ -29,21 +29,32 @@ public class API_00030_PythonReferenceTest {
 
 	private static final File REFERENCE = new File("../python/tests/data/java_reference.csv");
 	private static final File CURRENT = new File("build/python-reference/java_reference.csv");
+	/** The same for the recorded Shimmer3, whose stream has gaps (used by the Rust core's framing test). */
+	private static final File SHIMMER3_REFERENCE = new File("../python/tests/data/java_reference_shimmer3.csv");
+	private static final File SHIMMER3_CURRENT = new File("build/python-reference/java_reference_shimmer3.csv");
 
 	@Test
 	public void pythonReferenceMatchesTheJavaDecoder() throws Exception {
-		Assume.assumeTrue("the Python port is not in this repository", REFERENCE.getParentFile().isDirectory());
-		List<ObjectCluster> samples = ProtocolReplay.run(new LogAndStreamProtocol(),
-				RecordedSession.load(API_00027_LogAndStreamProtocolMatchesDriverTest.SESSION)).samples;
+		checkReference(API_00027_LogAndStreamProtocolMatchesDriverTest.SESSION, REFERENCE, CURRENT);
+	}
+
+	@Test
+	public void shimmer3ReferenceMatchesTheJavaDecoder() throws Exception {
+		checkReference(API_00027_LogAndStreamProtocolMatchesDriverTest.SHIMMER3_SESSION, SHIMMER3_REFERENCE, SHIMMER3_CURRENT);
+	}
+
+	private static void checkReference(String session, File reference, File current) throws Exception {
+		Assume.assumeTrue("the Python port is not in this repository", reference.getParentFile().isDirectory());
+		List<ObjectCluster> samples = ProtocolReplay.run(new LogAndStreamProtocol(), RecordedSession.load(session)).samples;
 		String csv = toCsv(samples);
-		CURRENT.getParentFile().mkdirs();
-		Files.write(CURRENT.toPath(), csv.getBytes(StandardCharsets.UTF_8));
+		current.getParentFile().mkdirs();
+		Files.write(current.toPath(), csv.getBytes(StandardCharsets.UTF_8));
 
 		// git may have checked the file out with CRLF line endings.
-		String committed = REFERENCE.isFile()
-				? new String(Files.readAllBytes(REFERENCE.toPath()), StandardCharsets.UTF_8).replace("\r\n", "\n")
+		String committed = reference.isFile()
+				? new String(Files.readAllBytes(reference.toPath()), StandardCharsets.UTF_8).replace("\r\n", "\n")
 				: "";
-		assertTrue(REFERENCE + " is out of date: copy " + CURRENT.getAbsolutePath() + " over it", committed.equals(csv));
+		assertTrue(reference + " is out of date: copy " + current.getAbsolutePath() + " over it", committed.equals(csv));
 	}
 
 	private static final File CALIBRATION_REFERENCE = new File("../python/tests/data/java_calibration_reference.txt");

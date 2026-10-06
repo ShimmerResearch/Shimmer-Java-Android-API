@@ -52,11 +52,14 @@ import info.monitorenter.gui.chart.Chart2D;
  * library, with a choice of driver:
  * <ul>
  * <li><b>Today's driver</b> - ShimmerBLENative (ShimmerBluetooth), as DEV-1132 built it;</li>
- * <li><b>New state machine</b> - the DEV-1134 I/O-free LogAndStream protocol prototype.</li>
+ * <li><b>New state machine</b> - the DEV-1134 I/O-free LogAndStream protocol prototype;</li>
+ * <li><b>Rust protocol core</b> - the same protocol from shimmer-protocol-core, through its Java
+ * binding. Offered only when this build has it: a checkout of shimmer-protocol-core beside this
+ * repository (see build.gradle).</li>
  * </ul>
- * Both write the same CSV format, so recordings from the same device can be compared directly.
- * The state machine cannot change the configuration yet: set the device up in driver mode
- * (settings persist on the device), then reconnect in state-machine mode.
+ * All write the same CSV format, so recordings from the same device can be compared directly.
+ * Neither the state machine nor the core can change the configuration yet: set the device up in
+ * driver mode (settings persist on the device), then reconnect in the other mode.
  * <p>
  * Needs the native library: run {@code ./gradlew buildNative} in ShimmerDriverPC first, or pass
  * {@code -Dshimmer.ble.lib=<path to library>}. On macOS, run from Terminal and allow Terminal to use
@@ -66,11 +69,16 @@ public class ShimmerBLECaptureExample {
 
 	private static final String MODE_DRIVER = "Today's driver (ShimmerBLENative)";
 	private static final String MODE_STATE_MACHINE = "New state machine (DEV-1134)";
+	private static final String MODE_CORE = "Rust protocol core (shimmer-protocol-core)";
+	private static final String CORE_BACKEND = "com.shimmerresearch.simpleexamples.CoreCaptureBackend";
+	/** The binding's classes the backend needs, loaded up front so a broken binding is caught here. */
+	private static final String[] CORE_BINDING_CLASSES = { "com.shimmerresearch.protocolcore.CoreHost",
+			"com.shimmerresearch.protocolcore.LogAndStreamProtocolCore$State", "com.shimmerresearch.protocolcore.CoreEvent" };
 
 	private final JFrame mFrame = new JFrame("Shimmer BLE Capture (native)");
 	private final DefaultListModel<NativeBleDevice> mDeviceModel = new DefaultListModel<NativeBleDevice>();
 	private final JList<NativeBleDevice> mDeviceList = new JList<NativeBleDevice>(mDeviceModel);
-	private final JComboBox<String> mMode = new JComboBox<String>(new String[] { MODE_DRIVER, MODE_STATE_MACHINE });
+	private final JComboBox<String> mMode = new JComboBox<String>(modes());
 	private final JButton mBtnScan = new JButton("Scan");
 	private final JButton mBtnConnect = new JButton("Connect");
 	private final JButton mBtnDisconnect = new JButton("Disconnect");
@@ -167,7 +175,7 @@ public class ShimmerBLECaptureExample {
 			}
 		});
 
-		String configTip = "The state machine cannot change the configuration yet: configure in driver mode";
+		String configTip = "Only today's driver can change the configuration yet: configure in driver mode";
 		mBtnSensors.setToolTipText(configTip);
 		mBtnConfig.setToolTipText(configTip);
 
@@ -185,8 +193,11 @@ public class ShimmerBLECaptureExample {
 		});
 		mBtnPlot.addActionListener(e -> {
 			ShimmerDevice device = mBackend.getDeviceForPlot();
+			List<String[]> signals = mBackend.getSignalsForPlot();
 			if (device != null) {
 				new SignalsToPlotDialog().initialize(device, mPlotManager, mChart);
+			} else if (signals != null) {
+				SignalChooserDialog.show(mFrame, signals, mPlotManager, mChart);
 			}
 		});
 		mBtnStart.addActionListener(e -> startStreaming());
@@ -253,8 +264,8 @@ public class ShimmerBLECaptureExample {
 			JOptionPane.showMessageDialog(mFrame, "Scan, then select a device first.");
 			return;
 		}
-		final CaptureBackend backend = MODE_STATE_MACHINE.equals(mMode.getSelectedItem())
-				? new ProtocolCaptureBackend() : new DriverCaptureBackend();
+		final CaptureBackend backend = MODE_STATE_MACHINE.equals(mMode.getSelectedItem()) ? new ProtocolCaptureBackend()
+				: MODE_CORE.equals(mMode.getSelectedItem()) ? newCoreBackend() : new DriverCaptureBackend();
 		mBackend = backend;
 		mDeviceName = device.getName();
 		mPackets.set(0);
@@ -382,6 +393,35 @@ public class ShimmerBLECaptureExample {
 		}
 		mCsvLog.close();
 		System.exit(0);
+	}
+
+	/** The modes this build offers: the core's only if the build has its backend. */
+	private static String[] modes() {
+		return newCoreBackend() != null ? new String[] { MODE_DRIVER, MODE_STATE_MACHINE, MODE_CORE }
+				: new String[] { MODE_DRIVER, MODE_STATE_MACHINE };
+	}
+
+	/**
+	 * The Rust protocol core's backend, or null if this build does not have it. Found by name, so
+	 * that the app builds without shimmer-protocol-core. If the build has it but its binding cannot
+	 * be loaded (built for a newer Java, say), says why on the console and offers no such mode.
+	 */
+	static CaptureBackend newCoreBackend() {
+		Class<?> backend;
+		try {
+			backend = Class.forName(CORE_BACKEND);
+		} catch (ClassNotFoundException e) {
+			return null;
+		}
+		try {
+			for (String binding : CORE_BINDING_CLASSES) {
+				Class.forName(binding);
+			}
+			return (CaptureBackend) backend.getDeclaredConstructor().newInstance();
+		} catch (ReflectiveOperationException | LinkageError e) {
+			System.err.println("The Rust protocol core mode is unavailable: its Java binding cannot be loaded: " + e);
+			return null;
+		}
 	}
 
 	private void updateButtons() {

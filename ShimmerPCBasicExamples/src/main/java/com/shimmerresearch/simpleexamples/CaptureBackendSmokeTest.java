@@ -11,9 +11,9 @@ import com.shimmerresearch.driver.ble.nativeble.NativeBleDevice;
 import com.shimmerresearch.simpleexamples.bletest.BleTransport;
 
 /**
- * Runs both {@link ShimmerBLECaptureExample} backends against a real device, headless: connect,
+ * Runs every {@link ShimmerBLECaptureExample} backend against a real device, headless: connect,
  * stream, stop, disconnect, then compare what each delivered. Checks the capture app's glue
- * before anyone clicks through it.
+ * before anyone clicks through it. The Rust protocol core's backend runs too when the build has it.
  *
  * <pre>
  * CaptureBackendSmokeTest &lt;device name&gt; [seconds per backend]
@@ -56,21 +56,48 @@ public class CaptureBackendSmokeTest {
 		int seconds = args.length > 1 ? Integer.parseInt(args[1]) : 5;
 		BleCentral central = BleCentral.getDefault();
 
-		Run driver = run(new DriverCaptureBackend(), central, name, seconds);
-		Thread.sleep(3000);
-		Run stateMachine = run(new ProtocolCaptureBackend(), central, name, seconds);
+		List<String> labels = new ArrayList<String>();
+		List<Run> runs = new ArrayList<Run>();
+		List<CaptureBackend> backends = new ArrayList<CaptureBackend>();
+		backends.add(new DriverCaptureBackend());
+		backends.add(new ProtocolCaptureBackend());
+		CaptureBackend core = ShimmerBLECaptureExample.newCoreBackend();
+		if (core != null) {
+			backends.add(core);
+		} else {
+			System.out.println("(the Rust protocol core's backend is not in this build)");
+		}
+		for (CaptureBackend backend : backends) {
+			if (!runs.isEmpty()) {
+				Thread.sleep(3000);
+			}
+			labels.add(backend.label());
+			runs.add(run(backend, central, name, seconds));
+		}
 
-		boolean ok = driver.errors.isEmpty() && stateMachine.errors.isEmpty() && !driver.samples.isEmpty()
-				&& !stateMachine.samples.isEmpty();
+		boolean ok = true;
+		for (Run r : runs) {
+			ok &= r.errors.isEmpty() && !r.samples.isEmpty();
+		}
 		if (ok) {
-			List<String> a = driver.samples.get(0).getChannelNamesByInsertionOrder();
-			List<String> b = stateMachine.samples.get(0).getChannelNamesByInsertionOrder();
-			System.out.println("same channels: " + a.equals(b) + " (" + a.size() + ")");
-			ok = a.equals(b);
-			System.out.println(String.format("%-12s %14s %14s", "channel", "driver mean", "state machine"));
+			List<String> reference = runs.get(0).samples.get(0).getChannelNamesByInsertionOrder();
+			for (int i = 1; i < runs.size(); i++) {
+				List<String> channels = runs.get(i).samples.get(0).getChannelNamesByInsertionOrder();
+				boolean same = reference.equals(channels);
+				System.out.println(labels.get(i) + " has the driver's channels: " + same + " (" + channels.size() + ")");
+				ok &= same;
+			}
+			StringBuilder header = new StringBuilder(String.format("%-14s", "mean of"));
+			for (String label : labels) {
+				header.append(String.format(" %14s", label));
+			}
+			System.out.println(header);
 			for (String channel : COMPARED) {
-				System.out.println(String.format("%-12s %14.4f %14.4f", channel, mean(driver.samples, channel),
-						mean(stateMachine.samples, channel)));
+				StringBuilder row = new StringBuilder(String.format("%-14s", channel));
+				for (Run r : runs) {
+					row.append(String.format(" %14.4f", mean(r.samples, channel)));
+				}
+				System.out.println(row);
 			}
 		}
 		System.out.println(ok ? "SMOKE TEST PASSED" : "SMOKE TEST FAILED");
@@ -86,8 +113,12 @@ public class CaptureBackendSmokeTest {
 		if (!run.ready) {
 			return run;
 		}
+		List<String[]> signals = backend.getSignalsForPlot();
 		System.out.println("    connected; MTU " + backend.getMtu() + ", " + backend.getSamplingRate() + " Hz, plot device "
-				+ (backend.getDeviceForPlot() != null));
+				+ (backend.getDeviceForPlot() != null) + ", plot signals " + (signals == null ? "none" : signals.size()));
+		if (backend.getDeviceForPlot() == null && signals == null) {
+			run.errors.add("nothing to plot from: no device and no signals");
+		}
 		backend.startStreaming();
 		waitUntil(10000, backend::isStreaming);
 		long started = System.currentTimeMillis();
