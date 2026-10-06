@@ -24,3 +24,11 @@ include ':ShimmerDriverPC'
 project(':ShimmerDriverPC').projectDir = new File(settingsDir, '../../Shimmer-Java-Android-API/ShimmerDriverPC')
 include ':ShimmerBluetoothManager'
 project(':ShimmerBluetoothManager').projectDir = new File(settingsDir, '../../Shimmer-Java-Android-API/ShimmerBluetoothManager')
+
+// DEV-1134: the Rust protocol core's Java binding, built from a checkout of shimmer-protocol-core
+// beside this repository, where the team's layout puts it (C:\dev\shimmer-protocol-core). Without
+// it, or with -PnoProtocolCore, ShimmerBLECaptureExample simply has no "Rust protocol core" mode.
+def protocolCore = new File(settingsDir, '../../../shimmer-protocol-core/bindings/java')
+if (protocolCore.isDirectory() && !startParameter.projectProperties.containsKey('noProtocolCore')) {
+    includeBuild(protocolCore)
+}

@@ -1,13 +1,16 @@
 package com.shimmerresearch.simpleexamples;
 
+import java.util.List;
+
 import com.shimmerresearch.driver.ObjectCluster;
 import com.shimmerresearch.driver.ShimmerDevice;
 import com.shimmerresearch.driver.ble.nativeble.NativeBleDevice;
 
 /**
  * One way for {@link ShimmerBLECaptureExample} to talk to a device, so the same app can run
- * today's driver ({@link DriverCaptureBackend}) or the DEV-1134 protocol state machine
- * ({@link ProtocolCaptureBackend}) over the same native BLE transport.
+ * today's driver ({@link DriverCaptureBackend}), the DEV-1134 protocol state machine
+ * ({@link ProtocolCaptureBackend}) or the Rust protocol core (CoreCaptureBackend, when the build
+ * has it) over the same native BLE transport.
  */
 interface CaptureBackend {
 
@@ -48,6 +51,15 @@ interface CaptureBackend {
 
 	/** The device whose channels can be plotted, or null until connected. */
 	ShimmerDevice getDeviceForPlot();
+
+	/**
+	 * For a backend with no ShimmerDevice to describe its channels: the signals that can be
+	 * plotted, each {device name, channel, CAL or UNCAL, units} as the plot manager takes them.
+	 * Null if {@link #getDeviceForPlot()} describes them instead, or until connected.
+	 */
+	default List<String[]> getSignalsForPlot() {
+		return null;
+	}
 
 	/** True if this backend can change the device's configuration. */
 	boolean canConfigure();

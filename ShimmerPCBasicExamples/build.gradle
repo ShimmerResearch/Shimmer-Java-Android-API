@@ -60,6 +60,18 @@ dependencies {
     implementation 'com.parse.bolts:bolts-tasks:1.4.0'
 }
 
+// --- The Rust protocol core (DEV-1134) ------------------------------------------------------------
+// When settings.gradle found a checkout of shimmer-protocol-core, the capture example gets a backend
+// on the core (src/core/java), through the binding built from that checkout. The binding's jar
+// carries the core's native library from that checkout's target/release: run
+// 'cargo build --release' there first. -PnoProtocolCore builds without it.
+if (file('../../../shimmer-protocol-core/bindings/java').isDirectory() && !project.hasProperty('noProtocolCore')) {
+    dependencies {
+        implementation 'com.shimmerresearch:shimmer-protocol-core:0.1.0'
+    }
+    sourceSets.main.java.srcDir 'src/core/java'
+}
+
 // --- Native BLE examples (DEV-1132) ------------------------------------------------------------
 // Need the native library: run ./gradlew buildNative in ../ShimmerDriverPC first, or pass
 // -Dshimmer.ble.lib=<path>. On macOS, run from Terminal and allow Terminal to use Bluetooth.
