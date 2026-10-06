@@ -41,11 +41,16 @@ import com.shimmerresearch.sensors.lisxmdl.SensorLIS2MDL;
  * {@code VerisenseDevice.parseDataBlockDataLsm6dsv(...)}. This class provides the
  * channel definitions, configuration and calibration.
  * <p>
- * Sensitivities: 32768/(FS*9.80665) LSB per m/s^2 for accel, the ST angular-rate
- * spec of 4.375 mdps/LSB at +-125 dps for gyro, and 667 LSB/Gauss for the LIS2MDL
- * mag - the last taken from {@link SensorLIS2MDL} rather than duplicated here, so
- * calibrated magnetometer output is in GAUSS, consistent with every other Shimmer
- * magnetometer and with the per-unit calibration the device stores.
+ * Sensitivities are the ST datasheet nominals throughout:
+ * <ul>
+ * <li>accel 0.061 / 0.122 / 0.244 / 0.488 mg/LSB for +-2 / 4 / 8 / 16 g;</li>
+ * <li>gyro 4.375 / 8.75 / 17.5 / 35 / 70 mdps/LSB for +-125 / 250 / 500 / 1000 /
+ * 2000 dps;</li>
+ * <li>LIS2MDL mag 667 LSB/Gauss.</li>
+ * </ul>
+ * The mag figure is taken from {@link SensorLIS2MDL} rather than duplicated here,
+ * so calibrated magnetometer output is in GAUSS, consistent with every other
+ * Shimmer magnetometer and with the per-unit calibration the device stores.
  * <p>
  * Default alignment is the real sensor->ASM frame map (accel/gyro share the chip
  * mounting; the LIS2MDL frame is left-handed), matching the web SDK's
@@ -285,16 +290,42 @@ public class SensorLSM6DSV extends AbstractSensor {
 	 * det +1 and computes canonical 0.0 entries, so it stays derived.) */
 	public static final double[][] DEFAULT_ALIGNMENT_LIS2MDL_MAG = {{1,0,0},{0,0,1},{0,1,0}};
 
-	// Accel sensitivity (LSB per m/s^2) = 32768/(FS_g*9.80665)
-	public static final double[][] SENS_ACCEL_2G  = {{1670.703,0,0},{0,1670.703,0},{0,0,1670.703}};
-	public static final double[][] SENS_ACCEL_4G  = {{835.3517,0,0},{0,835.3517,0},{0,0,835.3517}};
-	public static final double[][] SENS_ACCEL_8G  = {{417.6759,0,0},{0,417.6759,0},{0,0,417.6759}};
-	public static final double[][] SENS_ACCEL_16G = {{208.8379,0,0},{0,208.8379,0},{0,0,208.8379}};
+	// Accel sensitivity (LSB per m/s^2) from the ST datasheet linear-acceleration
+	// sensitivity: 0.061 / 0.122 / 0.244 / 0.488 mg/LSB, i.e. 1/(mg_per_LSB/1000)/9.80665.
+	//
+	// These were previously derived as 32768/(FS_g*9.80665), on the assumption that
+	// the accel spans exactly the full 16-bit range at nominal full scale and that
+	// ST's printed figures were just that quantity rounded to three significant
+	// figures. They are not. The datasheet's own worked example (AN5922 Table 27,
+	// FS_XL = +-2 g) settles it: 1 g reads 0x4009 = 16393 LSB and 350 mg reads
+	// 0x1669 = 5737 LSB. 0.061 mg/LSB predicts 16393.4 and 5737.7; the 32768/FS
+	// derivation predicts 16384 and 5734.4. So the sensor really is 0.061 mg/LSB -
+	// full scale sits a little inside +-2 g - and the old derivation was wrong by
+	// 0.0576%, not merely a rounding apart from the datasheet.
+	//
+	// Same story as the gyro below, just with a much smaller margin: neither part
+	// maps its nominal full scale onto exactly 2^15 counts, so for both of them the
+	// ST mg/LSB and mdps/LSB figures are the authority and a 32768/FS derivation is
+	// simply incorrect. These values also match the firmware calibration seed
+	// (SC_ACCEL_SENS in asm_calibration.c), the web SDK catalog, the gen-1
+	// SensorLSM6DS3/SensorLIS2DW12 classes and ST's own reference driver
+	// (lsm6dsv_from_fs2_to_mg multiplies by 0.061f). Every example in
+	// STMems_Standard_C_drivers/lsm6dsv_STdC/examples converts through those
+	// helpers and none derives 32768/FS - including lsm6dsv_self_test.c, whose
+	// pass/fail limits are specified in mg, so ST's own self-test only comes out
+	// right if 0.122 mg/LSB is the true sensitivity.
+	public static final double[][] SENS_ACCEL_2G  = {{1671.665922915,0,0},{0,1671.665922915,0},{0,0,1671.665922915}};
+	public static final double[][] SENS_ACCEL_4G  = {{835.832961457,0,0},{0,835.832961457,0},{0,0,835.832961457}};
+	public static final double[][] SENS_ACCEL_8G  = {{417.916480729,0,0},{0,417.916480729,0},{0,0,417.916480729}};
+	public static final double[][] SENS_ACCEL_16G = {{208.958240364,0,0},{0,208.958240364,0},{0,0,208.958240364}};
 
 	// Gyro sensitivity (LSB per dps) from the ST datasheet angular-rate sensitivity
 	// (4.375 mdps/LSB at +-125 dps, doubling per range) - the same spec/values as the
-	// gen-1 LSM6DS3. NOTE: the gyro does NOT span the full 16-bit range at its nominal
-	// full scale (unlike the accel), so a 32768/FS derivation is ~12.8% off.
+	// gen-1 LSM6DS3. NOTE: unlike the accel above, the gyro genuinely does NOT span
+	// the full 16-bit range at its nominal full scale - 4.375 mdps/LSB implies a real
+	// full scale of 143.4 dps for the +-125 dps setting, which is exactly where the
+	// part is observed to saturate - so here a 32768/FS derivation is not a rounding
+	// difference but plainly wrong (~14.7%).
 	public static final double[][] SENS_GYRO_125DPS  = {{228.571428571,0,0},{0,228.571428571,0},{0,0,228.571428571}};
 	public static final double[][] SENS_GYRO_250DPS  = {{114.285714286,0,0},{0,114.285714286,0},{0,0,114.285714286}};
 	public static final double[][] SENS_GYRO_500DPS  = {{57.142857143,0,0},{0,57.142857143,0},{0,0,57.142857143}};

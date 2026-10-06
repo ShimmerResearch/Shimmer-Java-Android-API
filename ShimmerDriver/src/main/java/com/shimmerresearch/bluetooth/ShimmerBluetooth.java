@@ -293,6 +293,13 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 		}
 	}
 	
+	/**
+	 * With a link CRC on, the firmware sends one after a bare ACK too (the reply
+	 * to a SET command). It is the CRC of the single byte 0xFF: F4 65, low byte
+	 * first.
+	 */
+	private static final byte[] BARE_ACK_CRC = ShimmerCrc.shimmerUartCrcCalc(new byte[] {ACK_COMMAND_PROCESSED}, 1);
+	
 	public enum SHIMMER_FEATURE {
 		NONE,
 		RN4678_ERROR_DETECTION,
@@ -578,71 +585,94 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 	}
 	
 	public class ProcessingThread extends Thread {
-		public boolean stop = false;
+		public volatile boolean stop = false;
 		int count=0;
 		public void run() {
-			while (!stop) {
-				if(!mABQPacketByeArray.isEmpty()){
+			while (!stop && !Thread.currentThread().isInterrupted()) {
+				RawBytePacketWithPCTimeStamp rbp = null;
+				try {
+					// Blocks (with a timeout) instead of busy-spinning on isEmpty() while idle.
+					// The timeout ensures the stop flag is still checked periodically.
+					rbp = mABQPacketByeArray.poll(100, TimeUnit.MILLISECONDS);
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+				}
+				if(rbp!=null){
 					count++;
 					if(count%1000==0){
 						consolePrintLn("Queue Size: " + mABQPacketByeArray.size());
 						printLogDataForDebugging("Queue Size: " + mABQPacketByeArray.size() + "\n");
 					}
-					RawBytePacketWithPCTimeStamp rbp = mABQPacketByeArray.remove();
 //					buildAndSendMsg(rbp.mDataArray, FW_TYPE_BT, false, rbp.mSystemTimeStamp);
 					buildAndSendMsg(rbp.mDataArray, COMMUNICATION_TYPE.BLUETOOTH, false, rbp.mSystemTimeStamp);
 				}
-			} 
-		} 
-	} 
+			}
+		}
+	}
 	
 	//region --------- BLUETOOH STACK --------- 
 	
 	public class IOThread extends Thread {
 		protected byte[] byteBuffer = {0};
-		public boolean stop = false;
+		public volatile boolean stop = false;
 		
 		public void run() {
-			while(!stop) {
+			while(!stop && !Thread.currentThread().isInterrupted()) {
+				boolean didWork = false;
 				//In-Shimmer Test here
 				if(InShimmerTest) {
 					if (bytesAvailableToBeRead()) {
-					byte[] data = readBytes(availableBytes());
-					if (data!=null) {
-						if (data.length>0) {
-							if (mTestByteListener != null) {
-			        			mTestByteListener.eventNewBytesReceived(data);
-			        		}
+						didWork = true;
+						byte[] data = readBytes(availableBytes());
+						if (data!=null) {
+							if (data.length>0) {
+								if (mTestByteListener != null) {
+									mTestByteListener.eventNewBytesReceived(data);
+								}
+							}
 						}
-					}
 					}
 				}
 				else {
 					if (mDummyRead) {
 						performDummyRead();
+						didWork = true;
 					}
-	
+
 					// Process Instruction on stack. is an instruction running? if not proceed
 					if(!isInstructionStackLock()){
-						processNextInstruction();
+						if(processNextInstruction()){
+							didWork = true;
+						}
 					}
-	
+
 					if(mIsStreaming){
 						processWhileStreaming();
+						didWork = true;
 					}
 					else if(bytesAvailableToBeRead()){
+						didWork = true;
 						if(mWaitForAck) {
 							processNotStreamingWaitForAck();
-						} 
+						}
 						else if(mWaitForResponse) {
 							processNotStreamingWaitForResp();
-						} 
-						
+						}
+
 						processBytesAvailableAndInstreamSupported();
-	
+
 					}
 				}
-				
+
+				if(!didWork){
+					// Nothing useful happened this iteration (idle, not streaming, no pending
+					// instructions/bytes) - avoid busy-spinning and pegging a CPU core.
+					try {
+						Thread.sleep(2);
+					} catch (InterruptedException e) {
+						Thread.currentThread().interrupt();
+					}
+				}
 			}
 		}
 		
@@ -675,10 +705,16 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 			mDummyReadStarted = false;
 		}
 		
-		private void processNextInstruction() {
+		/**
+		 * @return true if an instruction was found and processed (i.e. useful work was done),
+		 * or if this call already idle-paced the loop with its own threadSleep(50) below -
+		 * in that case reporting true here stops run()'s outer idle-sleep from stacking an
+		 * additional wait on top of this one.
+		 */
+		private boolean processNextInstruction() {
 			// check instruction stack, are there any other instructions left to be executed?
 			//checkAndRemoveFirstInstructionIfNull();
-			
+
 			byte[] insBytes = getInstruction();
 			if (insBytes!=null){
 					mCurrentCommand=insBytes[0];
@@ -755,14 +791,32 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 					
 					
 					mTransactionCompleted=false;
+				return true;
 			} else {
+				// getInstruction() returned null here - either the instruction stack is
+				// genuinely empty, or its leading entry was a null placeholder that
+				// getInstruction() just removed (a real instruction may still be next in
+				// the list and will be picked up on the following iteration). Either way,
+				// if there's also nothing else to do this iteration, wait here rather than
+				// busy-spinning.
 				if (!mIsStreaming && !bytesAvailableToBeRead()){
-					threadSleep(50);
+					// Report "did work" (true) so the caller's own idle sleep in run()
+					// doesn't stack an extra wait on top of this one.
+					// Not threadSleep(): that helper swallows InterruptedException without
+					// restoring the interrupt flag, which would defeat run()'s
+					// !Thread.currentThread().isInterrupted() loop-exit check.
+					try {
+						Thread.sleep(50);
+					} catch (InterruptedException e) {
+						Thread.currentThread().interrupt();
+					}
+					return true;
 				}
+				return false;
 			}
 		}
-		
-		/** Process ACK from a GET or SET command while not streaming */ 
+
+		/** Process ACK from a GET or SET command while not streaming */
 		private void processNotStreamingWaitForAck() {
 			//JC TEST:: IMPORTANT TO REMOVE // This is to simulate packet loss 
 			/*
@@ -981,6 +1035,30 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 		//Data packet followed by an ACK (suggesting an ACK in response to a SET BT command or else a BT response command)
 		else if(bufferTemp[0]==DATA_PACKET 
 				&& bufferTemp[getPacketSizeWithCrc()+1]==ACK_COMMAND_PROCESSED){
+			
+			//With a link CRC on, a bare ACK is followed by its own CRC rather than
+			//by the next packet
+			if(isBareAckCrcSoFar(bufferTemp)){
+				int bareAckEnd = getPacketSizeWithCrc()+2+mBtCommsCrcModeCurrent.getNumCrcBytes();
+				if(bufferTemp.length<bareAckEnd){
+					return; //wait for the rest of the ACK's CRC
+				}
+				
+				//Firstly handle the data packet. If its CRC fails, only the packet is
+				//dropped: the ACK's own CRC has already checked out.
+				if(checkCrc(bufferTemp, getPacketSize()+1)){
+					processDataPacket(bufferTemp);
+				}
+				else {
+					printLogDataForDebugging("CRC error in the data packet before an ACK, packet discarded");
+				}
+				clearBytesFromStartOfBuffers(bufferTemp, bareAckEnd);
+				
+				//Then handle the ACK from the last SET command
+				processAckWhileStreaming();
+				return;
+			}
+			
 			if(mByteArrayOutputStream.size()>getPacketSizeWithCrc()+2){
 				
 				if(bufferTemp[getPacketSizeWithCrc()+2]==DATA_PACKET){
@@ -989,16 +1067,7 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 					clearSingleDataPacketFromBuffers(bufferTemp, getPacketSizeWithCrc()+2);
 					
 					//Then handle the ACK from the last SET command
-					if(isKnownSetCommand(mCurrentCommand)){
-						stopTimerCheckForAckOrResp(); //cancel the ack timer
-						mWaitForAck=false;
-						
-						processAckFromSetCommand(mCurrentCommand);
-						
-						mTransactionCompleted = true;
-						setInstructionStackLock(false);
-					}
-					printLogDataForDebugging("Ack Received for Command: \t\t\t" + btCommandToString(mCurrentCommand));
+					processAckWhileStreaming();
 				}
 				
 				//this is for LogAndStream support, command is transmitted and ack received
@@ -1090,6 +1159,10 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 		return mBtResponseMap.containsKey(response);
 	}
 
+	/**
+	 * Checks the CRC of the data packet at the start of bufferTemp. It leaves the
+	 * buffers alone, so the caller decides what to discard.
+	 */
 	public boolean checkCrc(byte[] bufferTemp, int length) {
 		byte[] crcCalc = ShimmerCrc.shimmerUartCrcCalc(bufferTemp, length);
 
@@ -1103,11 +1176,43 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 		if (mBtCommsCrcModeCurrent == BT_CRC_MODE.TWO_BYTE_CRC) {
 			// + 2 as this is the location of the CRC's MSB
 			if (bufferTemp[getPacketSize() + 2] != crcCalc[1]) {
-				discardBufferBytesToNextPacket();
 				return false;
 			}
 		}
 		return true;
+	}
+	
+	/**
+	 * Whether the bytes received so far after the ACK that follows a data packet
+	 * are the CRC on a bare ACK. Nothing else can start that way: an in-stream
+	 * response starts 0x8A, a data packet 0x00, and no response opcode is 0xF4.
+	 */
+	private boolean isBareAckCrcSoFar(byte[] bufferTemp) {
+		int crcStart = getPacketSizeWithCrc()+2;
+		int numCrcBytesReceived = Math.min(bufferTemp.length-crcStart, mBtCommsCrcModeCurrent.getNumCrcBytes());
+		if(numCrcBytesReceived<=0){
+			return false;
+		}
+		for(int i=0;i<numCrcBytesReceived;i++){
+			if(bufferTemp[crcStart+i]!=BARE_ACK_CRC[i]){
+				return false;
+			}
+		}
+		return true;
+	}
+	
+	/** Handles a bare ACK received while streaming: the reply to the last SET command */
+	private void processAckWhileStreaming() {
+		if(isKnownSetCommand(mCurrentCommand)){
+			stopTimerCheckForAckOrResp(); //cancel the ack timer
+			mWaitForAck=false;
+			
+			processAckFromSetCommand(mCurrentCommand);
+			
+			mTransactionCompleted = true;
+			setInstructionStackLock(false);
+		}
+		printLogDataForDebugging("Ack Received for Command: \t\t\t" + btCommandToString(mCurrentCommand));
 	}
 	
 	private void clearCrcBytesFromBuffer(byte responseCommand) {
@@ -1333,6 +1438,21 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 					consolePrintException(e.getMessage(), e.getStackTrace());
 				}
 			}
+		}
+	}
+
+	/**
+	 * Clears the first numBytes bytes from mByteArrayOutputStream, with their
+	 * PC timestamps, and keeps any bytes after them
+	 * 
+	 * @param bufferTemp the contents of mByteArrayOutputStream
+	 * @param numBytes
+	 */
+	private void clearBytesFromStartOfBuffers(byte[] bufferTemp, int numBytes) {
+		mByteArrayOutputStream.reset();
+		mByteArrayOutputStream.write(bufferTemp, numBytes, bufferTemp.length-numBytes);
+		if(mEnablePCTimeStamps) {
+			mListofPCTimeStamps.subList(0, Math.min(numBytes, mListofPCTimeStamps.size())).clear();
 		}
 	}
 
@@ -1660,27 +1780,8 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 				printLogDataForDebugging("BMP280 CALIB Received:\t" + UtilShimmer.bytesToHexStringWithSpacesFormatted(pressureResoRes));
 			}
 		} else if(responseCommand==PRESSURE_CALIBRATION_COEFFICIENTS_RESPONSE){
-			byte[] pressureResoRes = null;
-			byte[] filteredByteArray = null;
-			if(mSensorBMPX80.mSensorType.equals(SENSORS.BMP390)){
-				pressureResoRes = new byte[23]; //21 bytes + 2
-				pressureResoRes = readBytes(23, responseCommand);
-				printLogDataForDebugging("BMP390 CALIB Received:\t" + UtilShimmer.bytesToHexStringWithSpacesFormatted(pressureResoRes));
-			}else if(mSensorBMPX80.mSensorType.equals(SENSORS.BMP280)){
-				pressureResoRes = new byte[26]; //24 bytes + 2
-				pressureResoRes = readBytes(26, responseCommand);
-				printLogDataForDebugging("BMP280 CALIB Received:\t" + UtilShimmer.bytesToHexStringWithSpacesFormatted(pressureResoRes));
-			}else if(mSensorBMPX80.mSensorType.equals(SENSORS.BMP180)){
-				pressureResoRes = new byte[24]; //22 bytes + 2
-				pressureResoRes = readBytes(24, responseCommand);
-				printLogDataForDebugging("BMP180 CALIB Received:\t" + UtilShimmer.bytesToHexStringWithSpacesFormatted(pressureResoRes));
-			}
-			
-			if(pressureResoRes!=null){
-				filteredByteArray = Arrays.copyOfRange(pressureResoRes, 2, pressureResoRes.length);
-				retrievePressureCalibrationParametersFromPacket(filteredByteArray,CALIB_READ_SOURCE.LEGACY_BT_COMMAND);
-			}
-		} 
+			processPressureCalibCoefficientsResponse();
+		}
 		else if(responseCommand==EXG_REGS_RESPONSE){
 			delayForBtResponse(300); // Wait to ensure the packet has been fully received
 			byte[] bufferAns = readBytes(11, responseCommand);
@@ -2760,7 +2861,10 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 		//readExpansionBoardID();
 		
 		if (isBtCrcModeSupported()) {
-			writeBtCommsCrcMode(DEFAULT_BT_CRC_MODE_IF_SUPPORTED);
+			writeBtCommsCrcMode(getBtCrcModeToUseOnConnect());
+		} else if (DEFAULT_BT_CRC_MODE_IF_SUPPORTED!=BT_CRC_MODE.OFF && isBtCrcClearedWhenSensingStops()) {
+			printLogDataForDebugging("Link CRC left off: " + getFirmwareVersionParsed()
+					+ " on a Shimmer3R drops it whenever sensing stops; v1.0.11 and later keep it");
 		}
 		
 		if (RN4678_ERROR_DETECTION_ENABLED && isSupportedRn4678ErrorDetection()) {
@@ -3457,11 +3561,92 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 				}
 			}
 		} else if (getHardwareVersion() == HW_ID.SHIMMER_3R) {
-			// BMP581 self-compensates and has no coefficients; its firmware NACKs
-			// GET_PRESSURE_CALIBRATION_COEFFICIENTS_COMMAND, so don't send it.
-			if (!isSupportedBmp581()) {
+			// LogAndStream_Shimmer3R v1.01.007+ answers with the fitted sensor's ID
+			// ([A6][01][03] for a BMP581), which confirms or overrides the
+			// SR-number rule. v1.01.006 is the one version that NACKs it on a
+			// BMP581, and without NACK handling an unanswered command times out
+			// and drops the connection - so skip it there and let the SR-number
+			// rule stand. The rule's firmware guard (>= v1.01.006) makes "rule
+			// says BMP581 and firmware < v1.01.007" exactly v1.01.006.
+			boolean isBmp581PerSrNumber = isSupportedBmp581(getShimmerVerObject(), getExpansionBoardDetails());
+			boolean isFwWithInBandPressureSensorId = getShimmerVerObject().compareVersions(FW_ID.LOGANDSTREAM, 1, 1, 7);
+			if (!isBmp581PerSrNumber || isFwWithInBandPressureSensorId) {
 				writeInstruction(GET_PRESSURE_CALIBRATION_COEFFICIENTS_COMMAND);
 			}
+		}
+	}
+
+	/**
+	 * Parses a PRESSURE_CALIBRATION_COEFFICIENTS_RESPONSE, laid out as
+	 * [0xA6][len = 1+n][sensorId][n coefficient bytes] (log-and-stream-common
+	 * Comms/shimmer_bt_uart.c). The response byte has already been read.
+	 * <p>
+	 * The length byte, not the sensor the driver assumed, decides how much is
+	 * read, so the stream stays in step whatever the Shimmer sends. The length
+	 * is then checked against the sensor ID, and a mismatch is rejected rather
+	 * than applied. On a Shimmer3R the sensor ID is authoritative: it overrides
+	 * the SR-number rule in either direction (see
+	 * {@link #setPressureSensorIdInBand(int)}). On a Shimmer3 the coefficients
+	 * are applied only if they are for the sensor class in use.
+	 */
+	protected void processPressureCalibCoefficientsResponse() {
+		byte[] length = readBytes(1, PRESSURE_CALIBRATION_COEFFICIENTS_RESPONSE);
+		if(length==null){
+			return;
+		}
+		int lengthToRead = length[0]&0xFF;
+		if(lengthToRead==0){
+			printLogDataForDebugging("PRESSURE_CALIBRATION_COEFFICIENTS_RESPONSE rejected: zero length, no sensor ID");
+			return;
+		}
+		byte[] payload = readBytes(lengthToRead, PRESSURE_CALIBRATION_COEFFICIENTS_RESPONSE);
+		if(payload==null){
+			return;
+		}
+
+		int sensorId = payload[0]&0xFF;
+		byte[] coefficients = Arrays.copyOfRange(payload, 1, payload.length);
+		String bytesReceived = UtilShimmer.bytesToHexStringWithSpacesFormatted(ArrayUtils.addAll(length, payload));
+
+		int expectedLength = getPressureCalibCoefficientByteLength(sensorId);
+		if(expectedLength<0 || coefficients.length!=expectedLength){
+			printLogDataForDebugging("PRESSURE_CALIBRATION_COEFFICIENTS_RESPONSE rejected: sensor ID " + sensorId + " with " + coefficients.length
+					+ " coefficient bytes, expected " + expectedLength + ":\t" + bytesReceived);
+			return;
+		}
+
+		SENSORS sensorReported = null;
+		switch(sensorId){
+			case PRESSURE_SENSOR_ID.BMP180:
+				sensorReported = SENSORS.BMP180;
+				break;
+			case PRESSURE_SENSOR_ID.BMP280:
+				sensorReported = SENSORS.BMP280;
+				break;
+			case PRESSURE_SENSOR_ID.BMP390:
+				sensorReported = SENSORS.BMP390;
+				break;
+			case PRESSURE_SENSOR_ID.BMP581:
+				sensorReported = SENSORS.BMP581;
+				break;
+		}
+		printLogDataForDebugging(sensorReported + " CALIB Received:\t" + bytesReceived);
+
+		if(getHardwareVersion()==HW_ID.SHIMMER_3R){
+			if(sensorId!=PRESSURE_SENSOR_ID.BMP390 && sensorId!=PRESSURE_SENSOR_ID.BMP581){
+				printLogDataForDebugging("PRESSURE_CALIBRATION_COEFFICIENTS_RESPONSE rejected: a Shimmer3R carries a BMP390 or BMP581, not a " + sensorReported);
+				return;
+			}
+			setPressureSensorIdInBand(sensorId);
+		}
+		else if(!mSensorBMPX80.mSensorType.equals(sensorReported)){
+			printLogDataForDebugging("PRESSURE_CALIBRATION_COEFFICIENTS_RESPONSE rejected: coefficients are for a " + sensorReported + " but the driver is using a " + mSensorBMPX80.mSensorType);
+			return;
+		}
+
+		// A BMP581 self-compensates, so it has no coefficients to apply
+		if(coefficients.length>0){
+			retrievePressureCalibrationParametersFromPacket(coefficients,CALIB_READ_SOURCE.LEGACY_BT_COMMAND);
 		}
 	}
 
@@ -5077,8 +5262,21 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 		return writeBtCommsCrcMode(BT_CRC_MODE.TWO_BYTE_CRC);
 	}
 
+	/**
+	 * Queues SET_CRC_COMMAND. Turning a CRC on is refused wherever
+	 * {@link #isBtCrcModeSupported()} is false, and a 2-byte CRC also wherever
+	 * {@link #isTwoByteCrcOverrunningStatusPush()} is true. Turning it off is
+	 * refused only by firmware without the command.
+	 *
+	 * @param btCrcMode
+	 * @return false if nothing was queued
+	 */
 	public boolean writeBtCommsCrcMode(BT_CRC_MODE btCrcMode) {
-		if (getFirmwareVersionCode() >= 8) {
+		if (btCrcMode==BT_CRC_MODE.TWO_BYTE_CRC && isTwoByteCrcOverrunningStatusPush()) {
+			return false;
+		}
+		boolean isAllowed = btCrcMode==BT_CRC_MODE.OFF ? getFirmwareVersionCode() >= 8 : isBtCrcModeSupported();
+		if (isAllowed) {
 			writeInstruction(new byte[] { SET_CRC_COMMAND, (byte) (btCrcMode.ordinal()) });
 			return true;
 		}
@@ -5088,6 +5286,9 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 	/**
 	 * Sets the default mode that should be used when establishing a connection to
 	 * the Shimmer if the current firmware version supports the CRC feature.
+	 * Shimmer3R LogAndStream before v1.00.011 counts as not supporting it; see
+	 * {@link #isBtCrcModeSupported()}. A 2-byte CRC falls back to 1 byte where
+	 * the firmware cannot take 2; see {@link #isTwoByteCrcOverrunningStatusPush()}.
 	 * 
 	 * @param btCommsCrcMode
 	 */
@@ -5097,9 +5298,9 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 
 	/**
 	 * Gets the default CRC mode that will attempted to be used when establishing a
-	 * connection to the Shimmer. If a connection has already been established and
-	 * the firmware version has been read, this function will return the actual CRC
-	 * mode that's in use.
+	 * connection to the Shimmer. This is the setting, not necessarily what a
+	 * connected Shimmer uses, which {@link #getCurrentBtCommsCrcMode()} returns: on
+	 * some firmware the driver leaves the CRC off, or uses 1 byte in place of 2.
 	 * 
 	 * @return
 	 */
@@ -5134,11 +5335,86 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 	/**
 	 * Response only valid if a connection has been established and the firmware
 	 * version has been read from the sensor.
+	 * <p>
+	 * False on Shimmer3R LogAndStream before v1.00.011 although it has
+	 * SET_CRC_COMMAND, because it drops the CRC whenever sensing stops; see
+	 * {@link #isBtCrcClearedWhenSensingStops()}.
 	 * 
 	 * @return
 	 */
 	public boolean isBtCrcModeSupported() {
-		return getFirmwareVersionCode() >= 8;
+		return getFirmwareVersionCode() >= 8 && !isBtCrcClearedWhenSensingStops();
+	}
+
+	/**
+	 * True for Shimmer3R LogAndStream before v1.00.011. Those releases turn the
+	 * Bluetooth link CRC off by themselves whenever sensing stops
+	 * (S4Sens_stopSensing, s4_sensing.c:354 at v1.00.010): after STOP_STREAMING,
+	 * STOP_SDBT or STOP_LOGGING, and when the user button or docking ends SD
+	 * logging, without telling the host. The stop's own ACK still carries the CRC
+	 * and every reply after it is bare, so a host still expecting the CRC loses
+	 * sync after every stop, including stops it did not ask for. c8016de3 removed
+	 * the clear: v1.00.011 and later clear it only at startup and on disconnect,
+	 * and no Shimmer3 release clears it at a stop.
+	 * <p>
+	 * Shimmer3 and Shimmer3R LogAndStream version numbers overlap, so this follows
+	 * the hardware the device reports. The Shimmer3R v1.00.008 side build for
+	 * older Consensys reports a Shimmer3 and is let through, as it is by the web
+	 * SDK's keepsLinkCrcWhenSensingStops().
+	 * <p>
+	 * Derived from the firmware source; not yet run against a Shimmer3R on
+	 * v1.00.010 or earlier.
+	 *
+	 * @return
+	 */
+	public boolean isBtCrcClearedWhenSensingStops() {
+		return getHardwareVersion()==HW_ID.SHIMMER_3R
+				&& getFirmwareIdentifier()==FW_ID.LOGANDSTREAM
+				&& !isThisVerCompatibleWith(HW_ID.SHIMMER_3R, FW_ID.LOGANDSTREAM, 1, 0, 11);
+	}
+
+	/**
+	 * True for Shimmer3R LogAndStream v1.00.024 to v1.00.049, where a 2-byte link
+	 * CRC overruns the unsolicited status push. Those releases build the push in a
+	 * six-byte buffer, uint8_t selfcmd[6] (ShimBt_instreamStatusRespSend,
+	 * log-and-stream-common Comms/shimmer_bt_uart.c:2262 at f39be8c1f). The push is
+	 * the ACK prefix, 0x8A 0x71 and two status bytes, so a 2-byte CRC makes seven
+	 * bytes and the seventh lands past the end of the buffer: the sensor hardfaults
+	 * (DEV-621). v1.00.050 sized the buffer for it. The firmware pushes on docking
+	 * and undocking, the user button, a trial-duration expiry and a low-battery
+	 * stop, so the fault can come at any point in a session.
+	 * <p>
+	 * A 1-byte CRC, one status byte (v1.00.023 and earlier, and every Shimmer3) or
+	 * the ACK prefix turned off (SET_INSTREAM_RESPONSE_ACK_PREFIX_STATE, 0xA3) each
+	 * make the push six bytes, which fits. This driver keeps the prefix, because its
+	 * in-stream parsers expect it, so the 2-byte CRC is what has to go.
+	 * <p>
+	 * Derived from the firmware source; not yet run against a Shimmer3R on
+	 * v1.00.024 to v1.00.049.
+	 *
+	 * @return
+	 */
+	public boolean isTwoByteCrcOverrunningStatusPush() {
+		// Two status bytes: Shimmer3R LogAndStream v1.00.024 and later
+		return isSupportedUSBPluggedInStatus()
+				&& !isThisVerCompatibleWith(HW_ID.SHIMMER_3R, FW_ID.LOGANDSTREAM, 1, 0, 50);
+	}
+
+	/**
+	 * The CRC mode to ask for when connecting: the default, except that a 2-byte
+	 * default falls back to 1 byte wherever
+	 * {@link #isTwoByteCrcOverrunningStatusPush()} is true. One byte is the low
+	 * byte of the same CRC, so the link keeps its check.
+	 *
+	 * @return
+	 */
+	protected BT_CRC_MODE getBtCrcModeToUseOnConnect() {
+		if (DEFAULT_BT_CRC_MODE_IF_SUPPORTED==BT_CRC_MODE.TWO_BYTE_CRC && isTwoByteCrcOverrunningStatusPush()) {
+			printLogDataForDebugging("Link CRC cut to 1 byte: " + getFirmwareVersionParsed()
+					+ " on a Shimmer3R overruns its status push with 2; v1.0.50 and later take 2");
+			return BT_CRC_MODE.ONE_BYTE_CRC;
+		}
+		return DEFAULT_BT_CRC_MODE_IF_SUPPORTED;
 	}
 
 	/**** DISABLE FUNCTIONS *****/

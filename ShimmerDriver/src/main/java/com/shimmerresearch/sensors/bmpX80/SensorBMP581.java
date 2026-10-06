@@ -81,8 +81,12 @@ public class SensorBMP581 extends SensorBMPX80 {
 	//--------- Constructors for this class end --------------
 
 	//--------- Bluetooth commands start --------------
-	// Oversampling only. There is deliberately NO GET_PRESSURE_CALIBRATION_COEFFICIENTS
-	// command - the BMP581 firmware NACKs it because the sensor self-compensates.
+	// Oversampling only. The BMP581 self-compensates, so it has no calibration
+	// coefficients. GET_PRESSURE_CALIBRATION_COEFFICIENTS_COMMAND (0xA7) is still
+	// sent: LogAndStream_Shimmer3R v1.01.007+ answers it with just the sensor ID,
+	// [A6][01][03], which identifies the BMP581 in-band. Only v1.01.006 NACKs it on
+	// a BMP581, so the driver doesn't send it to that version (see
+	// ShimmerBluetooth.readPressureCalibrationCoefficients()).
 	public static final byte SET_PRESSURE_OVERSAMPLING_RATIO_COMMAND = (byte) 0x52;
 	public static final byte PRESSURE_OVERSAMPLING_RATIO_RESPONSE    = (byte) 0x53;
 	public static final byte GET_PRESSURE_OVERSAMPLING_RATIO_COMMAND = (byte) 0x54;
@@ -224,8 +228,8 @@ public class SensorBMP581 extends SensorBMPX80 {
 			}
 			if (channelDetails.mObjectClusterName.equals(ObjectClusterSensorName.TEMPERATURE_BMP581)) {
 				double raw = ((FormatCluster) ObjectCluster.returnFormatCluster(objectCluster.getCollectionOfFormatClusters(ObjectClusterSensorName.TEMPERATURE_BMP581), channelDetails.mChannelFormatDerivedFromShimmerDataPacket.toString())).mData;
-				// BMP581 temperature is pre-compensated: raw/65536 = deg C
-				double calTemp = raw / 65536.0;
+				// BMP581 temperature is pre-compensated and signed: s24(raw)/65536 = deg C
+				double calTemp = CalibDetailsBmp581.signExtend24(raw) / 65536.0;
 				objectCluster.addCalData(channelDetails, calTemp, objectCluster.getIndexKeeper() - 1);
 				objectCluster.incrementIndexKeeper();
 			}

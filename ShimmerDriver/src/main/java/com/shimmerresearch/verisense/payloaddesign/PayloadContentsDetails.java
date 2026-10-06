@@ -278,6 +278,17 @@ public abstract class PayloadContentsDetails implements Serializable {
 	}
 
 	/**
+	 * VD6283 effective sample-rate index present in payload header byte 30 bits
+	 * 6:3. See {@link VerisenseDevice.FW_CHANGES#CCF_GEN2_LIGHT_RATE}: this is a
+	 * DIAGNOSTIC marker only. The header length is unchanged at this version, so
+	 * nothing about where fields are read from depends on it, and the rate field
+	 * itself says whether it is populated.
+	 */
+	public static boolean isPayloadDesignV14orAbove(ShimmerVerObject svo) {
+		return VerisenseDevice.compareFwVersions(svo, VerisenseDevice.FW_CHANGES.CCF_GEN2_LIGHT_RATE);
+	}
+
+	/**
 	 * This is a similar method to "!isPayloadDesignGen7OrAbove" but has been
 	 * created to make it easy to distinguish in the code sections that control the
 	 * differ CSV output formats.
