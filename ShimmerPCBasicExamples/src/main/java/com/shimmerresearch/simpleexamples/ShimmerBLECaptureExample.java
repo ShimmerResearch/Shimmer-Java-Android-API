@@ -71,6 +71,9 @@ public class ShimmerBLECaptureExample {
 	private static final String MODE_STATE_MACHINE = "New state machine (DEV-1134)";
 	private static final String MODE_CORE = "Rust protocol core (shimmer-protocol-core)";
 	private static final String CORE_BACKEND = "com.shimmerresearch.simpleexamples.CoreCaptureBackend";
+	/** The binding's classes the backend needs, loaded up front so a broken binding is caught here. */
+	private static final String[] CORE_BINDING_CLASSES = { "com.shimmerresearch.protocolcore.CoreHost",
+			"com.shimmerresearch.protocolcore.LogAndStreamProtocolCore$State", "com.shimmerresearch.protocolcore.CoreEvent" };
 
 	private final JFrame mFrame = new JFrame("Shimmer BLE Capture (native)");
 	private final DefaultListModel<NativeBleDevice> mDeviceModel = new DefaultListModel<NativeBleDevice>();
@@ -400,12 +403,23 @@ public class ShimmerBLECaptureExample {
 
 	/**
 	 * The Rust protocol core's backend, or null if this build does not have it. Found by name, so
-	 * that the app builds without shimmer-protocol-core.
+	 * that the app builds without shimmer-protocol-core. If the build has it but its binding cannot
+	 * be loaded (built for a newer Java, say), says why on the console and offers no such mode.
 	 */
 	static CaptureBackend newCoreBackend() {
+		Class<?> backend;
 		try {
-			return (CaptureBackend) Class.forName(CORE_BACKEND).getDeclaredConstructor().newInstance();
+			backend = Class.forName(CORE_BACKEND);
+		} catch (ClassNotFoundException e) {
+			return null;
+		}
+		try {
+			for (String binding : CORE_BINDING_CLASSES) {
+				Class.forName(binding);
+			}
+			return (CaptureBackend) backend.getDeclaredConstructor().newInstance();
 		} catch (ReflectiveOperationException | LinkageError e) {
+			System.err.println("The Rust protocol core mode is unavailable: its Java binding cannot be loaded: " + e);
 			return null;
 		}
 	}

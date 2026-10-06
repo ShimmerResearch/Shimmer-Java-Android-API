@@ -76,7 +76,8 @@ class CoreCaptureBackend implements CaptureBackend {
 						}
 					});
 			host.connect();
-		} catch (Exception | UnsatisfiedLinkError e) {
+		} catch (Exception | LinkageError e) {
+			// LinkageError: the core's library not found (UnsatisfiedLinkError), or the binding unusable.
 			mListener.onError("Connect failed: " + e.getMessage());
 			disconnect();
 		}
