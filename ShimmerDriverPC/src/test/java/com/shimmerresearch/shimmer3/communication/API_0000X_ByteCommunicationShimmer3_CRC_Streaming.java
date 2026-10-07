@@ -1,4 +1,5 @@
 package com.shimmerresearch.shimmer3.communication;
+import org.junit.After;
 import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.FixMethodOrder;
@@ -29,7 +30,6 @@ import java.util.concurrent.TimeUnit;
 @FixMethodOrder(MethodSorters.NAME_ASCENDING) // Test methods will be run in alphabetical order
 public class API_0000X_ByteCommunicationShimmer3_CRC_Streaming extends BasicProcessWithCallBack{
 	ShimmerPC mDevice;
-	TaskCompletionSource<Boolean> mCalibrationTask;
 	TaskCompletionSource<Boolean> mStreamingTask;
 	ByteCommunicationSimulatorS3 mByteCommunicationSimulatorS3;
 
@@ -40,23 +40,19 @@ public class API_0000X_ByteCommunicationShimmer3_CRC_Streaming extends BasicProc
 		mDevice.setTestRadio(mByteCommunicationSimulatorS3);
 		setWaitForData(mDevice);
     }
+
+	@After
+	public void tearDown() {
+		mDevice.disconnectNoException();
+	}
     
     ArrayList<ObjectCluster> mListOJC;
     @Test
     public void test001_testStreaming() {
     	mListOJC = new ArrayList<ObjectCluster>();
     	mByteCommunicationSimulatorS3.setIsNewBMPSupported(false);
-    	mCalibrationTask = new TaskCompletionSource<Boolean>();
-    	mDevice.connect("","");
-    	
-		mCalibrationTask = new TaskCompletionSource<>();
-		mStreamingTask = new TaskCompletionSource<Boolean>();
-		try {
-			boolean result = mCalibrationTask.getTask().waitForCompletion(5, TimeUnit.SECONDS);
-		} catch (InterruptedException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-		}
+    	ByteCommunicationTestUtils.connectAndWaitUntilInitialised(mDevice);
+    	mStreamingTask = new TaskCompletionSource<Boolean>();
 
 		try {
 			mDevice.startStreaming();

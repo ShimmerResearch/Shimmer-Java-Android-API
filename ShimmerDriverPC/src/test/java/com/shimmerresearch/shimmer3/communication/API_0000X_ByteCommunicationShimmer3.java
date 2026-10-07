@@ -1,4 +1,5 @@
 package com.shimmerresearch.shimmer3.communication;
+import org.junit.After;
 import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.FixMethodOrder;
@@ -30,7 +31,6 @@ import java.util.concurrent.TimeUnit;
 @FixMethodOrder(MethodSorters.NAME_ASCENDING) // Test methods will be run in alphabetical order
 public class API_0000X_ByteCommunicationShimmer3 extends BasicProcessWithCallBack{
 	ShimmerPC mDevice;
-	TaskCompletionSource<Boolean> mWaitTask;
 	TaskCompletionSource<Boolean> mStreamingTask;
 	ByteCommunicationSimulatorS3 mByteCommunicationSimulatorS3;
 
@@ -41,20 +41,16 @@ public class API_0000X_ByteCommunicationShimmer3 extends BasicProcessWithCallBac
 		mDevice.setTestRadio(mByteCommunicationSimulatorS3);
 		setWaitForData(mDevice);
     }
+
+	@After
+	public void tearDown() {
+		mDevice.disconnectNoException();
+	}
     
     @Test
     public void test001_testConnectandDisconnect() {
     	mByteCommunicationSimulatorS3.setIsNewBMPSupported(false);
-    	mWaitTask = new TaskCompletionSource<Boolean>();
-    	mDevice.connect("","");
-    	
-    		mWaitTask = new TaskCompletionSource<>();
-    		try {
-				mWaitTask.getTask().waitForCompletion(3, TimeUnit.SECONDS); //Just to give time to connect to finish
-			} catch (InterruptedException e) {
-				// TODO Auto-generated catch block
-				e.printStackTrace();
-			}
+    	ByteCommunicationTestUtils.connectAndWaitUntilInitialised(mDevice);
 			
     	if (!mDevice.isConnected()) {
     		assert(false);
@@ -88,16 +84,7 @@ public class API_0000X_ByteCommunicationShimmer3 extends BasicProcessWithCallBac
     @Test
     public void test002_testConnectandDisconnect_NewBMPSupported() {
     	mByteCommunicationSimulatorS3.setIsNewBMPSupported(true);
-    	mWaitTask = new TaskCompletionSource<Boolean>();
-    	mDevice.connect("","");
-    	
-    		mWaitTask = new TaskCompletionSource<>();
-    		try {
-				boolean result = mWaitTask.getTask().waitForCompletion(5, TimeUnit.SECONDS);
-			} catch (InterruptedException e) {
-				// TODO Auto-generated catch block
-				e.printStackTrace();
-			}
+    	ByteCommunicationTestUtils.connectAndWaitUntilInitialised(mDevice);
 			
     	if (!mDevice.isConnected()) {
     		assert(false);
