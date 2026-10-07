@@ -64,9 +64,3 @@ ShimmerDriverPC/src/main/resources/native/*/
 # Output of the native BLE example apps when run from a project folder.
 ble-test-reports/
 shimmer_ble_*.csv
-
-# The Python port (DEV-1134), while it lives in python/ before moving to its own repository.
-python/.venv/
-__pycache__/
-.pytest_cache/
-*.egg-info/

@@ -51,15 +51,14 @@ import info.monitorenter.gui.chart.Chart2D;
  * Shimmer Capture-style example for Shimmer3 and Shimmer3R over BLE through the in-process native
  * library, with a choice of driver:
  * <ul>
- * <li><b>Today's driver</b> - ShimmerBLENative (ShimmerBluetooth), as DEV-1132 built it;</li>
- * <li><b>New state machine</b> - the DEV-1134 I/O-free LogAndStream protocol prototype;</li>
- * <li><b>Rust protocol core</b> - the same protocol from shimmer-protocol-core, through its Java
- * binding. Offered only when this build has it: a checkout of shimmer-protocol-core beside this
- * repository (see build.gradle).</li>
+ * <li><b>ShimmerBluetooth driver</b> - ShimmerBLENative, as DEV-1132 built it;</li>
+ * <li><b>LogAndStream protocol (Rust core)</b> - the protocol from shimmer-protocol-core, through
+ * its Java binding. Offered only when this build has it: a checkout of shimmer-protocol-core beside
+ * this repository (see build.gradle).</li>
  * </ul>
- * All write the same CSV format, so recordings from the same device can be compared directly.
- * Neither the state machine nor the core can change the configuration yet: set the device up in
- * driver mode (settings persist on the device), then reconnect in the other mode.
+ * Both write the same CSV format, so recordings from the same device can be compared directly.
+ * The core cannot change the configuration yet: set the device up in driver mode (settings persist
+ * on the device), then reconnect in the core's mode.
  * <p>
  * Needs the native library: run {@code ./gradlew buildNative} in ShimmerDriverPC first, or pass
  * {@code -Dshimmer.ble.lib=<path to library>}. On macOS, run from Terminal and allow Terminal to use
@@ -67,13 +66,12 @@ import info.monitorenter.gui.chart.Chart2D;
  */
 public class ShimmerBLECaptureExample {
 
-	private static final String MODE_DRIVER = "Today's driver (ShimmerBLENative)";
-	private static final String MODE_STATE_MACHINE = "New state machine (DEV-1134)";
-	private static final String MODE_CORE = "Rust protocol core (shimmer-protocol-core)";
+	private static final String MODE_DRIVER = "ShimmerBluetooth driver (ShimmerBLENative)";
+	private static final String MODE_CORE = "LogAndStream protocol (Rust core)";
 	private static final String CORE_BACKEND = "com.shimmerresearch.simpleexamples.CoreCaptureBackend";
 	/** The binding's classes the backend needs, loaded up front so a broken binding is caught here. */
-	private static final String[] CORE_BINDING_CLASSES = { "com.shimmerresearch.protocolcore.CoreHost",
-			"com.shimmerresearch.protocolcore.LogAndStreamProtocolCore$State", "com.shimmerresearch.protocolcore.CoreEvent" };
+	private static final String[] CORE_BINDING_CLASSES = { "com.shimmerresearch.logandstream.LogAndStreamHost",
+			"com.shimmerresearch.logandstream.LogAndStreamProtocol$State", "com.shimmerresearch.logandstream.Event" };
 
 	private final JFrame mFrame = new JFrame("Shimmer BLE Capture (native)");
 	private final DefaultListModel<NativeBleDevice> mDeviceModel = new DefaultListModel<NativeBleDevice>();
@@ -264,8 +262,8 @@ public class ShimmerBLECaptureExample {
 			JOptionPane.showMessageDialog(mFrame, "Scan, then select a device first.");
 			return;
 		}
-		final CaptureBackend backend = MODE_STATE_MACHINE.equals(mMode.getSelectedItem()) ? new ProtocolCaptureBackend()
-				: MODE_CORE.equals(mMode.getSelectedItem()) ? newCoreBackend() : new DriverCaptureBackend();
+		final CaptureBackend backend = MODE_CORE.equals(mMode.getSelectedItem()) ? newCoreBackend()
+				: new DriverCaptureBackend();
 		mBackend = backend;
 		mDeviceName = device.getName();
 		mPackets.set(0);
@@ -397,8 +395,7 @@ public class ShimmerBLECaptureExample {
 
 	/** The modes this build offers: the core's only if the build has its backend. */
 	private static String[] modes() {
-		return newCoreBackend() != null ? new String[] { MODE_DRIVER, MODE_STATE_MACHINE, MODE_CORE }
-				: new String[] { MODE_DRIVER, MODE_STATE_MACHINE };
+		return newCoreBackend() != null ? new String[] { MODE_DRIVER, MODE_CORE } : new String[] { MODE_DRIVER };
 	}
 
 	/**

@@ -4,7 +4,7 @@ import java.util.List;
 
 import com.shimmerresearch.driver.ObjectCluster;
 import com.shimmerresearch.driverUtilities.ChannelDetails.CHANNEL_TYPE;
-import com.shimmerresearch.protocolcore.CoreChannel;
+import com.shimmerresearch.logandstream.Channel;
 
 /**
  * The protocol core's samples as the Java driver's ObjectClusters, for code written against those
@@ -18,19 +18,19 @@ final class CoreSamples {
 	private CoreSamples() {
 	}
 
-	static String format(CoreChannel channel) {
-		return channel.format == CoreChannel.Format.CALIBRATED ? CHANNEL_TYPE.CAL.toString() : CHANNEL_TYPE.UNCAL.toString();
+	static String format(Channel channel) {
+		return channel.format == Channel.Format.CALIBRATED ? CHANNEL_TYPE.CAL.toString() : CHANNEL_TYPE.UNCAL.toString();
 	}
 
 	/** As buildMsg fills one: the device's name, the raw packet, the PC time, then every channel. */
-	static ObjectCluster toObjectCluster(List<CoreChannel> channels, double[] values, byte[] packet, String deviceName) {
+	static ObjectCluster toObjectCluster(List<Channel> channels, double[] values, byte[] packet, String deviceName) {
 		ObjectCluster oc = new ObjectCluster();
 		oc.setShimmerName(deviceName);
 		oc.mRawData = packet;
 		for (int i = 0; i < channels.size() && i < values.length; i++) {
-			CoreChannel c = channels.get(i);
+			Channel c = channels.get(i);
 			oc.addDataToMap(c.name, format(c), c.units, values[i]);
-			if (c.name.equals(SYSTEM_TIMESTAMP) && c.format == CoreChannel.Format.CALIBRATED) {
+			if (c.name.equals(SYSTEM_TIMESTAMP) && c.format == Channel.Format.CALIBRATED) {
 				oc.setSystemTimeStamp(values[i]);
 			}
 		}

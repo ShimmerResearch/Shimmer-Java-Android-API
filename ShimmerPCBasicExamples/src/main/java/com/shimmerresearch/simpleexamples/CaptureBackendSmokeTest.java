@@ -60,7 +60,6 @@ public class CaptureBackendSmokeTest {
 		List<Run> runs = new ArrayList<Run>();
 		List<CaptureBackend> backends = new ArrayList<CaptureBackend>();
 		backends.add(new DriverCaptureBackend());
-		backends.add(new ProtocolCaptureBackend());
 		CaptureBackend core = ShimmerBLECaptureExample.newCoreBackend();
 		if (core != null) {
 			backends.add(core);

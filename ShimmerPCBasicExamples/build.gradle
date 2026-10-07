@@ -99,16 +99,8 @@ task runBleTest(type: JavaExec) {
     standardInput = System.in
 }
 
-// DEV-1134: the I/O-free Shimmer3R protocol state machine on a real device.
-// Example: ./gradlew runProtocolLive --args="Shimmer3R-2F31 10"
-task runProtocolLive(type: JavaExec) {
-    group = 'native ble'
-    description = 'Drives a real Shimmer3R with the DEV-1134 protocol state machine over native BLE'
-    classpath = sourceSets.main.runtimeClasspath
-    mainClass = 'com.shimmerresearch.simpleexamples.bletest.LogAndStreamProtocolLiveTest'
-}
-
-// Both capture-app backends (today's driver, new state machine) on a real device, headless.
+// Both capture-app backends (the ShimmerBluetooth driver, and the LogAndStream protocol from the
+// Rust core when the build has it) on a real device, headless.
 // Example: ./gradlew runCaptureSmoke --args="Shimmer3R-2F31 5"
 task runCaptureSmoke(type: JavaExec) {
     group = 'native ble'

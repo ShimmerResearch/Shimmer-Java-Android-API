@@ -7,10 +7,9 @@ import com.shimmerresearch.driver.ShimmerDevice;
 import com.shimmerresearch.driver.ble.nativeble.NativeBleDevice;
 
 /**
- * One way for {@link ShimmerBLECaptureExample} to talk to a device, so the same app can run
- * today's driver ({@link DriverCaptureBackend}), the DEV-1134 protocol state machine
- * ({@link ProtocolCaptureBackend}) or the Rust protocol core (CoreCaptureBackend, when the build
- * has it) over the same native BLE transport.
+ * One way for {@link ShimmerBLECaptureExample} to talk to a device, so the same app can run the
+ * ShimmerBluetooth driver ({@link DriverCaptureBackend}) or the LogAndStream protocol from the Rust
+ * core (CoreCaptureBackend, when the build has it) over the same native BLE transport.
  */
 interface CaptureBackend {
 

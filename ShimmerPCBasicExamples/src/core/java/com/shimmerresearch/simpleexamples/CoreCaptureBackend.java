@@ -11,16 +11,17 @@ import com.shimmerresearch.driver.ble.nativeble.BleConnectionListener;
 import com.shimmerresearch.driver.ble.nativeble.BleUartProfile;
 import com.shimmerresearch.driver.ble.nativeble.NativeBleDevice;
 import com.shimmerresearch.driver.ble.nativeble.NativeBleException;
-import com.shimmerresearch.protocolcore.CoreChannel;
-import com.shimmerresearch.protocolcore.CoreEvent;
-import com.shimmerresearch.protocolcore.CoreHost;
-import com.shimmerresearch.protocolcore.LogAndStreamProtocolCore.State;
+import com.shimmerresearch.logandstream.Channel;
+import com.shimmerresearch.logandstream.Event;
+import com.shimmerresearch.logandstream.LogAndStreamHost;
+import com.shimmerresearch.logandstream.LogAndStreamProtocol.State;
 
 /**
- * The Rust protocol core (shimmer-protocol-core, through its Java binding) over native BLE. The
- * binding's {@link CoreHost} runs the protocol; all this class adds is the BLE link and the mapping
- * of events onto the capture app, samples becoming ObjectClusters. Shimmer3 (LogAndStream v1.1.3
- * onwards) and Shimmer3R; it cannot change the device's configuration yet.
+ * The LogAndStream protocol from the Rust core (shimmer-protocol-core, through its Java binding)
+ * over native BLE. The binding's {@link LogAndStreamHost} runs the protocol; all this class adds is
+ * the BLE link and the mapping of events onto the capture app, samples becoming ObjectClusters.
+ * Shimmer3 (LogAndStream v1.01.003 onwards) and Shimmer3R; it cannot change the device's
+ * configuration yet.
  * <p>
  * Built only when a checkout of shimmer-protocol-core sits beside this repository (see
  * build.gradle), so the app finds it by name.
@@ -32,7 +33,7 @@ class CoreCaptureBackend implements CaptureBackend {
 
 	private BleCentral mCentral;
 	private Listener mListener;
-	private volatile CoreHost mHost;
+	private volatile LogAndStreamHost mHost;
 	private volatile long mHandle = 0;
 	private volatile String mDeviceName = "";
 	private volatile double mPacketReceptionRate = Double.NaN;
@@ -59,7 +60,7 @@ class CoreCaptureBackend implements CaptureBackend {
 			mCentral = BleCentral.getDefault();
 			mDeviceName = device.getName();
 			mPacketReceptionRate = Double.NaN;
-			CoreHost host = new CoreHost(bytes -> mCentral.write(mHandle, bytes), this::onEvent);
+			LogAndStreamHost host = new LogAndStreamHost(bytes -> mCentral.write(mHandle, bytes), this::onEvent);
 			mHost = host;
 			mListener.onState("CONNECTING (BLE)");
 			mHandle = mCentral.connect(device.getId(), device.getProfile(), CONNECT_TIMEOUT_MS,
@@ -84,7 +85,7 @@ class CoreCaptureBackend implements CaptureBackend {
 	}
 
 	/** On the host's event thread. */
-	private void onEvent(CoreEvent e) {
+	private void onEvent(Event e) {
 		switch (e.type) {
 		case STATE_CHANGED:
 			mListener.onState(e.state.toString());
@@ -97,7 +98,7 @@ class CoreCaptureBackend implements CaptureBackend {
 			mListener.onReady();
 			break;
 		case SAMPLE:
-			List<CoreChannel> channels = channels();
+			List<Channel> channels = channels();
 			ObjectCluster sample = CoreSamples.toObjectCluster(channels, e.values, e.packet, mDeviceName);
 			double prr = sample.getFormatClusterValue(PACKET_RECEPTION_RATE, "CAL");
 			if (!Double.isNaN(prr)) {
@@ -119,15 +120,15 @@ class CoreCaptureBackend implements CaptureBackend {
 		}
 	}
 
-	private List<CoreChannel> channels() {
-		CoreHost host = mHost;
-		return host == null ? Collections.<CoreChannel>emptyList() : host.getChannels();
+	private List<Channel> channels() {
+		LogAndStreamHost host = mHost;
+		return host == null ? Collections.<Channel>emptyList() : host.getChannels();
 	}
 
 	@Override
 	public void disconnect() {
 		// Close the host first, so the transport's own disconnect is not reported as a lost link.
-		CoreHost host = mHost;
+		LogAndStreamHost host = mHost;
 		if (host != null) {
 			host.close();
 		}
@@ -147,7 +148,7 @@ class CoreCaptureBackend implements CaptureBackend {
 
 	@Override
 	public void startStreaming() {
-		CoreHost host = mHost;
+		LogAndStreamHost host = mHost;
 		if (host != null) {
 			host.startStreaming();
 		}
@@ -155,14 +156,14 @@ class CoreCaptureBackend implements CaptureBackend {
 
 	@Override
 	public void stopStreaming() {
-		CoreHost host = mHost;
+		LogAndStreamHost host = mHost;
 		if (host != null) {
 			host.stopStreaming();
 		}
 	}
 
 	private State state() {
-		CoreHost host = mHost;
+		LogAndStreamHost host = mHost;
 		return host == null ? State.DISCONNECTED : host.getState();
 	}
 
@@ -179,7 +180,7 @@ class CoreCaptureBackend implements CaptureBackend {
 
 	@Override
 	public double getSamplingRate() {
-		CoreHost host = mHost;
+		LogAndStreamHost host = mHost;
 		return host == null ? Double.NaN : host.getSamplingRate();
 	}
 
@@ -213,7 +214,7 @@ class CoreCaptureBackend implements CaptureBackend {
 			return null;
 		}
 		List<String[]> signals = new ArrayList<String[]>();
-		for (CoreChannel c : channels()) {
+		for (Channel c : channels()) {
 			signals.add(new String[] { mDeviceName, c.name, CoreSamples.format(c), c.units });
 		}
 		return signals;
