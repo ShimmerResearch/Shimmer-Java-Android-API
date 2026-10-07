@@ -60,16 +60,16 @@ dependencies {
     implementation 'com.parse.bolts:bolts-tasks:1.4.0'
 }
 
-// --- The Rust protocol core (DEV-1134) ------------------------------------------------------------
-// When settings.gradle found a checkout of shimmer-protocol-core, the capture example gets a backend
-// on the core (src/core/java), through the binding built from that checkout. The binding's jar
-// carries the core's native library from that checkout's target/release: run
-// 'cargo build --release' there first. -PnoProtocolCore builds without it.
-if (file('../../../shimmer-protocol-core/bindings/java').isDirectory() && !project.hasProperty('noProtocolCore')) {
+// --- shimmer-logandstream, the Rust LogAndStream library (DEV-1134) -------------------------------
+// When settings.gradle found a checkout of shimmer-logandstream, the capture example gets a driver
+// on it (src/shimmer-logandstream/java), through the binding built from that checkout. The binding's
+// jar carries the native library from that checkout's target/release: run 'cargo build --release'
+// there first. -PnoShimmerLogAndStream builds without it.
+if (file('../../../shimmer-logandstream/bindings/java').isDirectory() && !project.hasProperty('noShimmerLogAndStream')) {
     dependencies {
-        implementation 'com.shimmerresearch:shimmer-protocol-core:0.1.0'
+        implementation 'com.shimmerresearch:shimmer-logandstream:0.1.0'
     }
-    sourceSets.main.java.srcDir 'src/core/java'
+    sourceSets.main.java.srcDir 'src/shimmer-logandstream/java'
 }
 
 // --- Native BLE examples (DEV-1132) ------------------------------------------------------------
@@ -99,12 +99,12 @@ task runBleTest(type: JavaExec) {
     standardInput = System.in
 }
 
-// Both capture-app backends (the ShimmerBluetooth driver, and the LogAndStream protocol from the
-// Rust core when the build has it) on a real device, headless.
+// Both capture-app drivers (ShimmerBluetooth, and the Rust LogAndStream library when the build has
+// it) on a real device, headless.
 // Example: ./gradlew runCaptureSmoke --args="Shimmer3R-2F31 5"
 task runCaptureSmoke(type: JavaExec) {
     group = 'native ble'
-    description = 'Runs both ShimmerBLECaptureExample backends against a real device and compares them'
+    description = 'Runs both ShimmerBLECaptureExample drivers against a real device and compares them'
     classpath = sourceSets.main.runtimeClasspath
-    mainClass = 'com.shimmerresearch.simpleexamples.CaptureBackendSmokeTest'
+    mainClass = 'com.shimmerresearch.simpleexamples.CaptureDriverSmokeTest'
 }

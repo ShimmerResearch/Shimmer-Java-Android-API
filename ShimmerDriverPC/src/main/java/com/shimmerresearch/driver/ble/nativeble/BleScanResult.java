@@ -1,14 +1,14 @@
 package com.shimmerresearch.driver.ble.nativeble;
 
 /** A device seen while scanning. */
-public final class NativeBleDevice {
+public final class BleScanResult {
 
 	private final String mId;
 	private final String mName;
 	private final String mAddress;
 	private final int mRssi;
 
-	public NativeBleDevice(String id, String name, String address, int rssi) {
+	public BleScanResult(String id, String name, String address, int rssi) {
 		mId = id;
 		mName = name == null ? "" : name;
 		mAddress = address == null ? "" : address;

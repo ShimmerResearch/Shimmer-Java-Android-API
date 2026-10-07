@@ -4,5 +4,5 @@ package com.shimmerresearch.driver.ble.nativeble;
 public interface BleScanListener {
 
 	/** Called for every advertisement, so the same device repeats with updated name or RSSI. */
-	void onDeviceFound(NativeBleDevice device);
+	void onDeviceFound(BleScanResult device);
 }

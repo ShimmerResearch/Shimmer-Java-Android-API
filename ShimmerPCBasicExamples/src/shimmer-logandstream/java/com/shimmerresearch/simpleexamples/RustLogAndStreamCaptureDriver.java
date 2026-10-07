@@ -8,83 +8,84 @@ import com.shimmerresearch.driver.ObjectCluster;
 import com.shimmerresearch.driver.ShimmerDevice;
 import com.shimmerresearch.driver.ble.nativeble.BleCentral;
 import com.shimmerresearch.driver.ble.nativeble.BleConnectionListener;
+import com.shimmerresearch.driver.ble.nativeble.BleScanResult;
 import com.shimmerresearch.driver.ble.nativeble.BleUartProfile;
-import com.shimmerresearch.driver.ble.nativeble.NativeBleDevice;
 import com.shimmerresearch.driver.ble.nativeble.NativeBleException;
+import com.shimmerresearch.driverUtilities.ChannelDetails.CHANNEL_TYPE;
 import com.shimmerresearch.logandstream.Channel;
 import com.shimmerresearch.logandstream.Event;
-import com.shimmerresearch.logandstream.LogAndStreamHost;
 import com.shimmerresearch.logandstream.LogAndStreamProtocol.State;
+import com.shimmerresearch.logandstream.LogAndStreamSession;
 
 /**
- * The LogAndStream protocol from the Rust core (shimmer-protocol-core, through its Java binding)
- * over native BLE. The binding's {@link LogAndStreamHost} runs the protocol; all this class adds is
- * the BLE link and the mapping of events onto the capture app, samples becoming ObjectClusters.
- * Shimmer3 (LogAndStream v1.01.003 onwards) and Shimmer3R; it cannot change the device's
- * configuration yet.
+ * Drives a Shimmer3 (LogAndStream v1.01.003 onwards) or Shimmer3R through shimmer-logandstream,
+ * the Rust LogAndStream library, over native BLE. The binding's {@link LogAndStreamSession} runs
+ * the protocol; all this class adds is the BLE link and the mapping of events onto the capture app,
+ * samples becoming ObjectClusters. It cannot change the device's configuration yet.
  * <p>
- * Built only when a checkout of shimmer-protocol-core sits beside this repository (see
+ * Built only when a checkout of shimmer-logandstream sits beside this repository (see
  * build.gradle), so the app finds it by name.
  */
-class CoreCaptureBackend implements CaptureBackend {
+class RustLogAndStreamCaptureDriver implements CaptureDriver {
 
 	private static final int CONNECT_TIMEOUT_MS = 20000;
 	private static final String PACKET_RECEPTION_RATE = "Packet_Reception_Rate_Trial";
+	private static final String SYSTEM_TIMESTAMP = "System_Timestamp";
 
 	private BleCentral mCentral;
 	private Listener mListener;
-	private volatile LogAndStreamHost mHost;
+	private volatile LogAndStreamSession mSession;
 	private volatile long mHandle = 0;
 	private volatile String mDeviceName = "";
 	private volatile double mPacketReceptionRate = Double.NaN;
 
 	@Override
 	public String label() {
-		return "core";
+		return "rust-logandstream";
 	}
 
 	@Override
-	public void connect(final NativeBleDevice device, final Listener listener) {
+	public void connect(final BleScanResult device, final Listener listener) {
 		mListener = listener;
 		if (device.getProfile() != BleUartProfile.SHIMMER3R && device.getProfile() != BleUartProfile.SHIMMER3) {
-			listener.onError("The protocol core supports Shimmer3 and Shimmer3R; " + device.getName() + " is neither.");
+			listener.onError("The Rust LogAndStream library supports Shimmer3 and Shimmer3R; " + device.getName() + " is neither.");
 			return;
 		}
-		Thread t = new Thread(() -> connectBlocking(device), "CoreCapture-connect");
+		Thread t = new Thread(() -> connectBlocking(device), "RustLogAndStream-connect");
 		t.setDaemon(true);
 		t.start();
 	}
 
-	private void connectBlocking(NativeBleDevice device) {
+	private void connectBlocking(BleScanResult device) {
 		try {
 			mCentral = BleCentral.getDefault();
 			mDeviceName = device.getName();
 			mPacketReceptionRate = Double.NaN;
-			LogAndStreamHost host = new LogAndStreamHost(bytes -> mCentral.write(mHandle, bytes), this::onEvent);
-			mHost = host;
+			LogAndStreamSession session = new LogAndStreamSession(bytes -> mCentral.write(mHandle, bytes), this::onEvent);
+			mSession = session;
 			mListener.onState("CONNECTING (BLE)");
 			mHandle = mCentral.connect(device.getId(), device.getProfile(), CONNECT_TIMEOUT_MS,
 					new BleConnectionListener() {
 						@Override
 						public void onBytes(byte[] data) {
-							host.onBytes(data);
+							session.onBytes(data);
 						}
 
 						@Override
 						public void onDisconnected(String reason) {
 							mHandle = 0;
-							host.onLinkLost(reason);
+							session.onLinkLost(reason);
 						}
 					});
-			host.connect();
+			session.connect();
 		} catch (Exception | LinkageError e) {
-			// LinkageError: the core's library not found (UnsatisfiedLinkError), or the binding unusable.
+			// LinkageError: the native library not found (UnsatisfiedLinkError), or the binding unusable.
 			mListener.onError("Connect failed: " + e.getMessage());
 			disconnect();
 		}
 	}
 
-	/** On the host's event thread. */
+	/** On the session's event thread. */
 	private void onEvent(Event e) {
 		switch (e.type) {
 		case STATE_CHANGED:
@@ -94,12 +95,12 @@ class CoreCaptureBackend implements CaptureBackend {
 			}
 			break;
 		case INITIALISED:
-			System.out.println("CoreCapture: " + e.message);
+			System.out.println("RustLogAndStream: " + e.message);
 			mListener.onReady();
 			break;
 		case SAMPLE:
 			List<Channel> channels = channels();
-			ObjectCluster sample = CoreSamples.toObjectCluster(channels, e.values, e.packet, mDeviceName);
+			ObjectCluster sample = toObjectCluster(channels, e.values, e.packet, mDeviceName);
 			double prr = sample.getFormatClusterValue(PACKET_RECEPTION_RATE, "CAL");
 			if (!Double.isNaN(prr)) {
 				mPacketReceptionRate = prr;
@@ -113,7 +114,7 @@ class CoreCaptureBackend implements CaptureBackend {
 			mListener.onState("CONNECTION_LOST (" + e.message + ")");
 			break;
 		case DISCARDED:
-			System.out.println("CoreCapture: " + e.message);
+			System.out.println("RustLogAndStream: " + e.message);
 			break;
 		default:
 			break;
@@ -121,16 +122,16 @@ class CoreCaptureBackend implements CaptureBackend {
 	}
 
 	private List<Channel> channels() {
-		LogAndStreamHost host = mHost;
-		return host == null ? Collections.<Channel>emptyList() : host.getChannels();
+		LogAndStreamSession session = mSession;
+		return session == null ? Collections.<Channel>emptyList() : session.getChannels();
 	}
 
 	@Override
 	public void disconnect() {
-		// Close the host first, so the transport's own disconnect is not reported as a lost link.
-		LogAndStreamHost host = mHost;
-		if (host != null) {
-			host.close();
+		// Close the session first, so the transport's own disconnect is not reported as a lost link.
+		LogAndStreamSession session = mSession;
+		if (session != null) {
+			session.close();
 		}
 		long handle = mHandle;
 		mHandle = 0;
@@ -138,7 +139,7 @@ class CoreCaptureBackend implements CaptureBackend {
 			try {
 				mCentral.disconnect(handle);
 			} catch (NativeBleException e) {
-				System.out.println("CoreCapture: disconnect: " + e.getMessage());
+				System.out.println("RustLogAndStream: disconnect: " + e.getMessage());
 			}
 		}
 		if (mListener != null) {
@@ -148,23 +149,23 @@ class CoreCaptureBackend implements CaptureBackend {
 
 	@Override
 	public void startStreaming() {
-		LogAndStreamHost host = mHost;
-		if (host != null) {
-			host.startStreaming();
+		LogAndStreamSession session = mSession;
+		if (session != null) {
+			session.startStreaming();
 		}
 	}
 
 	@Override
 	public void stopStreaming() {
-		LogAndStreamHost host = mHost;
-		if (host != null) {
-			host.stopStreaming();
+		LogAndStreamSession session = mSession;
+		if (session != null) {
+			session.stopStreaming();
 		}
 	}
 
 	private State state() {
-		LogAndStreamHost host = mHost;
-		return host == null ? State.DISCONNECTED : host.getState();
+		LogAndStreamSession session = mSession;
+		return session == null ? State.DISCONNECTED : session.getState();
 	}
 
 	@Override
@@ -180,8 +181,8 @@ class CoreCaptureBackend implements CaptureBackend {
 
 	@Override
 	public double getSamplingRate() {
-		LogAndStreamHost host = mHost;
-		return host == null ? Double.NaN : host.getSamplingRate();
+		LogAndStreamSession session = mSession;
+		return session == null ? Double.NaN : session.getSamplingRate();
 	}
 
 	@Override
@@ -202,7 +203,7 @@ class CoreCaptureBackend implements CaptureBackend {
 		return mPacketReceptionRate;
 	}
 
-	/** None: the core describes its channels itself (see {@link #getSignalsForPlot()}). */
+	/** None: the library describes its channels itself (see {@link #getSignalsForPlot()}). */
 	@Override
 	public ShimmerDevice getDeviceForPlot() {
 		return null;
@@ -215,7 +216,7 @@ class CoreCaptureBackend implements CaptureBackend {
 		}
 		List<String[]> signals = new ArrayList<String[]>();
 		for (Channel c : channels()) {
-			signals.add(new String[] { mDeviceName, c.name, CoreSamples.format(c), c.units });
+			signals.add(new String[] { mDeviceName, c.name, format(c), c.units });
 		}
 		return signals;
 	}
@@ -223,5 +224,30 @@ class CoreCaptureBackend implements CaptureBackend {
 	@Override
 	public boolean canConfigure() {
 		return false;
+	}
+
+	private static String format(Channel channel) {
+		return channel.format == Channel.Format.CALIBRATED ? CHANNEL_TYPE.CAL.toString() : CHANNEL_TYPE.UNCAL.toString();
+	}
+
+	/**
+	 * A sample as the Java driver's ObjectCluster, for code written against those (plots, the CSV
+	 * log); filled as buildMsg fills one: the device's name, the raw packet, the PC time, then every
+	 * channel. The library's channels already are the driver's: the same names, units and order,
+	 * each calibrated (CAL) and raw (UNCAL).
+	 */
+	private static ObjectCluster toObjectCluster(List<Channel> channels, double[] values, byte[] packet,
+			String deviceName) {
+		ObjectCluster oc = new ObjectCluster();
+		oc.setShimmerName(deviceName);
+		oc.mRawData = packet;
+		for (int i = 0; i < channels.size() && i < values.length; i++) {
+			Channel c = channels.get(i);
+			oc.addDataToMap(c.name, format(c), c.units, values[i]);
+			if (c.name.equals(SYSTEM_TIMESTAMP) && c.format == Channel.Format.CALIBRATED) {
+				oc.setSystemTimeStamp(values[i]);
+			}
+		}
+		return oc;
 	}
 }

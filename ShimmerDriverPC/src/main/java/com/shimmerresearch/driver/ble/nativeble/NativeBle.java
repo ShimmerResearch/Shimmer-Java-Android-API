@@ -1,7 +1,7 @@
 package com.shimmerresearch.driver.ble.nativeble;
 
 /**
- * JNI declarations for the shimmerble native library, built from ShimmerBLENativeLib/ in this
+ * JNI declarations for the shimmerble native library, built from shimmerble/ in this
  * repository.
  * <p>
  * This class is the contract with the native code. The Rust function names are derived from this

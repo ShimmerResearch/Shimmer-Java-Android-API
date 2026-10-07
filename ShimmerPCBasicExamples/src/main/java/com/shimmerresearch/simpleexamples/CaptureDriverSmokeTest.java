@@ -7,24 +7,24 @@ import java.util.function.BooleanSupplier;
 
 import com.shimmerresearch.driver.ObjectCluster;
 import com.shimmerresearch.driver.ble.nativeble.BleCentral;
-import com.shimmerresearch.driver.ble.nativeble.NativeBleDevice;
+import com.shimmerresearch.driver.ble.nativeble.BleScanResult;
 import com.shimmerresearch.simpleexamples.bletest.BleTransport;
 
 /**
- * Runs every {@link ShimmerBLECaptureExample} backend against a real device, headless: connect,
+ * Runs every {@link ShimmerBLECaptureExample} driver against a real device, headless: connect,
  * stream, stop, disconnect, then compare what each delivered. Checks the capture app's glue
- * before anyone clicks through it. The Rust protocol core's backend runs too when the build has it.
+ * before anyone clicks through it. The Rust LogAndStream driver runs too when the build has it.
  *
  * <pre>
- * CaptureBackendSmokeTest &lt;device name&gt; [seconds per backend]
+ * CaptureDriverSmokeTest &lt;device name&gt; [seconds per driver]
  * </pre>
  */
-public class CaptureBackendSmokeTest {
+public class CaptureDriverSmokeTest {
 
 	private static final String[] COMPARED = { "Accel_LN_X", "Accel_LN_Y", "Accel_LN_Z", "Gyro_X", "Gyro_Y", "Gyro_Z",
 			"Mag_X", "Mag_Y", "Mag_Z", "Battery" };
 
-	static final class Run implements CaptureBackend.Listener {
+	static final class Run implements CaptureDriver.Listener {
 		final List<ObjectCluster> samples = Collections.synchronizedList(new ArrayList<ObjectCluster>());
 		final List<String> errors = Collections.synchronizedList(new ArrayList<String>());
 		volatile boolean ready = false;
@@ -58,20 +58,20 @@ public class CaptureBackendSmokeTest {
 
 		List<String> labels = new ArrayList<String>();
 		List<Run> runs = new ArrayList<Run>();
-		List<CaptureBackend> backends = new ArrayList<CaptureBackend>();
-		backends.add(new DriverCaptureBackend());
-		CaptureBackend core = ShimmerBLECaptureExample.newCoreBackend();
-		if (core != null) {
-			backends.add(core);
+		List<CaptureDriver> drivers = new ArrayList<CaptureDriver>();
+		drivers.add(new ShimmerBluetoothCaptureDriver());
+		CaptureDriver rust = ShimmerBLECaptureExample.newRustLogAndStreamDriver();
+		if (rust != null) {
+			drivers.add(rust);
 		} else {
-			System.out.println("(the Rust protocol core's backend is not in this build)");
+			System.out.println("(the Rust LogAndStream driver is not in this build)");
 		}
-		for (CaptureBackend backend : backends) {
+		for (CaptureDriver driver : drivers) {
 			if (!runs.isEmpty()) {
 				Thread.sleep(3000);
 			}
-			labels.add(backend.label());
-			runs.add(run(backend, central, name, seconds));
+			labels.add(driver.label());
+			runs.add(run(driver, central, name, seconds));
 		}
 
 		boolean ok = true;
@@ -86,15 +86,15 @@ public class CaptureBackendSmokeTest {
 				System.out.println(labels.get(i) + " has the driver's channels: " + same + " (" + channels.size() + ")");
 				ok &= same;
 			}
-			StringBuilder header = new StringBuilder(String.format("%-14s", "mean of"));
+			StringBuilder header = new StringBuilder(String.format("%-18s", "mean of"));
 			for (String label : labels) {
-				header.append(String.format(" %14s", label));
+				header.append(String.format(" %18s", label));
 			}
 			System.out.println(header);
 			for (String channel : COMPARED) {
-				StringBuilder row = new StringBuilder(String.format("%-14s", channel));
+				StringBuilder row = new StringBuilder(String.format("%-18s", channel));
 				for (Run r : runs) {
-					row.append(String.format(" %14.4f", mean(r.samples, channel)));
+					row.append(String.format(" %18.4f", mean(r.samples, channel)));
 				}
 				System.out.println(row);
 			}
@@ -103,31 +103,31 @@ public class CaptureBackendSmokeTest {
 		System.exit(ok ? 0 : 1);
 	}
 
-	private static Run run(CaptureBackend backend, BleCentral central, String name, int seconds) throws Exception {
-		System.out.println("== " + backend.label());
+	private static Run run(CaptureDriver driver, BleCentral central, String name, int seconds) throws Exception {
+		System.out.println("== " + driver.label());
 		Run run = new Run();
-		NativeBleDevice device = BleTransport.scanFor(central, name, 20000);
-		backend.connect(device, run);
+		BleScanResult device = BleTransport.scanFor(central, name, 20000);
+		driver.connect(device, run);
 		waitUntil(30000, () -> run.ready || !run.errors.isEmpty());
 		if (!run.ready) {
 			return run;
 		}
-		List<String[]> signals = backend.getSignalsForPlot();
-		System.out.println("    connected; MTU " + backend.getMtu() + ", " + backend.getSamplingRate() + " Hz, plot device "
-				+ (backend.getDeviceForPlot() != null) + ", plot signals " + (signals == null ? "none" : signals.size()));
-		if (backend.getDeviceForPlot() == null && signals == null) {
+		List<String[]> signals = driver.getSignalsForPlot();
+		System.out.println("    connected; MTU " + driver.getMtu() + ", " + driver.getSamplingRate() + " Hz, plot device "
+				+ (driver.getDeviceForPlot() != null) + ", plot signals " + (signals == null ? "none" : signals.size()));
+		if (driver.getDeviceForPlot() == null && signals == null) {
 			run.errors.add("nothing to plot from: no device and no signals");
 		}
-		backend.startStreaming();
-		waitUntil(10000, backend::isStreaming);
+		driver.startStreaming();
+		waitUntil(10000, driver::isStreaming);
 		long started = System.currentTimeMillis();
 		Thread.sleep(seconds * 1000L);
-		backend.stopStreaming();
-		waitUntil(10000, () -> !backend.isStreaming());
+		driver.stopStreaming();
+		waitUntil(10000, () -> !driver.isStreaming());
 		double rate = run.samples.size() / ((System.currentTimeMillis() - started) / 1000.0);
 		System.out.println(String.format("    %d samples, %.1f /s, reception %.1f%%", run.samples.size(), rate,
-				backend.getPacketReceptionRate()));
-		backend.disconnect();
+				driver.getPacketReceptionRate()));
+		driver.disconnect();
 		return run;
 	}
 

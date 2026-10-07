@@ -25,10 +25,10 @@ project(':ShimmerDriverPC').projectDir = new File(settingsDir, '../../Shimmer-Ja
 include ':ShimmerBluetoothManager'
 project(':ShimmerBluetoothManager').projectDir = new File(settingsDir, '../../Shimmer-Java-Android-API/ShimmerBluetoothManager')
 
-// DEV-1134: the Rust protocol core's Java binding, built from a checkout of shimmer-protocol-core
-// beside this repository, where the team's layout puts it (C:\dev\shimmer-protocol-core). Without
-// it, or with -PnoProtocolCore, ShimmerBLECaptureExample simply has no "Rust protocol core" mode.
-def protocolCore = new File(settingsDir, '../../../shimmer-protocol-core/bindings/java')
-if (protocolCore.isDirectory() && !startParameter.projectProperties.containsKey('noProtocolCore')) {
-    includeBuild(protocolCore)
+// DEV-1134: the Java binding of shimmer-logandstream, the Rust LogAndStream library, built from a
+// checkout beside this repository, where the team's layout puts it (C:\dev\shimmer-logandstream).
+// Without it, or with -PnoShimmerLogAndStream, ShimmerBLECaptureExample has no Rust LogAndStream mode.
+def shimmerLogAndStream = new File(settingsDir, '../../../shimmer-logandstream/bindings/java')
+if (shimmerLogAndStream.isDirectory() && !startParameter.projectProperties.containsKey('noShimmerLogAndStream')) {
+    includeBuild(shimmerLogAndStream)
 }

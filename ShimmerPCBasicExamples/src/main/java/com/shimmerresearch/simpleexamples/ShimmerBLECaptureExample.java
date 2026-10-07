@@ -36,7 +36,7 @@ import com.shimmerresearch.driver.ObjectCluster;
 import com.shimmerresearch.driver.ShimmerDevice;
 import com.shimmerresearch.driver.ble.nativeble.BleCentral;
 import com.shimmerresearch.driver.ble.nativeble.BleScanListener;
-import com.shimmerresearch.driver.ble.nativeble.NativeBleDevice;
+import com.shimmerresearch.driver.ble.nativeble.BleScanResult;
 import com.shimmerresearch.driver.ble.nativeble.NativeBleException;
 import com.shimmerresearch.driver.ble.nativeble.NativeBleRadio;
 import com.shimmerresearch.driverUtilities.ChannelDetails.CHANNEL_TYPE;
@@ -52,13 +52,13 @@ import info.monitorenter.gui.chart.Chart2D;
  * library, with a choice of driver:
  * <ul>
  * <li><b>ShimmerBluetooth driver</b> - ShimmerBLENative, as DEV-1132 built it;</li>
- * <li><b>LogAndStream protocol (Rust core)</b> - the protocol from shimmer-protocol-core, through
- * its Java binding. Offered only when this build has it: a checkout of shimmer-protocol-core beside
+ * <li><b>Rust LogAndStream library</b> - the protocol from shimmer-logandstream, through
+ * its Java binding. Offered only when this build has it: a checkout of shimmer-logandstream beside
  * this repository (see build.gradle).</li>
  * </ul>
  * Both write the same CSV format, so recordings from the same device can be compared directly.
- * The core cannot change the configuration yet: set the device up in driver mode (settings persist
- * on the device), then reconnect in the core's mode.
+ * The Rust library cannot change the configuration yet: set the device up with ShimmerBluetooth
+ * (settings persist on the device), then reconnect with the Rust library.
  * <p>
  * Needs the native library: run {@code ./gradlew buildNative} in ShimmerDriverPC first, or pass
  * {@code -Dshimmer.ble.lib=<path to library>}. On macOS, run from Terminal and allow Terminal to use
@@ -66,16 +66,16 @@ import info.monitorenter.gui.chart.Chart2D;
  */
 public class ShimmerBLECaptureExample {
 
-	private static final String MODE_DRIVER = "ShimmerBluetooth driver (ShimmerBLENative)";
-	private static final String MODE_CORE = "LogAndStream protocol (Rust core)";
-	private static final String CORE_BACKEND = "com.shimmerresearch.simpleexamples.CoreCaptureBackend";
-	/** The binding's classes the backend needs, loaded up front so a broken binding is caught here. */
-	private static final String[] CORE_BINDING_CLASSES = { "com.shimmerresearch.logandstream.LogAndStreamHost",
+	private static final String MODE_SHIMMERBLUETOOTH = "ShimmerBluetooth driver (ShimmerBLENative)";
+	private static final String MODE_RUST_LOGANDSTREAM = "Rust LogAndStream library (shimmer-logandstream)";
+	private static final String RUST_LOGANDSTREAM_DRIVER = "com.shimmerresearch.simpleexamples.RustLogAndStreamCaptureDriver";
+	/** The binding's classes the driver needs, loaded up front so a broken binding is caught here. */
+	private static final String[] RUST_LOGANDSTREAM_BINDING_CLASSES = { "com.shimmerresearch.logandstream.LogAndStreamSession",
 			"com.shimmerresearch.logandstream.LogAndStreamProtocol$State", "com.shimmerresearch.logandstream.Event" };
 
 	private final JFrame mFrame = new JFrame("Shimmer BLE Capture (native)");
-	private final DefaultListModel<NativeBleDevice> mDeviceModel = new DefaultListModel<NativeBleDevice>();
-	private final JList<NativeBleDevice> mDeviceList = new JList<NativeBleDevice>(mDeviceModel);
+	private final DefaultListModel<BleScanResult> mDeviceModel = new DefaultListModel<BleScanResult>();
+	private final JList<BleScanResult> mDeviceList = new JList<BleScanResult>(mDeviceModel);
 	private final JComboBox<String> mMode = new JComboBox<String>(modes());
 	private final JButton mBtnScan = new JButton("Scan");
 	private final JButton mBtnConnect = new JButton("Connect");
@@ -96,7 +96,7 @@ public class ShimmerBLECaptureExample {
 	private final AtomicLong mPackets = new AtomicLong();
 
 	private BleCentral mCentral;
-	private volatile CaptureBackend mBackend;
+	private volatile CaptureDriver mDriver;
 	private volatile String mDeviceName = "";
 	private boolean mScanning = false;
 	private long mPacketsAtLastTick = 0;
@@ -182,16 +182,16 @@ public class ShimmerBLECaptureExample {
 		mBtnConnect.addActionListener(e -> connectSelected());
 		mBtnDisconnect.addActionListener(e -> disconnect());
 		mBtnSensors.addActionListener(e -> {
-			DriverCaptureBackend driver = (DriverCaptureBackend) mBackend;
+			ShimmerBluetoothCaptureDriver driver = (ShimmerBluetoothCaptureDriver) mDriver;
 			new EnableSensorsDialog(driver.getDeviceForPlot(), driver.getConfigManager()).showDialog();
 		});
 		mBtnConfig.addActionListener(e -> {
-			DriverCaptureBackend driver = (DriverCaptureBackend) mBackend;
+			ShimmerBluetoothCaptureDriver driver = (ShimmerBluetoothCaptureDriver) mDriver;
 			new SensorConfigDialog(driver.getDeviceForPlot(), driver.getConfigManager()).showDialog();
 		});
 		mBtnPlot.addActionListener(e -> {
-			ShimmerDevice device = mBackend.getDeviceForPlot();
-			List<String[]> signals = mBackend.getSignalsForPlot();
+			ShimmerDevice device = mDriver.getDeviceForPlot();
+			List<String[]> signals = mDriver.getSignalsForPlot();
 			if (device != null) {
 				new SignalsToPlotDialog().initialize(device, mPlotManager, mChart);
 			} else if (signals != null) {
@@ -207,7 +207,7 @@ public class ShimmerBLECaptureExample {
 			mCentral = BleCentral.getDefault();
 			String state = ((NativeBleRadio) mCentral.getRadio()).getAdapterState();
 			mCentral.addScanListener(new BleScanListener() {
-				public void onDeviceFound(final NativeBleDevice device) {
+				public void onDeviceFound(final BleScanResult device) {
 					if (device.getProfile() != null && device.getProfile().isShimmer3Family()) {
 						SwingUtilities.invokeLater(() -> addOrUpdateDevice(device));
 					}
@@ -225,7 +225,7 @@ public class ShimmerBLECaptureExample {
 		}
 	}
 
-	private void addOrUpdateDevice(NativeBleDevice device) {
+	private void addOrUpdateDevice(BleScanResult device) {
 		for (int i = 0; i < mDeviceModel.size(); i++) {
 			if (mDeviceModel.get(i).getId().equals(device.getId())) {
 				boolean selected = mDeviceList.getSelectedIndex() == i;
@@ -257,14 +257,14 @@ public class ShimmerBLECaptureExample {
 	}
 
 	private void connectSelected() {
-		final NativeBleDevice device = mDeviceList.getSelectedValue();
+		final BleScanResult device = mDeviceList.getSelectedValue();
 		if (device == null) {
 			JOptionPane.showMessageDialog(mFrame, "Scan, then select a device first.");
 			return;
 		}
-		final CaptureBackend backend = MODE_CORE.equals(mMode.getSelectedItem()) ? newCoreBackend()
-				: new DriverCaptureBackend();
-		mBackend = backend;
+		final CaptureDriver driver = MODE_RUST_LOGANDSTREAM.equals(mMode.getSelectedItem()) ? newRustLogAndStreamDriver()
+				: new ShimmerBluetoothCaptureDriver();
+		mDriver = driver;
 		mDeviceName = device.getName();
 		mPackets.set(0);
 		mFrame.setTitle("Shimmer BLE Capture (native) - " + mMode.getSelectedItem());
@@ -278,22 +278,22 @@ public class ShimmerBLECaptureExample {
 				}
 				mScanning = false;
 			}
-			backend.connect(device, new BackendListener(backend));
+			driver.connect(device, new DriverListener(driver));
 			onUi(this::updateButtons);
 		});
 	}
 
-	/** Receives one backend's events; ignores them once another backend has replaced it. */
-	private class BackendListener implements CaptureBackend.Listener {
-		private final CaptureBackend mOwner;
+	/** Receives one driver's events; ignores them once another driver has replaced it. */
+	private class DriverListener implements CaptureDriver.Listener {
+		private final CaptureDriver mOwner;
 
-		BackendListener(CaptureBackend owner) {
+		DriverListener(CaptureDriver owner) {
 			mOwner = owner;
 		}
 
 		@Override
 		public void onState(final String state) {
-			if (mBackend != mOwner) {
+			if (mDriver != mOwner) {
 				return;
 			}
 			if (state.startsWith("DISCONNECTED") || state.startsWith("CONNECTION_LOST")) {
@@ -307,14 +307,14 @@ public class ShimmerBLECaptureExample {
 
 		@Override
 		public void onReady() {
-			if (mBackend == mOwner) {
+			if (mDriver == mOwner) {
 				onUi(ShimmerBLECaptureExample.this::updateButtons);
 			}
 		}
 
 		@Override
 		public void onSample(ObjectCluster sample) {
-			if (mBackend != mOwner) {
+			if (mDriver != mOwner) {
 				return;
 			}
 			mPackets.incrementAndGet();
@@ -328,33 +328,33 @@ public class ShimmerBLECaptureExample {
 
 		@Override
 		public void onError(String message) {
-			if (mBackend == mOwner) {
+			if (mDriver == mOwner) {
 				showError(mOwner.label(), message);
 			}
 		}
 	}
 
 	private void disconnect() {
-		final CaptureBackend backend = mBackend;
-		if (backend == null) {
+		final CaptureDriver driver = mDriver;
+		if (driver == null) {
 			return;
 		}
 		runInBackground("disconnect", () -> {
-			backend.disconnect();
+			driver.disconnect();
 			closeLog();
 			onUi(this::updateButtons);
 		});
 	}
 
 	private void startStreaming() {
-		CaptureBackend backend = mBackend;
-		if (backend == null) {
+		CaptureDriver driver = mDriver;
+		if (driver == null) {
 			return;
 		}
 		if (mChkLog.isSelected()) {
 			String stamp = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
 			File file = new File(System.getProperty("user.dir"),
-					"shimmer_ble_" + mDeviceName + "_" + backend.label() + "_" + stamp + ".csv");
+					"shimmer_ble_" + mDeviceName + "_" + driver.label() + "_" + stamp + ".csv");
 			try {
 				mCsvLog.open(file);
 			} catch (IOException e) {
@@ -363,16 +363,16 @@ public class ShimmerBLECaptureExample {
 		}
 		try {
 			mPackets.set(0);
-			backend.startStreaming();
+			driver.startStreaming();
 		} catch (Exception e) {
 			showError("Start streaming", e.getMessage());
 		}
 	}
 
 	private void stopStreaming() {
-		CaptureBackend backend = mBackend;
-		if (backend != null) {
-			backend.stopStreaming();
+		CaptureDriver driver = mDriver;
+		if (driver != null) {
+			driver.stopStreaming();
 		}
 		closeLog();
 	}
@@ -385,53 +385,53 @@ public class ShimmerBLECaptureExample {
 	}
 
 	private void shutdown() {
-		CaptureBackend backend = mBackend;
-		if (backend != null && backend.isConnected()) {
-			backend.disconnect();
+		CaptureDriver driver = mDriver;
+		if (driver != null && driver.isConnected()) {
+			driver.disconnect();
 		}
 		mCsvLog.close();
 		System.exit(0);
 	}
 
-	/** The modes this build offers: the core's only if the build has its backend. */
+	/** The modes this build offers: the Rust LogAndStream one only if the build has its driver. */
 	private static String[] modes() {
-		return newCoreBackend() != null ? new String[] { MODE_DRIVER, MODE_CORE } : new String[] { MODE_DRIVER };
+		return newRustLogAndStreamDriver() != null ? new String[] { MODE_SHIMMERBLUETOOTH, MODE_RUST_LOGANDSTREAM } : new String[] { MODE_SHIMMERBLUETOOTH };
 	}
 
 	/**
-	 * The Rust protocol core's backend, or null if this build does not have it. Found by name, so
-	 * that the app builds without shimmer-protocol-core. If the build has it but its binding cannot
+	 * The Rust LogAndStream driver, or null if this build does not have it. Found by name, so
+	 * that the app builds without shimmer-logandstream. If the build has it but its binding cannot
 	 * be loaded (built for a newer Java, say), says why on the console and offers no such mode.
 	 */
-	static CaptureBackend newCoreBackend() {
-		Class<?> backend;
+	static CaptureDriver newRustLogAndStreamDriver() {
+		Class<?> driver;
 		try {
-			backend = Class.forName(CORE_BACKEND);
+			driver = Class.forName(RUST_LOGANDSTREAM_DRIVER);
 		} catch (ClassNotFoundException e) {
 			return null;
 		}
 		try {
-			for (String binding : CORE_BINDING_CLASSES) {
+			for (String binding : RUST_LOGANDSTREAM_BINDING_CLASSES) {
 				Class.forName(binding);
 			}
-			return (CaptureBackend) backend.getDeclaredConstructor().newInstance();
+			return (CaptureDriver) driver.getDeclaredConstructor().newInstance();
 		} catch (ReflectiveOperationException | LinkageError e) {
-			System.err.println("The Rust protocol core mode is unavailable: its Java binding cannot be loaded: " + e);
+			System.err.println("The Rust LogAndStream mode is unavailable: its Java binding cannot be loaded: " + e);
 			return null;
 		}
 	}
 
 	private void updateButtons() {
-		CaptureBackend backend = mBackend;
+		CaptureDriver driver = mDriver;
 		boolean ready = mCentral != null;
-		boolean connected = backend != null && backend.isConnected();
-		boolean streaming = connected && backend.isStreaming();
-		boolean configurable = connected && !streaming && backend.canConfigure();
+		boolean connected = driver != null && driver.isConnected();
+		boolean streaming = connected && driver.isStreaming();
+		boolean configurable = connected && !streaming && driver.canConfigure();
 		mMode.setEnabled(!connected);
 		mBtnScan.setEnabled(ready);
 		mBtnScan.setText(mScanning ? "Stop scan" : "Scan");
 		mBtnConnect.setEnabled(ready && !connected);
-		mBtnDisconnect.setEnabled(backend != null);
+		mBtnDisconnect.setEnabled(driver != null);
 		mBtnSensors.setEnabled(configurable);
 		mBtnConfig.setEnabled(configurable);
 		mBtnPlot.setEnabled(connected);
@@ -441,17 +441,17 @@ public class ShimmerBLECaptureExample {
 	}
 
 	private void updateStats() {
-		CaptureBackend backend = mBackend;
-		if (backend == null || !backend.isConnected()) {
+		CaptureDriver driver = mDriver;
+		if (driver == null || !driver.isConnected()) {
 			return;
 		}
 		updateButtons();
 		long packets = mPackets.get();
 		long perSecond = packets - mPacketsAtLastTick;
 		mPacketsAtLastTick = packets;
-		double prr = backend.getPacketReceptionRate();
+		double prr = driver.getPacketReceptionRate();
 		mLblStats.setText(String.format("[%s]   MTU %d   |   sampling %.1f Hz   |   %d packets/s   |   %d packets   |   reception %s",
-				backend.label(), backend.getMtu(), backend.getSamplingRate(), perSecond, packets,
+				driver.label(), driver.getMtu(), driver.getSamplingRate(), perSecond, packets,
 				Double.isNaN(prr) ? "-" : String.format("%.1f%%", prr)));
 	}
 

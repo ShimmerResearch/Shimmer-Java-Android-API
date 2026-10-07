@@ -119,9 +119,9 @@ public class API_00025_NativeBleCentralTest {
 
 	@Test
 	public void aNamelessAdvertisementKeepsTheNameSeenEarlier() throws Exception {
-		final List<NativeBleDevice> seen = Collections.synchronizedList(new ArrayList<NativeBleDevice>());
+		final List<BleScanResult> seen = Collections.synchronizedList(new ArrayList<BleScanResult>());
 		mCentral.addScanListener(new BleScanListener() {
-			public void onDeviceFound(NativeBleDevice device) {
+			public void onDeviceFound(BleScanResult device) {
 				seen.add(device);
 			}
 		});
@@ -134,7 +134,7 @@ public class API_00025_NativeBleCentralTest {
 				return seen.size() == 2;
 			}
 		});
-		NativeBleDevice device = mCentral.getDiscoveredDevice(ID);
+		BleScanResult device = mCentral.getDiscoveredDevice(ID);
 		assertEquals("Shimmer3R-2F31-BLE", device.getName());
 		assertEquals(-55, device.getRssi());
 		assertEquals("E8EB1B712F31", device.getMacId());

@@ -8,7 +8,7 @@ import java.util.concurrent.TimeUnit;
 
 import com.shimmerresearch.driver.ble.nativeble.BleCentral;
 import com.shimmerresearch.driver.ble.nativeble.BleScanListener;
-import com.shimmerresearch.driver.ble.nativeble.NativeBleDevice;
+import com.shimmerresearch.driver.ble.nativeble.BleScanResult;
 import com.shimmerresearch.driver.ble.nativeble.NativeBleEvent;
 import com.shimmerresearch.driver.ble.nativeble.NativeBleLoader;
 import com.shimmerresearch.driver.ble.nativeble.NativeBleRadio;
@@ -85,17 +85,17 @@ public abstract class BleTransport {
 				// A connected device does not advertise; connect falls back to looking it up by ID.
 				System.out.println(nameFilter + " is not advertising; trying " + knownId + " as an already-connected device");
 				String address = knownId.contains(":") ? knownId : "";
-				return new NativeDevice(mCentral, new NativeBleDevice(knownId, nameFilter, address, NativeBleEvent.RSSI_UNKNOWN));
+				return new NativeDevice(mCentral, new BleScanResult(knownId, nameFilter, address, NativeBleEvent.RSSI_UNKNOWN));
 			}
 		}
 	}
 
 	/** Scans until a Shimmer3-family device whose name contains {@code nameFilter} advertises. */
-	public static NativeBleDevice scanFor(BleCentral central, final String nameFilter, int timeoutMs) throws Exception {
-		final NativeBleDevice[] found = new NativeBleDevice[1];
+	public static BleScanResult scanFor(BleCentral central, final String nameFilter, int timeoutMs) throws Exception {
+		final BleScanResult[] found = new BleScanResult[1];
 		final CountDownLatch latch = new CountDownLatch(1);
 		BleScanListener listener = new BleScanListener() {
-			public void onDeviceFound(NativeBleDevice device) {
+			public void onDeviceFound(BleScanResult device) {
 				if (device.getName().contains(nameFilter) && device.getProfile() != null
 						&& device.getProfile().isShimmer3Family()) {
 					found[0] = device;
@@ -120,7 +120,7 @@ public abstract class BleTransport {
 		private final BleCentral mCentral;
 		private final String mName;
 
-		NativeDevice(BleCentral central, NativeBleDevice device) {
+		NativeDevice(BleCentral central, BleScanResult device) {
 			super(new ShimmerBLENative(device));
 			mCentral = central;
 			mName = device.getName();

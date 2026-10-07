@@ -19,8 +19,8 @@ import com.shimmerresearch.driver.ShimmerMsg;
 import com.shimmerresearch.driver.ThreadSafeByteFifoBuffer;
 import com.shimmerresearch.driver.ble.nativeble.BleCentral;
 import com.shimmerresearch.driver.ble.nativeble.BleConnectionListener;
+import com.shimmerresearch.driver.ble.nativeble.BleScanResult;
 import com.shimmerresearch.driver.ble.nativeble.BleUartProfile;
-import com.shimmerresearch.driver.ble.nativeble.NativeBleDevice;
 import com.shimmerresearch.driver.ble.nativeble.NativeBleException;
 import com.shimmerresearch.driver.shimmer2r3.ConfigByteLayoutShimmer3;
 import com.shimmerresearch.driverUtilities.SensorDetails;
@@ -28,7 +28,7 @@ import com.shimmerresearch.driverUtilities.ShimmerVerDetails.HW_ID;
 import com.shimmerresearch.exceptions.ShimmerException;
 
 /**
- * Shimmer3 and Shimmer3R over BLE through the in-process native library (ShimmerBLENativeLib/),
+ * Shimmer3 and Shimmer3R over BLE through the in-process native library (shimmerble/),
  * instead of the gRPC BLE server that {@link ShimmerGRPC} uses.
  * <p>
  * The device must have been seen by a {@link BleCentral} scan before {@link #connect} is called:
@@ -59,8 +59,8 @@ public class ShimmerBLENative extends ShimmerBluetooth implements Serializable {
 	private transient AtomicBoolean mLinkLostHandled = new AtomicBoolean(false);
 
 	/**
-	 * @param deviceId   the scan result's ID ({@link NativeBleDevice#getId()})
-	 * @param deviceName the advertised name ({@link NativeBleDevice#getName()})
+	 * @param deviceId   the scan result's ID ({@link BleScanResult#getId()})
+	 * @param deviceName the advertised name ({@link BleScanResult#getName()})
 	 */
 	public ShimmerBLENative(String deviceId, String deviceName) {
 		super();
@@ -71,7 +71,7 @@ public class ShimmerBLENative extends ShimmerBluetooth implements Serializable {
 		mUseProcessingThread = true;
 	}
 
-	public ShimmerBLENative(NativeBleDevice device) {
+	public ShimmerBLENative(BleScanResult device) {
 		this(device.getId(), device.getName());
 		if (!device.getMacId().isEmpty()) {
 			mMyBluetoothAddress = device.getMacId();

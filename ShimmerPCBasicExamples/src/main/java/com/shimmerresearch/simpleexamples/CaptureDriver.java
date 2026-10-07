@@ -4,16 +4,17 @@ import java.util.List;
 
 import com.shimmerresearch.driver.ObjectCluster;
 import com.shimmerresearch.driver.ShimmerDevice;
-import com.shimmerresearch.driver.ble.nativeble.NativeBleDevice;
+import com.shimmerresearch.driver.ble.nativeble.BleScanResult;
 
 /**
  * One way for {@link ShimmerBLECaptureExample} to talk to a device, so the same app can run the
- * ShimmerBluetooth driver ({@link DriverCaptureBackend}) or the LogAndStream protocol from the Rust
- * core (CoreCaptureBackend, when the build has it) over the same native BLE transport.
+ * ShimmerBluetooth driver ({@link ShimmerBluetoothCaptureDriver}) or the LogAndStream protocol from the Rust
+ * library (RustLogAndStreamCaptureDriver, when the build has it) over the same native BLE
+ * transport.
  */
-interface CaptureBackend {
+interface CaptureDriver {
 
-	/** Called on backend threads; implementations of the UI hand them to the Swing thread. */
+	/** Called on driver threads; implementations of the UI hand them to the Swing thread. */
 	interface Listener {
 		void onState(String state);
 
@@ -29,7 +30,7 @@ interface CaptureBackend {
 	String label();
 
 	/** Starts connecting; the outcome arrives through the listener. */
-	void connect(NativeBleDevice device, Listener listener);
+	void connect(BleScanResult device, Listener listener);
 
 	void disconnect();
 
@@ -52,7 +53,7 @@ interface CaptureBackend {
 	ShimmerDevice getDeviceForPlot();
 
 	/**
-	 * For a backend with no ShimmerDevice to describe its channels: the signals that can be
+	 * For a driver with no ShimmerDevice to describe its channels: the signals that can be
 	 * plotted, each {device name, channel, CAL or UNCAL, units} as the plot manager takes them.
 	 * Null if {@link #getDeviceForPlot()} describes them instead, or until connected.
 	 */
@@ -60,6 +61,6 @@ interface CaptureBackend {
 		return null;
 	}
 
-	/** True if this backend can change the device's configuration. */
+	/** True if this driver can change the device's configuration. */
 	boolean canConfigure();
 }

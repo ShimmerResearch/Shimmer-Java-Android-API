@@ -11,16 +11,16 @@ import javax.swing.JDialog;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 
-import com.shimmerresearch.driverUtilities.ChannelDetails.CHANNEL_TYPE;
 import com.shimmerresearch.driver.Configuration;
+import com.shimmerresearch.driverUtilities.ChannelDetails.CHANNEL_TYPE;
 import com.shimmerresearch.guiUtilities.plot.BasicPlotManagerPC;
 
 import info.monitorenter.gui.chart.Chart2D;
 
 /**
  * Chooses signals to plot from a list given as {device name, channel, CAL or UNCAL, units}, for a
- * backend with no ShimmerDevice to describe its channels (see
- * {@link CaptureBackend#getSignalsForPlot()}). Adds them as SignalsToPlotDialog does, against
+ * driver with no ShimmerDevice to describe its channels (see
+ * {@link CaptureDriver#getSignalsForPlot()}). Adds them as SignalsToPlotDialog does, against
  * the device's System_Timestamp_Plot.
  */
 final class SignalChooserDialog {

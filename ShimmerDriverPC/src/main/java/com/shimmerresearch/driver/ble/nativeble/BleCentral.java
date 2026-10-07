@@ -28,7 +28,7 @@ public class BleCentral {
 	private final Object mLock = new Object();
 	private final Map<Long, BleConnectionListener> mListeners = new HashMap<Long, BleConnectionListener>();
 	private final Map<Long, List<NativeBleEvent>> mPending = new HashMap<Long, List<NativeBleEvent>>();
-	private final Map<String, NativeBleDevice> mDiscovered = new LinkedHashMap<String, NativeBleDevice>();
+	private final Map<String, BleScanResult> mDiscovered = new LinkedHashMap<String, BleScanResult>();
 	private final List<BleScanListener> mScanListeners = new CopyOnWriteArrayList<BleScanListener>();
 	private final Thread mDispatcher;
 	private volatile boolean mRunning = true;
@@ -107,14 +107,14 @@ public class BleCentral {
 	}
 
 	/** Every device seen since this instance was created, in the order first seen, with its latest details. */
-	public Collection<NativeBleDevice> getDiscoveredDevices() {
+	public Collection<BleScanResult> getDiscoveredDevices() {
 		synchronized (mLock) {
-			return new ArrayList<NativeBleDevice>(mDiscovered.values());
+			return new ArrayList<BleScanResult>(mDiscovered.values());
 		}
 	}
 
 	/** The most recent scan result for {@code deviceId}, or null if it has not been seen. */
-	public NativeBleDevice getDiscoveredDevice(String deviceId) {
+	public BleScanResult getDiscoveredDevice(String deviceId) {
 		synchronized (mLock) {
 			return mDiscovered.get(deviceId);
 		}
@@ -188,12 +188,12 @@ public class BleCentral {
 	void dispatch(NativeBleEvent event) {
 		switch (event.type) {
 		case NativeBleEvent.TYPE_DEVICE_FOUND:
-			NativeBleDevice device = new NativeBleDevice(event.id, event.name, event.address, event.rssi);
+			BleScanResult device = new BleScanResult(event.id, event.name, event.address, event.rssi);
 			synchronized (mLock) {
 				// Advertisements without a name must not wipe a name seen earlier.
-				NativeBleDevice previous = mDiscovered.get(event.id);
+				BleScanResult previous = mDiscovered.get(event.id);
 				if (device.getName().isEmpty() && previous != null && !previous.getName().isEmpty()) {
-					device = new NativeBleDevice(event.id, previous.getName(), event.address, event.rssi);
+					device = new BleScanResult(event.id, previous.getName(), event.address, event.rssi);
 				}
 				mDiscovered.put(event.id, device);
 			}

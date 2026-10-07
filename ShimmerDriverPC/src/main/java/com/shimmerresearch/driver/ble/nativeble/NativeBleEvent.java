@@ -6,7 +6,7 @@ import com.shimmerresearch.driverUtilities.UtilShimmer;
  * An event from the native BLE library, in the order it happened.
  * <p>
  * Constructed by the native code: the constructor signature and the TYPE_* values are part of the
- * contract with ShimmerBLENativeLib/src/lib.rs and must not change on one side only.
+ * contract with shimmerble/src/lib.rs and must not change on one side only.
  */
 public final class NativeBleEvent {
 

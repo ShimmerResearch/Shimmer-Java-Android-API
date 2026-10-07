@@ -11,11 +11,11 @@ import com.shimmerresearch.tools.bluetooth.BasicShimmerBluetoothManagerPc;
  * its own map of devices it connected itself. This one answers with the device it was given
  * instead, and is created without starting the gRPC BLE server.
  */
-public class NativeBleBluetoothManager extends BasicShimmerBluetoothManagerPc {
+public class ShimmerBLENativeConfigManager extends BasicShimmerBluetoothManagerPc {
 
 	private volatile ShimmerDevice mDevice;
 
-	public NativeBleBluetoothManager() {
+	public ShimmerBLENativeConfigManager() {
 		super(false);
 	}
 

@@ -1,35 +1,35 @@
 package com.shimmerresearch.simpleexamples;
 
-import com.shimmerresearch.bluetooth.ShimmerBluetooth;
 import com.shimmerresearch.bluetooth.ShimmerBluetooth.BT_STATE;
+import com.shimmerresearch.bluetooth.ShimmerBluetooth;
 import com.shimmerresearch.driver.BasicProcessWithCallBack;
 import com.shimmerresearch.driver.CallbackObject;
 import com.shimmerresearch.driver.ObjectCluster;
 import com.shimmerresearch.driver.ShimmerDevice;
 import com.shimmerresearch.driver.ShimmerMsg;
-import com.shimmerresearch.driver.ble.nativeble.NativeBleDevice;
+import com.shimmerresearch.driver.ble.nativeble.BleScanResult;
 import com.shimmerresearch.exceptions.ShimmerException;
 import com.shimmerresearch.pcDriver.ShimmerBLENative;
 
 /** Today's driver: {@link ShimmerBLENative} (ShimmerBluetooth) over native BLE. */
-class DriverCaptureBackend implements CaptureBackend {
+class ShimmerBluetoothCaptureDriver implements CaptureDriver {
 
-	private final NativeBleBluetoothManager mConfigManager = new NativeBleBluetoothManager();
+	private final ShimmerBLENativeConfigManager mConfigManager = new ShimmerBLENativeConfigManager();
 	private volatile ShimmerBLENative mShimmer;
 	private volatile double mPacketReceptionRate = Double.NaN;
 
 	@Override
 	public String label() {
-		return "driver";
+		return "shimmerbluetooth";
 	}
 
 	/** For the driver's configuration dialogs, which write through a Bluetooth manager. */
-	NativeBleBluetoothManager getConfigManager() {
+	ShimmerBLENativeConfigManager getConfigManager() {
 		return mConfigManager;
 	}
 
 	@Override
-	public void connect(NativeBleDevice device, final Listener listener) {
+	public void connect(BleScanResult device, final Listener listener) {
 		ShimmerBLENative shimmer = new ShimmerBLENative(device);
 		new BasicProcessWithCallBack() {
 			@Override

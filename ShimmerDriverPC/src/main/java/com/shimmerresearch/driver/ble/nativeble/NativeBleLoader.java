@@ -27,7 +27,7 @@ import java.util.List;
  */
 public final class NativeBleLoader {
 
-	/** Must equal the version in ShimmerBLENativeLib/Cargo.toml. */
+	/** Must equal the version in shimmerble/Cargo.toml. */
 	public static final String EXPECTED_NATIVE_VERSION = "0.1.0";
 	/** System property overriding where the library is loaded from. */
 	public static final String PATH_PROPERTY = "shimmer.ble.lib";

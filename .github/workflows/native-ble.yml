@@ -1,4 +1,4 @@
-# Builds the shimmerble native BLE library (ShimmerBLENativeLib/) for each desktop platform.
+# Builds the shimmerble native BLE library (shimmerble/) for each desktop platform.
 #
 # The macOS library can only be built on a Mac (Apple's SDK licence), so this is where it comes
 # from. Each artifact unzips to native/<platform>/<library>, the layout NativeBleLoader expects:
@@ -10,11 +10,11 @@ name: Native BLE library
 on:
   push:
     paths:
-      - 'ShimmerBLENativeLib/**'
+      - 'shimmerble/**'
       - '.github/workflows/native-ble.yml'
   pull_request:
     paths:
-      - 'ShimmerBLENativeLib/**'
+      - 'shimmerble/**'
       - '.github/workflows/native-ble.yml'
   workflow_dispatch:
 
@@ -39,7 +39,7 @@ jobs:
     defaults:
       run:
         shell: bash
-        working-directory: ShimmerBLENativeLib
+        working-directory: shimmerble
     steps:
       - uses: actions/checkout@v4
 

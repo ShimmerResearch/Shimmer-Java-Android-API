@@ -1,4 +1,4 @@
-# ShimmerBLENativeLib
+# shimmerble
 
 The `shimmerble` native library: BLE for the Java driver, loaded into the JVM through JNI, in
 place of the gRPC BLE servers (`ShimmerBLEGrpc` in Shimmer-C-API and SwiftAPI). It is written in
