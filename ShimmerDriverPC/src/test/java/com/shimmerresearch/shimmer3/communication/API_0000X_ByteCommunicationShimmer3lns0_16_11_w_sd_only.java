@@ -1,4 +1,5 @@
 package com.shimmerresearch.shimmer3.communication;
+import org.junit.After;
 import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.FixMethodOrder;
@@ -28,26 +29,21 @@ import java.util.concurrent.TimeUnit;
 @FixMethodOrder(MethodSorters.NAME_ASCENDING) // Test methods will be run in alphabetical order
 public class API_0000X_ByteCommunicationShimmer3lns0_16_11_w_sd_only extends BasicProcessWithCallBack{
 	ShimmerPC mDevice;
-	TaskCompletionSource<Boolean> mWaitTask;
 	@Before
     public void setUp() {
 		mDevice = new ShimmerPC("COM99");
 		mDevice.setTestRadio(new ByteCommunicationSimulatorS3LNS0_16_11_w_sd_only("COM99"));
 		setWaitForData(mDevice);
     }
+
+	@After
+	public void tearDown() {
+		mDevice.disconnectNoException();
+	}
     
     @Test
     public void test001_testConnectandDisconnect() {
-    	mWaitTask = new TaskCompletionSource<Boolean>();
-    	mDevice.connect("","");
-    	
-    		mWaitTask = new TaskCompletionSource<>();
-    		try {
-				mWaitTask.getTask().waitForCompletion(3, TimeUnit.SECONDS);//Just to give time to connect to finish
-			} catch (InterruptedException e) {
-				// TODO Auto-generated catch block
-				e.printStackTrace();
-			}
+    	ByteCommunicationTestUtils.connectAndWaitUntilInitialised(mDevice);
 			
     	if (!mDevice.isConnected()) {
     		assert(false);

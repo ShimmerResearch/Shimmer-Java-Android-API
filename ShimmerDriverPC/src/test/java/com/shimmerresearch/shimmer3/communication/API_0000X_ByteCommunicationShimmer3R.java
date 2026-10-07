@@ -1,4 +1,5 @@
 package com.shimmerresearch.shimmer3.communication;
+import org.junit.After;
 import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.FixMethodOrder;
@@ -49,7 +50,6 @@ import java.util.concurrent.TimeUnit;
 @FixMethodOrder(MethodSorters.NAME_ASCENDING) // Test methods will be run in alphabetical order
 public class API_0000X_ByteCommunicationShimmer3R extends BasicProcessWithCallBack{
 	ShimmerPC mDevice;
-	TaskCompletionSource<Boolean> mWaitTask;
 	ByteCommunicationSimulatorS3R mByteCommunicationSimulatorS3R;
 	@Before
     public void setUp() {
@@ -58,19 +58,15 @@ public class API_0000X_ByteCommunicationShimmer3R extends BasicProcessWithCallBa
 		mDevice.setTestRadio(mByteCommunicationSimulatorS3R);
 		setWaitForData(mDevice);
     }
+
+	@After
+	public void tearDown() {
+		mDevice.disconnectNoException();
+	}
     
     @Test
     public void test001_testConnectandDisconnect() {
-    	mWaitTask = new TaskCompletionSource<Boolean>();
-    	mDevice.connect("","");
-    	
-    		mWaitTask = new TaskCompletionSource<>();
-    		try {
-				mWaitTask.getTask().waitForCompletion(3, TimeUnit.SECONDS);//Just to give time to connect to finish
-			} catch (InterruptedException e) {
-				// TODO Auto-generated catch block
-				e.printStackTrace();
-			}
+    	ByteCommunicationTestUtils.connectAndWaitUntilInitialised(mDevice);
 			
     	if (!mDevice.isConnected()) {
     		assert(false);
@@ -118,16 +114,7 @@ public class API_0000X_ByteCommunicationShimmer3R extends BasicProcessWithCallBa
 
 	@Test
 	public void test002_ConnectandTestBMP390() {
-		mWaitTask = new TaskCompletionSource<Boolean>();
-    	mDevice.connect("","");
-    	
-    		mWaitTask = new TaskCompletionSource<>();
-    		try {
-				mWaitTask.getTask().waitForCompletion(3, TimeUnit.SECONDS);
-			} catch (InterruptedException e) {
-				// TODO Auto-generated catch block
-				e.printStackTrace();
-			}
+		ByteCommunicationTestUtils.connectAndWaitUntilInitialised(mDevice);
 			
     	if (!mDevice.isConnected()) {
     		assert(false);
@@ -159,16 +146,7 @@ public class API_0000X_ByteCommunicationShimmer3R extends BasicProcessWithCallBa
 	@Test
 	public void test003_ConnectandTestCalibParamRead() {
 		
-		mWaitTask = new TaskCompletionSource<Boolean>();
-    	mDevice.connect("","");
-    	
-    		mWaitTask = new TaskCompletionSource<>();
-    		try {
-				mWaitTask.getTask().waitForCompletion(3, TimeUnit.SECONDS);
-			} catch (InterruptedException e) {
-				// TODO Auto-generated catch block
-				e.printStackTrace();
-			}
+		ByteCommunicationTestUtils.connectAndWaitUntilInitialised(mDevice);
     		if (!mDevice.isConnected()) {
         		assert(false);
         	}	
@@ -214,16 +192,7 @@ public class API_0000X_ByteCommunicationShimmer3R extends BasicProcessWithCallBa
 	@Test
 	public void test004_ConnectandTestDefaultLNAccelAndGyroCalibParam() {
 		
-		mWaitTask = new TaskCompletionSource<Boolean>();
-    	mDevice.connect("","");
-    	
-    		mWaitTask = new TaskCompletionSource<>();
-    		try {
-				mWaitTask.getTask().waitForCompletion(3, TimeUnit.SECONDS);
-			} catch (InterruptedException e) {
-				// TODO Auto-generated catch block
-				e.printStackTrace();
-			}
+		ByteCommunicationTestUtils.connectAndWaitUntilInitialised(mDevice);
     		if (!mDevice.isConnected()) {
         		assert(false);
         	}	
@@ -266,16 +235,7 @@ public class API_0000X_ByteCommunicationShimmer3R extends BasicProcessWithCallBa
 	@Test
 	public void test005_ConnectandTestDefaultWRAccelCalibParam() {
 		
-		mWaitTask = new TaskCompletionSource<Boolean>();
-    	mDevice.connect("","");
-    	
-    		mWaitTask = new TaskCompletionSource<>();
-    		try {
-				mWaitTask.getTask().waitForCompletion(3, TimeUnit.SECONDS);
-			} catch (InterruptedException e) {
-				// TODO Auto-generated catch block
-				e.printStackTrace();
-			}
+		ByteCommunicationTestUtils.connectAndWaitUntilInitialised(mDevice);
     		if (!mDevice.isConnected()) {
         		assert(false);
         	}	
@@ -306,16 +266,7 @@ public class API_0000X_ByteCommunicationShimmer3R extends BasicProcessWithCallBa
 	@Test
 	public void test006_ConnectandTestDefaultMagCalibParam() {
 		
-		mWaitTask = new TaskCompletionSource<Boolean>();
-    	mDevice.connect("","");
-    	
-    		mWaitTask = new TaskCompletionSource<>();
-    		try {
-				mWaitTask.getTask().waitForCompletion(3, TimeUnit.SECONDS);
-			} catch (InterruptedException e) {
-				// TODO Auto-generated catch block
-				e.printStackTrace();
-			}
+		ByteCommunicationTestUtils.connectAndWaitUntilInitialised(mDevice);
     		if (!mDevice.isConnected()) {
         		assert(false);
         	}	
@@ -335,16 +286,7 @@ public class API_0000X_ByteCommunicationShimmer3R extends BasicProcessWithCallBa
 	@Test
 	public void test007_ConnectandTestDefaultHighGAccelCalibParam() {
 		
-		mWaitTask = new TaskCompletionSource<Boolean>();
-    	mDevice.connect("","");
-    	
-    		mWaitTask = new TaskCompletionSource<>();
-    		try {
-				mWaitTask.getTask().waitForCompletion(3, TimeUnit.SECONDS);
-			} catch (InterruptedException e) {
-				// TODO Auto-generated catch block
-				e.printStackTrace();
-			}
+		ByteCommunicationTestUtils.connectAndWaitUntilInitialised(mDevice);
     		if (!mDevice.isConnected()) {
         		assert(false);
         	}	
@@ -363,16 +305,7 @@ public class API_0000X_ByteCommunicationShimmer3R extends BasicProcessWithCallBa
 	@Test
 	public void test008_ConnectandTestDefaultAltMagCalibParam() {
 		
-		mWaitTask = new TaskCompletionSource<Boolean>();
-    	mDevice.connect("","");
-    	
-    		mWaitTask = new TaskCompletionSource<>();
-    		try {
-				mWaitTask.getTask().waitForCompletion(3, TimeUnit.SECONDS);
-			} catch (InterruptedException e) {
-				// TODO Auto-generated catch block
-				e.printStackTrace();
-			}
+		ByteCommunicationTestUtils.connectAndWaitUntilInitialised(mDevice);
     		if (!mDevice.isConnected()) {
         		assert(false);
         	}	
