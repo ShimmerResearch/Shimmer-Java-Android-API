@@ -1,6 +1,7 @@
 package com.shimmerresearch.simpleexamples;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.function.BooleanSupplier;
@@ -21,8 +22,10 @@ import com.shimmerresearch.simpleexamples.bletest.BleTransport;
  */
 public class CaptureDriverSmokeTest {
 
-	private static final String[] COMPARED = { "Accel_LN_X", "Accel_LN_Y", "Accel_LN_Z", "Gyro_X", "Gyro_Y", "Gyro_Z",
-			"Mag_X", "Mag_Y", "Mag_Z", "Battery" };
+	/** Channels whose means say nothing about decoding: clocks, and the PC's own figures. */
+	private static final List<String> NOT_COMPARED = Arrays.asList("Clock 3_LSB", "Timestamp", "Packet_Reception_Rate_Current",
+			"Packet_Reception_Rate_Trial", "System_Timestamp", "Event_Marker", "System_Timestamp_Plot",
+			"System_Timestamp_Plot_Zeroed");
 
 	static final class Run implements CaptureDriver.Listener {
 		final List<ObjectCluster> samples = Collections.synchronizedList(new ArrayList<ObjectCluster>());
@@ -48,6 +51,11 @@ public class CaptureDriverSmokeTest {
 		public void onError(String message) {
 			System.out.println("    ERROR: " + message);
 			errors.add(message);
+		}
+
+		@Override
+		public void onInfo(String message) {
+			System.out.println("    " + message);
 		}
 	}
 
@@ -84,15 +92,22 @@ public class CaptureDriverSmokeTest {
 				List<String> channels = runs.get(i).samples.get(0).getChannelNamesByInsertionOrder();
 				boolean same = reference.equals(channels);
 				System.out.println(labels.get(i) + " has the driver's channels: " + same + " (" + channels.size() + ")");
+				if (!same) {
+					System.out.println("    " + labels.get(0) + ": " + reference);
+					System.out.println("    " + labels.get(i) + ": " + channels);
+				}
 				ok &= same;
 			}
-			StringBuilder header = new StringBuilder(String.format("%-18s", "mean of"));
+			StringBuilder header = new StringBuilder(String.format("%-22s", "mean of"));
 			for (String label : labels) {
 				header.append(String.format(" %18s", label));
 			}
 			System.out.println(header);
-			for (String channel : COMPARED) {
-				StringBuilder row = new StringBuilder(String.format("%-18s", channel));
+			for (String channel : reference) {
+				if (NOT_COMPARED.contains(channel)) {
+					continue;
+				}
+				StringBuilder row = new StringBuilder(String.format("%-22s", channel));
 				for (Run r : runs) {
 					row.append(String.format(" %18.4f", mean(r.samples, channel)));
 				}
@@ -113,10 +128,12 @@ public class CaptureDriverSmokeTest {
 			return run;
 		}
 		List<String[]> signals = driver.getSignalsForPlot();
-		System.out.println("    connected; MTU " + driver.getMtu() + ", " + driver.getSamplingRate() + " Hz, plot device "
-				+ (driver.getDeviceForPlot() != null) + ", plot signals " + (signals == null ? "none" : signals.size()));
-		if (driver.getDeviceForPlot() == null && signals == null) {
-			run.errors.add("nothing to plot from: no device and no signals");
+		System.out.println("    connected: " + driver.getDeviceSummary() + "; MTU " + driver.getMtu() + ", "
+				+ driver.getSamplingRate() + " Hz, plot signals " + (signals == null ? "none" : signals.size()));
+		if (signals == null || signals.isEmpty()) {
+			run.errors.add("nothing to plot: no signals");
+		} else if (!signals.get(0)[0].equals(device.getName())) {
+			run.errors.add("signals named " + signals.get(0)[0] + ", not " + device.getName());
 		}
 		driver.startStreaming();
 		waitUntil(10000, driver::isStreaming);
@@ -125,6 +142,9 @@ public class CaptureDriverSmokeTest {
 		driver.stopStreaming();
 		waitUntil(10000, () -> !driver.isStreaming());
 		double rate = run.samples.size() / ((System.currentTimeMillis() - started) / 1000.0);
+		if (!run.samples.isEmpty() && !device.getName().equals(run.samples.get(0).getShimmerName())) {
+			run.errors.add("samples named " + run.samples.get(0).getShimmerName() + ", not " + device.getName());
+		}
 		System.out.println(String.format("    %d samples, %.1f /s, reception %.1f%%", run.samples.size(), rate,
 				driver.getPacketReceptionRate()));
 		driver.disconnect();

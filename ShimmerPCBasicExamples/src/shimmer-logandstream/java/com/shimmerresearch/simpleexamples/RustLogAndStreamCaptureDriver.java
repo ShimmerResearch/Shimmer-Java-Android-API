@@ -5,7 +5,6 @@ import java.util.Collections;
 import java.util.List;
 
 import com.shimmerresearch.driver.ObjectCluster;
-import com.shimmerresearch.driver.ShimmerDevice;
 import com.shimmerresearch.driver.ble.nativeble.BleCentral;
 import com.shimmerresearch.driver.ble.nativeble.BleConnectionListener;
 import com.shimmerresearch.driver.ble.nativeble.BleScanResult;
@@ -21,7 +20,8 @@ import com.shimmerresearch.logandstream.LogAndStreamSession;
  * Drives a Shimmer3 (LogAndStream v1.01.003 onwards) or Shimmer3R through shimmer-logandstream,
  * the Rust LogAndStream library, over native BLE. The binding's {@link LogAndStreamSession} runs
  * the protocol; all this class adds is the BLE link and the mapping of events onto the capture app,
- * samples becoming ObjectClusters. It cannot change the device's configuration yet.
+ * samples becoming ObjectClusters. It runs the firmware's data-rate test too, but cannot change the
+ * device's configuration yet.
  * <p>
  * Built only when a checkout of shimmer-logandstream sits beside this repository (see
  * build.gradle), so the app finds it by name.
@@ -38,6 +38,7 @@ class RustLogAndStreamCaptureDriver implements CaptureDriver {
 	private volatile long mHandle = 0;
 	private volatile String mDeviceName = "";
 	private volatile double mPacketReceptionRate = Double.NaN;
+	private volatile String mDeviceSummary;
 
 	@Override
 	public String label() {
@@ -61,6 +62,7 @@ class RustLogAndStreamCaptureDriver implements CaptureDriver {
 			mCentral = BleCentral.getDefault();
 			mDeviceName = device.getName();
 			mPacketReceptionRate = Double.NaN;
+			mDeviceSummary = null;
 			LogAndStreamSession session = new LogAndStreamSession(bytes -> mCentral.write(mHandle, bytes), this::onEvent);
 			mSession = session;
 			mListener.onState("CONNECTING (BLE)");
@@ -95,7 +97,7 @@ class RustLogAndStreamCaptureDriver implements CaptureDriver {
 			}
 			break;
 		case INITIALISED:
-			System.out.println("RustLogAndStream: " + e.message);
+			mDeviceSummary = e.message;
 			mListener.onReady();
 			break;
 		case SAMPLE:
@@ -114,7 +116,13 @@ class RustLogAndStreamCaptureDriver implements CaptureDriver {
 			mListener.onState("CONNECTION_LOST (" + e.message + ")");
 			break;
 		case DISCARDED:
-			System.out.println("RustLogAndStream: " + e.message);
+			mListener.onInfo(e.message);
+			break;
+		case DATA_RATE_PROGRESS:
+			mListener.onDataRate(false, e.dataRate.kibPerSecond, e.dataRate.missingPackets, e.dataRate.toString());
+			break;
+		case DATA_RATE_RESULT:
+			mListener.onDataRate(true, e.dataRate.kibPerSecond, e.dataRate.missingPackets, e.message);
 			break;
 		default:
 			break;
@@ -171,12 +179,18 @@ class RustLogAndStreamCaptureDriver implements CaptureDriver {
 	@Override
 	public boolean isConnected() {
 		State s = state();
-		return mHandle != 0 && (s == State.READY || s == State.STARTING || s == State.STREAMING || s == State.STOPPING);
+		return mHandle != 0 && (s == State.READY || s == State.STARTING || s == State.STREAMING || s == State.STOPPING
+				|| s == State.TESTING);
 	}
 
 	@Override
 	public boolean isStreaming() {
 		return mHandle != 0 && state() == State.STREAMING;
+	}
+
+	@Override
+	public boolean isIdle() {
+		return mHandle != 0 && state() == State.READY;
 	}
 
 	@Override
@@ -203,10 +217,9 @@ class RustLogAndStreamCaptureDriver implements CaptureDriver {
 		return mPacketReceptionRate;
 	}
 
-	/** None: the library describes its channels itself (see {@link #getSignalsForPlot()}). */
 	@Override
-	public ShimmerDevice getDeviceForPlot() {
-		return null;
+	public String getDeviceSummary() {
+		return mDeviceSummary;
 	}
 
 	@Override
@@ -224,6 +237,19 @@ class RustLogAndStreamCaptureDriver implements CaptureDriver {
 	@Override
 	public boolean canConfigure() {
 		return false;
+	}
+
+	@Override
+	public boolean canTestDataRate() {
+		return true;
+	}
+
+	@Override
+	public void startDataRateTest(int durationMs) {
+		LogAndStreamSession session = mSession;
+		if (session != null) {
+			session.startDataRateTest(durationMs);
+		}
 	}
 
 	private static String format(Channel channel) {
