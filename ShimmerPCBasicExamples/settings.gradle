@@ -27,7 +27,8 @@ project(':ShimmerBluetoothManager').projectDir = new File(settingsDir, '../../Sh
 
 // DEV-1134: the Java binding of shimmer-logandstream, the Rust LogAndStream library, built from a
 // checkout beside this repository, where the team's layout puts it (C:\dev\shimmer-logandstream).
-// Without it, or with -PnoShimmerLogAndStream, ShimmerBLECaptureExample has no Rust LogAndStream mode.
+// Without it, build.gradle can use the bundled macOS arm64 binding.
+// -PnoShimmerLogAndStream disables the Rust LogAndStream mode.
 def shimmerLogAndStream = new File(settingsDir, '../../../shimmer-logandstream/bindings/java')
 if (shimmerLogAndStream.isDirectory() && !startParameter.projectProperties.containsKey('noShimmerLogAndStream')) {
     includeBuild(shimmerLogAndStream)

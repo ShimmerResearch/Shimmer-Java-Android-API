@@ -3,7 +3,8 @@
 `NativeBleLoader` loads `shimmerble` from `native/<platform>/` on the classpath, for example
 `native/windows-x64/shimmerble.dll` or `native/macos-arm64/libshimmerble.dylib`.
 
-The binaries are not committed. Put them here by either:
+The macOS arm64 BLE binary is committed for Apple Silicon testers. Rebuild it or provide binaries
+for other platforms by either:
 - running `./gradlew buildNative` in `ShimmerDriverPC/`, which builds the library for this machine
 - unzipping the artifact of the **Native BLE library** GitHub Actions workflow here, for the other
   platforms

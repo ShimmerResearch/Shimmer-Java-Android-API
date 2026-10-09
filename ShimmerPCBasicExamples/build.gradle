@@ -60,14 +60,21 @@ dependencies {
     implementation 'com.parse.bolts:bolts-tasks:1.4.0'
 }
 
-// --- shimmer-logandstream, the Rust LogAndStream library (DEV-1134) -------------------------------
-// When settings.gradle found a checkout of shimmer-logandstream, the capture example gets a driver
-// on it (src/shimmer-logandstream/java), through the binding built from that checkout. The binding's
-// jar carries the native library from that checkout's target/release: run 'cargo build --release'
-// there first. -PnoShimmerLogAndStream builds without it.
-if (file('../../../shimmer-logandstream/bindings/java').isDirectory() && !project.hasProperty('noShimmerLogAndStream')) {
+// Prefer the sibling source checkout for development; otherwise use the bundled macOS arm64
+// binding and native library. JNA remains a normal Gradle dependency for the local JAR.
+def logAndStreamCheckout = file('../../../shimmer-logandstream/bindings/java').isDirectory()
+def bundledLogAndStream = file('libs/shimmer-logandstream-0.1.0-macos-arm64.jar')
+def bundledPlatform = System.getProperty('os.name').toLowerCase().contains('mac') &&
+        System.getProperty('os.arch').toLowerCase() in ['aarch64', 'arm64']
+if (!project.hasProperty('noShimmerLogAndStream') &&
+        (logAndStreamCheckout || (bundledPlatform && bundledLogAndStream.isFile()))) {
     dependencies {
-        implementation 'com.shimmerresearch:shimmer-logandstream:0.1.0'
+        if (logAndStreamCheckout) {
+            implementation 'com.shimmerresearch:shimmer-logandstream:0.1.0'
+        } else {
+            implementation files(bundledLogAndStream)
+            implementation 'net.java.dev.jna:jna:5.17.0'
+        }
     }
     sourceSets.main.java.srcDir 'src/shimmer-logandstream/java'
 }
