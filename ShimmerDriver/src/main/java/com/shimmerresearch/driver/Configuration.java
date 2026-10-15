@@ -1337,6 +1337,10 @@ public class Configuration {
 			private static final ShimmerVerObject svoShimmerGq802154Lr = 	new ShimmerVerObject(HW_ID.SHIMMER_GQ_802154_LR,ShimmerVerDetails.ANY_VERSION,ShimmerVerDetails.ANY_VERSION,ShimmerVerDetails.ANY_VERSION,ShimmerVerDetails.ANY_VERSION,ShimmerVerDetails.ANY_VERSION);
 			private static final ShimmerVerObject svoShimmerGq802154Nr = 	new ShimmerVerObject(HW_ID.SHIMMER_GQ_802154_NR,ShimmerVerDetails.ANY_VERSION,ShimmerVerDetails.ANY_VERSION,ShimmerVerDetails.ANY_VERSION,ShimmerVerDetails.ANY_VERSION,ShimmerVerDetails.ANY_VERSION);
 			private static final ShimmerVerObject svoShimmer2rGq = 			new ShimmerVerObject(HW_ID.SHIMMER_2R_GQ,ShimmerVerDetails.ANY_VERSION,ShimmerVerDetails.ANY_VERSION,ShimmerVerDetails.ANY_VERSION,ShimmerVerDetails.ANY_VERSION,ShimmerVerDetails.ANY_VERSION);
+			/** The GQ 802.15.4 firmware on any hardware. The GQs above are matched on their hardware, but a
+			 * Verisense in NeuroLynQ mode keeps its own hardware ID (61 to 68), so it is matched on the firmware it
+			 * runs: nothing else runs GQ_802154. See ShimmerVerObject.isVerisenseNeuroLynQ(). */
+			private static final ShimmerVerObject svoVerisenseNeuroLynQ = 	new ShimmerVerObject(ShimmerVerDetails.ANY_VERSION,FW_ID.GQ_802154,ShimmerVerDetails.ANY_VERSION,ShimmerVerDetails.ANY_VERSION,ShimmerVerDetails.ANY_VERSION,ShimmerVerDetails.ANY_VERSION);
 
 			private static final ShimmerVerObject svoExgSdLog = 			new ShimmerVerObject(HW_ID.SHIMMER_3,FW_ID.SDLOG,0,8,0,HW_ID_SR_CODES.EXP_BRD_EXG); 
 			private static final ShimmerVerObject svoExgUnifiedSdLog = 		new ShimmerVerObject(HW_ID.SHIMMER_3,FW_ID.SDLOG,0,8,0,HW_ID_SR_CODES.EXP_BRD_EXG_UNIFIED);
@@ -1406,7 +1410,7 @@ public class Configuration {
 			public static final List<ShimmerVerObject> listOfCompatibleVersionInfoExgGeneral = Arrays.asList(
 					svoExgSdLog, svoExgBtStream, svoExgLogAndStream,  
 					svoExgUnifiedSdLog, svoExgUnifiedBtStream, svoExgUnifiedLogAndStream,
-					svoShimmerGq802154Lr, svoShimmerGq802154Nr, svoShimmer2rGq,
+					svoShimmerGq802154Lr, svoShimmerGq802154Nr, svoShimmer2rGq, svoVerisenseNeuroLynQ,
 					svoShimmerECGmd, svoShimmer4Stock, svoStrokare, svoShimmer3RExgUnifiedLogAndStream);
 
 			public static final List<ShimmerVerObject> listOfCompatibleVersionInfoExgEmg = Arrays.asList(
@@ -1418,22 +1422,22 @@ public class Configuration {
 			public static final List<ShimmerVerObject> listOfCompatibleVersionInfoExgEcg = Arrays.asList(
 					svoExgSdLog, svoExgBtStream, svoExgLogAndStream,  
 					svoExgUnifiedSdLog, svoExgUnifiedBtStream, svoExgUnifiedLogAndStream,
-					svoShimmerGq802154Lr, svoShimmerGq802154Nr, svoShimmer2rGq,
+					svoShimmerGq802154Lr, svoShimmerGq802154Nr, svoShimmer2rGq, svoVerisenseNeuroLynQ,
 					svoShimmerECGmd, svoShimmer4Stock, svoShimmer3RExgUnifiedLogAndStream);
 
 			public static final List<ShimmerVerObject> listOfCompatibleVersionInfoExgEcgGq = Arrays.asList(
-					svoShimmerGq802154Lr, svoShimmerGq802154Nr, svoShimmer2rGq);
+					svoShimmerGq802154Lr, svoShimmerGq802154Nr, svoShimmer2rGq, svoVerisenseNeuroLynQ);
 
 			public static final List<ShimmerVerObject> listOfCompatibleVersionInfoExgTest = Arrays.asList(
 					svoExgSdLog, svoExgBtStream, svoExgLogAndStream,  
 					svoExgUnifiedSdLog, svoExgUnifiedBtStream, svoExgUnifiedLogAndStream,
-					svoShimmerGq802154Lr, svoShimmerGq802154Nr, svoShimmer2rGq,
+					svoShimmerGq802154Lr, svoShimmerGq802154Nr, svoShimmer2rGq, svoVerisenseNeuroLynQ,
 					svoShimmerECGmd, svoShimmer4Stock, svoShimmer3RExgUnifiedLogAndStream);
 
 			public static final List<ShimmerVerObject> listOfCompatibleVersionInfoExgThreeUnipolar = Arrays.asList(
 					svoExgSdLog, svoExgBtStream, svoExgLogAndStream,  
 					svoExgUnifiedSdLog, svoExgUnifiedBtStream, svoExgUnifiedLogAndStream,
-					svoShimmerGq802154Lr, svoShimmerGq802154Nr, svoShimmer2rGq,
+					svoShimmerGq802154Lr, svoShimmerGq802154Nr, svoShimmer2rGq, svoVerisenseNeuroLynQ,
 					svoShimmerECGmd, svoShimmer4Stock, svoShimmer3RExgUnifiedLogAndStream);
 
 			public static final List<ShimmerVerObject> listOfCompatibleVersionInfoExgRespiration = Arrays.asList(
@@ -1446,7 +1450,7 @@ public class Configuration {
 			
 			public static final List<ShimmerVerObject> listOfCompatibleVersionInfoAnyExpBoardStandardFW = Arrays.asList(
 					svoAnyIntExpBoardAndSdlog,svoAnyIntExpBoardAndBtStream,svoAnyIntExpBoardAndLogAndStream,
-					svoShimmerGq802154Lr, svoShimmerGq802154Nr, svoShimmer2rGq, svoAnyIntExpBoardAndLogAndStream3R,
+					svoShimmerGq802154Lr, svoShimmerGq802154Nr, svoShimmer2rGq, svoVerisenseNeuroLynQ, svoAnyIntExpBoardAndLogAndStream3R,
 					svoShimmer4Stock, svoArduino, svoSweatch, svoStrokare); 
 
 			public static final List<ShimmerVerObject> listOfCompatibleVersionInfoBattVoltage = Arrays.asList(
@@ -1457,7 +1461,7 @@ public class Configuration {
 			public static final List<ShimmerVerObject> listOfCompatibleVersionInfoGsr = Arrays.asList(
 					svoGsrSdLog, svoGsrBtStream, svoGsrLogAndStream, svoGsrGqBle,
 					svoGsrUnifiedSdLog,  svoGsrUnifiedBtStream, svoGsrUnifiedLogAndStream, 
-					svoGsrUnifiedGqBle, svoShimmerGq802154Lr, svoShimmerGq802154Nr, svoShimmer2rGq,
+					svoGsrUnifiedGqBle, svoShimmerGq802154Lr, svoShimmerGq802154Nr, svoShimmer2rGq, svoVerisenseNeuroLynQ,
 					svoShimmer4Stock, svoShimmer3RGsrUnifiedLogAndStream,svoShimmer3RGsrNewImuLogAndStream);
 			
 			public static final List<ShimmerVerObject> listOfCompatibleVersionInfoBMP180 = Arrays.asList(
