@@ -176,6 +176,11 @@ public class MsgDock {
 	public final static int MSG_ID_IMPORT_DB_PARSER_FAILURE_IO_EXCEPTION = 133;
 	
 	public final static int MSG_ID_IMPORT_DB_SYNC_FAILURE_SQLITE_EXCEPTION = 134;
+	/** DEV-1216, hardware run 2026-10-16: a session file with no data packets (a header-only file, 384 bytes,
+	 * which a ~5 s undock while set to SD Log creates) is skipped by the parser instead of failing the import.
+	 * Sent like {@link #MSG_ID_IMPORT_DB_PARSER_FAILURE_IO_EXCEPTION}: mMessage = the file's path, mUniqueID =
+	 * the database name (config time), mValue and mSessionId = the import session ID, mExceptionMsg = the reason. */
+	public final static int MSG_ID_IMPORT_DB_PARSER_FILE_SKIPPED_NO_DATA = 135;
 
 	//this three are used for clearsky
 	public final static int MSG_ID_IMPORT_DATA_PARSER_TO_FILE_UPDATE = 137;
@@ -294,6 +299,7 @@ public class MsgDock {
         aMap.put(MSG_ID_IMPORT_DB_PARSER_FAILURE_IO_EXCEPTION, "MSG_IDENTIFIER_DB_PARSER_FAILURE_IO_EXCEPTION");
         
         aMap.put(MSG_ID_IMPORT_DB_SYNC_FAILURE_SQLITE_EXCEPTION, "MSG_IDENTIFIER_DB_SYNC_FAILURE_SQLITE_EXCEPTION");
+        aMap.put(MSG_ID_IMPORT_DB_PARSER_FILE_SKIPPED_NO_DATA, "MSG_IDENTIFIER_DB_PARSER_FILE_SKIPPED_NO_DATA");
         
         aMap.put(MSG_ID_IMPORT_DATA_PARSER_TO_FILE_UPDATE, "MSG_IDENTIFIER_DATA_PARSER_TO_FILE_UPDATE");
         aMap.put(MSG_ID_IMPORT_DATA_PARSER_TO_FILE_SUCCESS, "MSG_IDENTIFIER_DATA_PARSER_TO_FILE_SUCCESS");
