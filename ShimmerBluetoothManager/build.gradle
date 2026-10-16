@@ -68,3 +68,14 @@ dependencies {
     // 'test.useTestNG()' to your build script.
     testImplementation 'junit:junit:4.12'
 }
+
+// Without -PreleaseVersion the version is 'local', and GitHub Packages never lets a version be
+// overwritten. Releases go through the Release Java API workflow; publishToMavenLocal is unaffected.
+tasks.withType(PublishToMavenRepository).configureEach {
+    doFirst {
+        if (publication.version == 'local') {
+            throw new GradleException("Refusing to publish ${publication.artifactId} as version 'local'. " +
+                "Release with the Release Java API workflow, or pass -PreleaseVersion.")
+        }
+    }
+}

@@ -56,6 +56,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30 # a hung Gradle daemon otherwise holds the runner for 6 hours
     permissions:
       contents: read
       packages: write
@@ -166,6 +167,7 @@ jobs:
   matlab-jar:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 30 # a hung Gradle daemon otherwise holds the runner for 6 hours
     permissions:
       contents: read
     steps:
@@ -211,6 +213,7 @@ jobs:
     needs: [build, matlab-jar]
     if: github.event_name == 'workflow_dispatch' && !inputs.dry_run
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write # create the tag and the release
     env:
@@ -248,6 +251,7 @@ jobs:
   update-matlab:
     needs: [build, release]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions: {} # writes to Shimmer-MATLAB-ID with MATLAB_REPO_TOKEN, not this repo's token
     env:
       VERSION: ${{ needs.build.outputs.version }}
