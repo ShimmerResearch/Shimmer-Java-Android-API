@@ -153,11 +153,20 @@ public class GrpcBLERadioByteTools {
 				e.printStackTrace();
 			}
 		});
-		runningProcess.onExit().thenAccept(p -> {
-		    int code = p.exitValue();
-		    System.err.println("[BLEGrpcServer] exited: code=" + code +
-		        (code >= 128 ? " (likely signal " + (code - 128) + ")" : ""));
-		});
+		// Not Process.onExit(): that is Java 9+, and MATLAB loads this class on Java 8 via
+		// ShimmerJavaClass.jar, where it throws NoSuchMethodError. Daemon, like onExit()'s pool thread.
+		final Process process = runningProcess;
+		Thread exitWatcher = new Thread(() -> {
+		    try {
+		        int code = process.waitFor();
+		        System.err.println("[BLEGrpcServer] exited: code=" + code +
+		            (code >= 128 ? " (likely signal " + (code - 128) + ")" : ""));
+		    } catch (InterruptedException e) {
+		        Thread.currentThread().interrupt();
+		    }
+		}, "BLEGrpcServer-exit");
+		exitWatcher.setDaemon(true);
+		exitWatcher.start();
 
 		processThread.start();
 		return port;

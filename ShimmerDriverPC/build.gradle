@@ -44,7 +44,7 @@ publishing {
 
             groupId = 'com.shimmerresearch' // Replace with your package's group/organization name
             artifactId = 'shimmerdriverpc' // Replace with the name of your package
-            version = '0.11.8_beta' // Replace with your package version
+            version = project.findProperty('releaseVersion') ?: 'local' // set by the Release Java API workflow (-PreleaseVersion)
 
             // Jar publication
             //(
@@ -57,7 +57,7 @@ publishing {
     repositories {
         maven {
             name = "GitHubPackages"
-            url = uri("https://maven.pkg.github.com/ShimmerEngineering/Shimmer-Java-Android-API")
+            url = uri("https://maven.pkg.github.com/ShimmerResearch/Shimmer-Java-Android-API")
             credentials {
                 /* Create gradle.properties file in GRADLE_USER_HOME/.gradle/ 
                 (e.g. C:/Users/YourUsername/.gradle/) with the two lines listed below. Fill in your 
@@ -110,12 +110,18 @@ dependencies {
 	implementation("org.bouncycastle:bcprov-jdk15on:1.61")
 }
 
-// Shadow JAR task to create a runnable JAR with dependencies
-/*
-Change to using the following below for ShimmerDriverPC/ShimmerDriver/ShimmerBluetoothManager
-sourceCompatibility = '1.8'  // Ensure code is compiled with Java 8
-targetCompatibility = '1.8'  // Ensure bytecode is compatible with Java 8
-*/
+// Shadow JAR task to create a runnable JAR with dependencies.
+// ShimmerJavaClass.jar is loaded by MATLAB, which may run it on Java 8, so build it as Java 8
+// bytecode with:   ./gradlew shadowJar -PmatlabJava8
+// This applies to the ShimmerDriver and ShimmerBluetoothManager subprojects too, so their build files
+// no longer need editing to 1.8 by hand. --release 8 also fails the compile if the code uses an API
+// newer than Java 8, which sourceCompatibility = '1.8' alone would let through to fail in MATLAB.
+// The "Release Java API" workflow builds the jar this way and opens a PR into Shimmer-MATLAB-ID/libs.
+if (hasProperty('matlabJava8')) {
+    allprojects {
+        tasks.withType(JavaCompile).configureEach { options.release = 8 }
+    }
+}
 shadowJar {
     archiveBaseName.set('ShimmerJavaClass')  // Use archiveBaseName instead of baseName
     archiveClassifier.set('')  // Remove classifier so it’s named shimmerjavaclass.jar

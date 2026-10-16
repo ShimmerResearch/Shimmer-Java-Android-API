@@ -1,0 +1,305 @@
+# One-click release of the Java API: GitHub Packages, a GitHub Release, and the MATLAB jar.
+#
+# How to release
+#   1. Actions -> "Release Java API" -> Run workflow (on master). Leave `version` blank for the next
+#      patch after the last API_v release (0.11.8_beta -> 0.11.9_beta), or type one.
+#   2. Review and merge the ShimmerJavaClass.jar PR it opens in Shimmer-MATLAB-ID.
+#   3. Run "Release Android API" in ShimmerAndroidAPI, which builds against this version by default.
+#
+# The version is not kept in the source. The build files read it from -PreleaseVersion, which this
+# workflow passes, and say 'local' otherwise; the API_v tags record what was released.
+#
+# One run does, in order, and creates nothing public until the build and tests have passed:
+#   build        picks the version; fails if API_v<version> is already tagged; tests ShimmerDriver and builds
+#                ShimmerDriverPC exactly as gradle.yml does; then publishes shimmerdriver,
+#                shimmerbluetoothmanager and shimmerdriverpc together with one `gradlew publish`
+#                (DEV-1115: publishing them one at a time by hand left shimmerbluetoothmanager
+#                0.11.8_beta unpublished)
+#   matlab-jar   builds ShimmerJavaClass.jar as Java 8 bytecode (`shadowJar -PmatlabJava8`), on a
+#                separate runner so its Java 8 classes cannot end up in the published jars
+#   release      tags API_v<version> on the commit it built and creates the GitHub Release, with
+#                notes from the previous API_v release and the jars attached. It is not marked
+#                "Latest", which stays with the Consensys releases in this repo.
+#   update-matlab  opens a PR in Shimmer-MATLAB-ID replacing libs/ShimmerJavaClass.jar. Needs the
+#                MATLAB_REPO_TOKEN secret: a fine-grained token for ShimmerResearch/Shimmer-MATLAB-ID
+#                with Contents and Pull requests read/write.
+#
+# A failed job can be re-run on its own with "Re-run failed jobs"; the jobs before it are not
+# repeated. A failed publish can leave some of the three versions in GitHub Packages: delete those
+# versions under the repo's Packages before re-running, or bump the version.
+#
+# dry_run runs build and matlab-jar without publishing, from any branch; a blank version still picks
+# the next one, so the run shows what a real release would be called. The workflow also
+# dry-runs on any PR that changes this file.
+
+name: Release Java API
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version, e.g. 0.12.0_beta. Blank = next patch after the last release'
+        type: string
+        required: false
+      dry_run:
+        description: 'Build and test only; publish nothing'
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - '.github/workflows/release.yml'
+
+concurrency:
+  group: release-java-api
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      DRY_RUN: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run }}
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      previous_tag: ${{ steps.version.outputs.previous_tag }}
+    steps:
+    - name: Release from master only
+      if: env.DRY_RUN != 'true' && github.ref != 'refs/heads/master'
+      run: |
+        echo "::error::A release must run on master, not ${GITHUB_REF_NAME}. Tick dry_run to try another branch."
+        exit 1
+
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0 # tags, to refuse a version that is already released
+
+    - name: Choose the version
+      id: version
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REQUESTED: ${{ inputs.version }}
+      run: |
+        PREVIOUS_TAG=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName,createdAt \
+          --jq '[.[] | select(.tagName | startswith("API_v"))] | sort_by(.createdAt) | last | .tagName // ""')
+        if [ -n "$REQUESTED" ]; then
+          VERSION=$REQUESTED
+        else
+          # Next patch after the last release, keeping its suffix: 0.11.8_beta -> 0.11.9_beta.
+          last=${PREVIOUS_TAG#API_v}
+          if ! [[ "$last" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)(.*)$ ]]; then
+            echo "::error::Cannot work out the next version from '${PREVIOUS_TAG:-no previous release}'. Type one in the version box."
+            exit 1
+          fi
+          VERSION="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$((BASH_REMATCH[3] + 1))${BASH_REMATCH[4]}"
+        fi
+        if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+[A-Za-z0-9_.-]*$ ]]; then
+          echo "::error::'$VERSION' is not a version like 0.11.9_beta."
+          exit 1
+        fi
+        TAG="API_v$VERSION"
+        if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+          if [ "$DRY_RUN" = true ]; then
+            echo "::warning::$TAG already exists, so a real release would stop here. Dry run continues."
+          else
+            echo "::error::$TAG already exists. Leave the version blank for the next one, or type another."
+            exit 1
+          fi
+        fi
+        {
+          echo "version=$VERSION"
+          echo "tag=$TAG"
+          echo "previous_tag=$PREVIOUS_TAG"
+        } >> "$GITHUB_OUTPUT"
+        echo "Releasing $VERSION as $TAG (notes since ${PREVIOUS_TAG:-the first commit})"
+
+    - name: Set up JDK 11
+      uses: actions/setup-java@v4
+      with:
+        java-version: '11'
+        distribution: 'temurin'
+
+    # Same pinned action as gradle.yml, and likewise no gradle-version: build through the
+    # committed wrapper.
+    - name: Setup Gradle
+      uses: gradle/actions/setup-gradle@ec92e829475ac0c2315ea8f9eced72db85bb337a # v3.0.0
+
+    - name: Test ShimmerDriver
+      working-directory: ShimmerDriver
+      run: ./gradlew test
+
+    # ShimmerDriverPC includes :ShimmerDriver and :ShimmerBluetoothManager as subprojects.
+    - name: Build ShimmerDriverPC
+      working-directory: ShimmerDriverPC
+      run: ./gradlew build
+
+    # `publish` runs in every project of the ShimmerDriverPC build, so all three artifacts go
+    # out in one invocation, and -PreleaseVersion versions all three (and their POM
+    # dependencies on each other). The build files read the credentials from USERNAME and TOKEN.
+    - name: Publish to GitHub Packages
+      if: env.DRY_RUN != 'true'
+      working-directory: ShimmerDriverPC
+      env:
+        USERNAME: ${{ github.actor }}
+        TOKEN: ${{ github.token }}
+        VERSION: ${{ steps.version.outputs.version }}
+      run: ./gradlew publish -PreleaseVersion="$VERSION"
+
+    - name: Collect the release jars
+      env:
+        VERSION: ${{ steps.version.outputs.version }}
+      run: |
+        mkdir -p release-assets
+        cp ShimmerDriver/build/libs/ShimmerDriver.jar                     "release-assets/shimmerdriver-$VERSION.jar"
+        cp ShimmerBluetoothManager/build/libs/ShimmerBluetoothManager.jar "release-assets/shimmerbluetoothmanager-$VERSION.jar"
+        cp ShimmerDriverPC/build/libs/ShimmerDriverPC.jar                 "release-assets/shimmerdriverpc-$VERSION.jar"
+        ls -l release-assets
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: release-jars
+        path: release-assets/
+        if-no-files-found: error
+
+  matlab-jar:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up JDK 11
+      uses: actions/setup-java@v4
+      with:
+        java-version: '11'
+        distribution: 'temurin'
+
+    - name: Setup Gradle
+      uses: gradle/actions/setup-gradle@ec92e829475ac0c2315ea8f9eced72db85bb337a # v3.0.0
+
+    - name: Build ShimmerJavaClass.jar for MATLAB (Java 8 bytecode)
+      working-directory: ShimmerDriverPC
+      run: ./gradlew shadowJar -PmatlabJava8
+
+    - name: Check the jar is Java 8 bytecode
+      run: |
+        jar=ShimmerDriverPC/build/libs/ShimmerJavaClass.jar
+        for c in com/shimmerresearch/tools/matlab/ShimmerJavaClass.class \
+                 com/shimmerresearch/driver/ShimmerObject.class \
+                 com/shimmerresearch/managers/bluetoothManager/ShimmerBluetoothManager.class; do
+          major=$(unzip -p "$jar" "$c" | head -c 8 | od -An -tu1 | awk '{print $7 * 256 + $8}')
+          echo "$c: class file major version $major"
+          if [ "$major" != 52 ]; then
+            echo "::error::$c is class version $major, not 52 (Java 8); MATLAB on Java 8 cannot load it."
+            exit 1
+          fi
+        done
+        mkdir -p matlab-jar
+        cp "$jar" matlab-jar/ShimmerJavaClass.jar
+        ls -l matlab-jar
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: matlab-jar
+        path: matlab-jar/
+        if-no-files-found: error
+
+  release:
+    needs: [build, matlab-jar]
+    if: github.event_name == 'workflow_dispatch' && !inputs.dry_run
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the tag and the release
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.build.outputs.version }}
+      TAG: ${{ needs.build.outputs.tag }}
+      PREVIOUS_TAG: ${{ needs.build.outputs.previous_tag }}
+    steps:
+    - uses: actions/download-artifact@v4
+      with:
+        name: release-jars
+        path: release-assets
+
+    - uses: actions/download-artifact@v4
+      with:
+        name: matlab-jar
+        path: matlab-jar
+
+    - name: Create the tag and GitHub Release
+      run: |
+        cp matlab-jar/ShimmerJavaClass.jar "release-assets/ShimmerJavaClass-$VERSION.jar"
+        gh release create "$TAG" release-assets/* \
+          --repo "$GITHUB_REPOSITORY" \
+          --target "$GITHUB_SHA" \
+          --title "Shimmer Java API Rev $VERSION" \
+          --generate-notes ${PREVIOUS_TAG:+--notes-start-tag "$PREVIOUS_TAG"} \
+          --latest=false
+        {
+          echo "### Released Java API $VERSION"
+          echo "- Release: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$TAG"
+          echo "- Packages: com.shimmerresearch:shimmerdriver, shimmerbluetoothmanager and shimmerdriverpc at $VERSION"
+          echo "- Next: merge the MATLAB PR, then run Release Android API in ShimmerAndroidAPI; it builds against $VERSION unless you pick another driver version."
+        } >> "$GITHUB_STEP_SUMMARY"
+
+  update-matlab:
+    needs: [build, release]
+    runs-on: ubuntu-latest
+    permissions: {} # writes to Shimmer-MATLAB-ID with MATLAB_REPO_TOKEN, not this repo's token
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+      TAG: ${{ needs.build.outputs.tag }}
+      MATLAB_REPO: ShimmerResearch/Shimmer-MATLAB-ID
+      BRANCH: ShimmerJavaClass_${{ needs.build.outputs.version }}
+      HAS_TOKEN: ${{ secrets.MATLAB_REPO_TOKEN != '' }}
+    steps:
+    - name: Check for MATLAB_REPO_TOKEN
+      if: env.HAS_TOKEN != 'true'
+      run: |
+        echo "::error::Secret MATLAB_REPO_TOKEN is not set, so the Shimmer-MATLAB-ID PR cannot be opened. Add a fine-grained token for $MATLAB_REPO (Contents and Pull requests: read/write) as a repo secret, then re-run this job."
+        exit 1
+
+    - uses: actions/checkout@v4
+      with:
+        repository: ${{ env.MATLAB_REPO }}
+        token: ${{ secrets.MATLAB_REPO_TOKEN }}
+        path: matlab
+
+    - uses: actions/download-artifact@v4
+      with:
+        name: matlab-jar
+        path: matlab-jar
+
+    - name: Open the PR updating libs/ShimmerJavaClass.jar
+      env:
+        GH_TOKEN: ${{ secrets.MATLAB_REPO_TOKEN }}
+      working-directory: matlab
+      run: |
+        existing=$(gh pr list --repo "$MATLAB_REPO" --head "$BRANCH" --state open --json url --jq '.[0].url // ""')
+        if [ -n "$existing" ]; then
+          echo "PR already open: $existing"
+          echo "- MATLAB PR: $existing" >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+        cp ../matlab-jar/ShimmerJavaClass.jar libs/ShimmerJavaClass.jar
+        if git diff --quiet -- libs/ShimmerJavaClass.jar; then
+          echo "libs/ShimmerJavaClass.jar is already this build; no PR needed."
+          exit 0
+        fi
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git switch -c "$BRANCH"
+        git add libs/ShimmerJavaClass.jar
+        git commit -m "Update ShimmerJavaClass.jar to Shimmer Java API $VERSION" \
+                   -m "Built by $GITHUB_REPOSITORY's Release workflow from $TAG ($GITHUB_SHA), as Java 8 bytecode."
+        git push --force origin "HEAD:refs/heads/$BRANCH"
+        url=$(gh pr create --repo "$MATLAB_REPO" --base master --head "$BRANCH" \
+          --title "Update ShimmerJavaClass.jar to Shimmer Java API $VERSION" \
+          --body "Replaces \`libs/ShimmerJavaClass.jar\` with the build from [$TAG]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$TAG) (\`$GITHUB_SHA\`), compiled as Java 8 bytecode with \`gradlew shadowJar -PmatlabJava8\`.
+
+        Opened by the [Release Java API run]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID).")
+        echo "Opened $url"
+        echo "- MATLAB PR: $url" >> "$GITHUB_STEP_SUMMARY"
