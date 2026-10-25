@@ -65,7 +65,7 @@ Each report counts what the session covered: connects, in-stream replies by type
 battery readings decoded, the status timer's requests, and command timeouts. Its events also say
 which driver timers were running after connect, after configure and while streaming.
 
-Starting SD logging mid-stream (`startSDLogging()` while streaming) writes the RTC mid-stream, which a Shimmer3R answers with out-of-order timestamps (DEV-1245). Consensys never does that, and neither do these scenarios.
+A Shimmer3R answers a clock write (`SET_RWC`) while it streams with out-of-order timestamps (DEV-1245, firmware). Up to 0.11.11_beta, `startSDLogging()` while streaming wrote the clock first. Since DEV-1337 the driver doesn't send a clock write to a streaming Shimmer3R; the connect sequence sets the clock. These scenarios start logging the Consensys way regardless.
 
 The stream checks are the Android HIL's (`StreamAnalysis`, the same class in ShimmerAndroidAPI's
 `shimmerHilTest`), so the two judge a stream by the same rules. `StreamAnalysisTest` runs in CI, as
