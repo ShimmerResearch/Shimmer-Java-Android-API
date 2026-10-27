@@ -28,7 +28,7 @@ import jssc.SerialPortTimeoutException;
  * startSDLogging() wrote the clock before every logging start, so starting logging mid-stream
  * triggered it every time; the Android HIL's midStreamSet and inStream failed on a Shimmer3R for it.
  * <p>
- * The IO thread now drops a clock write unsent while a Shimmer3R streams. The connect sequence still
+ * writeRealTimeClock() now queues nothing while a Shimmer3R streams. The connect sequence still
  * writes the clock, and a Shimmer3, whose timestamps stay in order across a clock write, still gets
  * it mid-stream.
  * <p>

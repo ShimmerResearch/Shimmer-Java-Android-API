@@ -720,14 +720,6 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 			//checkAndRemoveFirstInstructionIfNull();
 
 			byte[] insBytes = getInstruction();
-			if (insBytes!=null && insBytes[0]==SET_RWC_COMMAND && isRealTimeClockWriteBlocked()){
-				// Dropped unsent: see isRealTimeClockWriteBlocked()
-				synchronized(mListofInstructions){
-					mListofInstructions.remove(insBytes);
-				}
-				printLogDataForDebugging("SET_RWC_COMMAND not sent: the Shimmer3R is streaming (DEV-1337)");
-				return true;
-			}
 			if (insBytes!=null){
 					mCurrentCommand=insBytes[0];
 					setInstructionStackLock(true);
@@ -3107,7 +3099,7 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 	
 	/**
 	 * Starts SD logging, writing the PC's time to the clock first. On a Shimmer3R that is streaming
-	 * the clock write is not sent (see isRealTimeClockWriteBlocked()), and logging starts on the clock
+	 * the clock isn't written (see isRealTimeClockWriteBlocked()), and logging starts on the clock
 	 * the connect sequence set.
 	 */
 	@Override
@@ -4228,11 +4220,15 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 	
 	/**
 	 * Queues a write of the PC's time to the Shimmer's real-world clock; the time is read just before
-	 * the command is sent. It is not sent to a Shimmer3R that is streaming by then (see
+	 * the command is sent. Nothing is queued for a Shimmer3R that is streaming (see
 	 * isRealTimeClockWriteBlocked()): the connect sequence sets the clock instead.
 	 */
 	public void writeRealTimeClock(){
 		if(getFirmwareIdentifier()==FW_ID.LOGANDSTREAM){
+			if(isRealTimeClockWriteBlocked()){
+				printLogDataForDebugging("SET_RWC_COMMAND not queued: the Shimmer3R is streaming (DEV-1337)");
+				return;
+			}
 			//Just fill empty bytes here for RTC, set them just before writing to Shimmer
 		    byte[] bytearraycommand= new byte[9];
 			bytearraycommand[0]=SET_RWC_COMMAND;
@@ -4241,7 +4237,7 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 	}
 	
 	/**
-	 * Whether a clock write must not be sent now. On a Shimmer3R the counter that stamps each
+	 * Whether a clock write must not be queued now. On a Shimmer3R the counter that stamps each
 	 * streamed packet is the real-world clock, so setting the clock mid-stream steps it: packets come
 	 * out off the sample grid and sometimes behind the one before, and a step back beyond the
 	 * timestamp unwrap's reorder window reads as a counter wrap, stamping the rest of the session
