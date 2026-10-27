@@ -24,7 +24,26 @@ public class ByteCommunicationSimulatorS3R extends ByteCommunicationSimulatorS3{
 		mBuffer.add((byte) 0x0A);
 	}
 	
-	@Override 
+	/**
+	 * A Shimmer3R's inquiry reply has 11 bytes of settings, with the channel count
+	 * at index 9, so the Shimmer3 reply this class inherited never parsed: the
+	 * inquiry timed out, and the tests only passed because a status reply part way
+	 * through the connect sequence reported the unit ready first (DEV-1275). The
+	 * settings match this simulator's InfoMem: the sampling rate, config setup
+	 * bytes 0-3 from the first block and 4-6 from the second, then no channels
+	 * and a buffer size of 1.
+	 */
+	@Override
+	protected void inquiryResponse() {
+		mBuffer.add((byte) 0xff);
+		mBuffer.add((byte) 0x02);
+		byte[] bytes = UtilShimmer.hexStringToByteArray("80024D9B0E080000000001");
+		for (byte b:bytes) {
+			mBuffer.add(b);
+		}
+	}
+
+	@Override
 	protected void txFirmwareVersion() {
 		mBuffer.add((byte) 0xff);
 		mBuffer.add((byte) 0x2f);

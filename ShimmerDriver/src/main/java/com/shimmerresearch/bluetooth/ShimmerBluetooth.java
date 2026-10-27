@@ -76,6 +76,7 @@ package com.shimmerresearch.bluetooth;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.ObjectInputStream;
 import java.io.Serializable;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -186,7 +187,7 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 	protected byte mCurrentCommand;	
 	protected boolean mWaitForAck=false;                                          // This indicates whether the device is waiting for an acknowledge packet from the Shimmer Device  
 	protected boolean mWaitForResponse=false; 									// This indicates whether the device is waiting for a response packet from the Shimmer Device 
-	protected boolean mTransactionCompleted=true;									// Variable is used to ensure a command has finished execution prior to executing the next command (see initialize())
+	protected volatile boolean mTransactionCompleted=true;							// Variable is used to ensure a command has finished execution prior to executing the next command (see initialize()). Volatile: operationPrepare() waits on it from an app thread
 	transient protected IOThread mIOThread;
 	transient protected ProcessingThread mPThread;
 	@Deprecated // mContinousSync doesn't do anything
@@ -200,8 +201,12 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 	
 	private boolean mUseLegacyDelayToDelayForResponse = false;
 
-	ArrayBlockingQueue<RawBytePacketWithPCTimeStamp> mABQPacketByeArray = new ArrayBlockingQueue<RawBytePacketWithPCTimeStamp>(10000);
-	public List<Long> mListofPCTimeStamps = new ArrayList<Long>();
+	// The connection's queues are transient: the IO thread and the timers change them while a
+	// connected device is serialised by deepClone(), which threw ConcurrentModificationException
+	// (DEV-1310). readObject() gives a copy empty ones.
+	private static final int PACKET_QUEUE_CAPACITY = 10000;
+	transient ArrayBlockingQueue<RawBytePacketWithPCTimeStamp> mABQPacketByeArray = new ArrayBlockingQueue<RawBytePacketWithPCTimeStamp>(PACKET_QUEUE_CAPACITY);
+	public transient List<Long> mListofPCTimeStamps = new ArrayList<Long>();
 	
 	protected boolean mIamAlive = false;
 	protected abstract void connect(String address,String bluetoothLibrary);
@@ -233,7 +238,7 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 	
 	private SystemTimestampPlot systemTimestampPlot = new SystemTimestampPlot();
 
-	private List<byte []> mListofInstructions = new  ArrayList<byte[]>();
+	private transient List<byte []> mListofInstructions = new  ArrayList<byte[]>();
 	private final int ACK_TIMER_DURATION = 2; 									// Duration to wait for an ack packet (seconds)
 	protected boolean mDummyRead = false, mDummyReadStarted = false;
 	@Deprecated
@@ -584,71 +589,94 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 	}
 	
 	public class ProcessingThread extends Thread {
-		public boolean stop = false;
+		public volatile boolean stop = false;
 		int count=0;
 		public void run() {
-			while (!stop) {
-				if(!mABQPacketByeArray.isEmpty()){
+			while (!stop && !Thread.currentThread().isInterrupted()) {
+				RawBytePacketWithPCTimeStamp rbp = null;
+				try {
+					// Blocks (with a timeout) instead of busy-spinning on isEmpty() while idle.
+					// The timeout ensures the stop flag is still checked periodically.
+					rbp = mABQPacketByeArray.poll(100, TimeUnit.MILLISECONDS);
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+				}
+				if(rbp!=null){
 					count++;
 					if(count%1000==0){
 						consolePrintLn("Queue Size: " + mABQPacketByeArray.size());
 						printLogDataForDebugging("Queue Size: " + mABQPacketByeArray.size() + "\n");
 					}
-					RawBytePacketWithPCTimeStamp rbp = mABQPacketByeArray.remove();
 //					buildAndSendMsg(rbp.mDataArray, FW_TYPE_BT, false, rbp.mSystemTimeStamp);
 					buildAndSendMsg(rbp.mDataArray, COMMUNICATION_TYPE.BLUETOOTH, false, rbp.mSystemTimeStamp);
 				}
-			} 
-		} 
-	} 
+			}
+		}
+	}
 	
 	//region --------- BLUETOOH STACK --------- 
 	
 	public class IOThread extends Thread {
 		protected byte[] byteBuffer = {0};
-		public boolean stop = false;
+		public volatile boolean stop = false;
 		
 		public void run() {
-			while(!stop) {
+			while(!stop && !Thread.currentThread().isInterrupted()) {
+				boolean didWork = false;
 				//In-Shimmer Test here
 				if(InShimmerTest) {
 					if (bytesAvailableToBeRead()) {
-					byte[] data = readBytes(availableBytes());
-					if (data!=null) {
-						if (data.length>0) {
-							if (mTestByteListener != null) {
-			        			mTestByteListener.eventNewBytesReceived(data);
-			        		}
+						didWork = true;
+						byte[] data = readBytes(availableBytes());
+						if (data!=null) {
+							if (data.length>0) {
+								if (mTestByteListener != null) {
+									mTestByteListener.eventNewBytesReceived(data);
+								}
+							}
 						}
-					}
 					}
 				}
 				else {
 					if (mDummyRead) {
 						performDummyRead();
+						didWork = true;
 					}
-	
+
 					// Process Instruction on stack. is an instruction running? if not proceed
 					if(!isInstructionStackLock()){
-						processNextInstruction();
+						if(processNextInstruction()){
+							didWork = true;
+						}
 					}
-	
+
 					if(mIsStreaming){
 						processWhileStreaming();
+						didWork = true;
 					}
 					else if(bytesAvailableToBeRead()){
+						didWork = true;
 						if(mWaitForAck) {
 							processNotStreamingWaitForAck();
-						} 
+						}
 						else if(mWaitForResponse) {
 							processNotStreamingWaitForResp();
-						} 
-						
+						}
+
 						processBytesAvailableAndInstreamSupported();
-	
+
 					}
 				}
-				
+
+				if(!didWork){
+					// Nothing useful happened this iteration (idle, not streaming, no pending
+					// instructions/bytes) - avoid busy-spinning and pegging a CPU core.
+					try {
+						Thread.sleep(2);
+					} catch (InterruptedException e) {
+						Thread.currentThread().interrupt();
+					}
+				}
 			}
 		}
 		
@@ -681,10 +709,16 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 			mDummyReadStarted = false;
 		}
 		
-		private void processNextInstruction() {
+		/**
+		 * @return true if an instruction was found and processed (i.e. useful work was done),
+		 * or if this call already idle-paced the loop with its own threadSleep(50) below -
+		 * in that case reporting true here stops run()'s outer idle-sleep from stacking an
+		 * additional wait on top of this one.
+		 */
+		private boolean processNextInstruction() {
 			// check instruction stack, are there any other instructions left to be executed?
 			//checkAndRemoveFirstInstructionIfNull();
-			
+
 			byte[] insBytes = getInstruction();
 			if (insBytes!=null){
 					mCurrentCommand=insBytes[0];
@@ -761,14 +795,32 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 					
 					
 					mTransactionCompleted=false;
+				return true;
 			} else {
+				// getInstruction() returned null here - either the instruction stack is
+				// genuinely empty, or its leading entry was a null placeholder that
+				// getInstruction() just removed (a real instruction may still be next in
+				// the list and will be picked up on the following iteration). Either way,
+				// if there's also nothing else to do this iteration, wait here rather than
+				// busy-spinning.
 				if (!mIsStreaming && !bytesAvailableToBeRead()){
-					threadSleep(50);
+					// Report "did work" (true) so the caller's own idle sleep in run()
+					// doesn't stack an extra wait on top of this one.
+					// Not threadSleep(): that helper swallows InterruptedException without
+					// restoring the interrupt flag, which would defeat run()'s
+					// !Thread.currentThread().isInterrupted() loop-exit check.
+					try {
+						Thread.sleep(50);
+					} catch (InterruptedException e) {
+						Thread.currentThread().interrupt();
+					}
+					return true;
 				}
+				return false;
 			}
 		}
-		
-		/** Process ACK from a GET or SET command while not streaming */ 
+
+		/** Process ACK from a GET or SET command while not streaming */
 		private void processNotStreamingWaitForAck() {
 			//JC TEST:: IMPORTANT TO REMOVE // This is to simulate packet loss 
 			/*
@@ -811,13 +863,21 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 	
 						clearSerialBuffer();
 						
-						hasStopStreaming();					
+						hasStopStreaming();
 						removeInstruction(0);
 						removeAllNulls();
 						if (mCurrentCommand==STOP_SDBT_COMMAND){
-							eventLogAndStreamStatusChanged(mCurrentCommand);	
+							eventLogAndStreamStatusChanged(mCurrentCommand);
 						}
 						setInstructionStackLock(false);
+						// The stop is handled and the STOP retired. The byte that started the handling
+						// must not also go on to the ACK processing below: when it was the unit's ACK,
+						// that retired the next instruction as well, a command queued straight after
+						// stopStreaming() that was never sent (DEV-1306)
+						if((byte)byteBuffer[0]==ACK_COMMAND_PROCESSED){
+							printLogDataForDebugging("Stop handled on its ACK, the first byte back");
+						}
+						return;
 					}
 	//				//TODO: ACK is probably now working for STOP_STREAMING_COMMAND so merge in with others?
 	//				if(mCurrentCommand==STOP_SDBT_COMMAND) { //due to not receiving the ack from stop streaming command we will skip looking for it.
@@ -1005,22 +1065,34 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 					printLogDataForDebugging("COMMAND TXed and ACK RECEIVED IN STREAM");
 					printLogDataForDebugging("INS CMD RESP");
 
-					//Firstly handle the in-stream response
-					stopTimerCheckForAckOrResp(); //cancel the ack timer
-					mWaitForResponse=false;
-					mWaitForAck=false;
-
-					processInstreamResponse(true);
-
-					// Need to remove here because it is an
-					// in-stream response while streaming so not
-					// handled elsewhere
-					if(getListofInstructions().size()>0){
-						removeInstruction(0);
+					// The firmware also sends a status response unprompted (on a dock or
+					// undock, the user button, a low-battery stop), so this completes the
+					// command in flight only if the response is that command's reply
+					byte[] inStreamResponseCommand = readBytes(1, INSTREAM_CMD_RESPONSE);
+					boolean isReplyToCommandInFlight = inStreamResponseCommand!=null
+							&& isReplyToCommandInFlight(inStreamResponseCommand[0]);
+					if(isReplyToCommandInFlight){
+						stopTimerCheckForAckOrResp(); //cancel the ack timer
+						mWaitForResponse=false;
+						mWaitForAck=false;
 					}
-					
-					mTransactionCompleted=true;
-					setInstructionStackLock(false);
+
+					//Firstly handle the in-stream response
+					if(inStreamResponseCommand!=null){
+						processInstreamResponse(inStreamResponseCommand[0], true);
+					}
+
+					if(isReplyToCommandInFlight){
+						// Need to remove here because it is an
+						// in-stream response while streaming so not
+						// handled elsewhere
+						if(getListofInstructions().size()>0){
+							removeInstruction(0);
+						}
+						
+						mTransactionCompleted=true;
+						setInstructionStackLock(false);
+					}
 
 					//Then process the Data packet
 					processDataPacket(bufferTemp);
@@ -1060,10 +1132,89 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 			printLogDataForDebugging("readbyte null");
 		}
 
+		if(processAckAtStartOfBuffer()){
+			return;
+		}
+
 		//If there is a full packet and the subsequent sequence number of following packet
 		if(mByteArrayOutputStream.size()>=getPacketSizeWithCrc()+2){ // +2 because there are two acks
 			processPacket();
-		} 
+		}
+	}
+
+	/**
+	 * Handles an ACK at the very start of the buffer, with no data packet before
+	 * it. The unit sends one when it answers while its data packets are paused, as
+	 * they are for about 100 ms while it closes its SD file after
+	 * STOP_LOGGING_ONLY_COMMAND (DEV-1291). processPacket() only looks for an ACK
+	 * after a data packet, so it threw such a reply away; the command then timed
+	 * out, and the timeout dropped every queued instruction.
+	 * <p>
+	 * It is taken only while a command waits for its ACK, and only when the bytes
+	 * after it are what that command expects: its own in-stream reply (FF 8A and
+	 * then its response opcode), or for a SET command a bare ACK whose link CRC
+	 * checks out. A 0xFF data byte the parser resyncs onto is therefore not taken
+	 * for one. Without a link CRC a bare ACK can't be told from a data byte, but
+	 * then the previous ACK isn't processed until the stream resumes either, so the
+	 * next command never goes out during the pause.
+	 *
+	 * @return true while the bytes so far are taken, or may still turn out to be
+	 *         such an ACK. The buffer is then at most 3 bytes, too short for
+	 *         processPacket() anyway.
+	 */
+	private boolean processAckAtStartOfBuffer() {
+		if(!mWaitForAck || mByteArrayOutputStream.size()==0){
+			return false;
+		}
+		byte[] bufferTemp = mByteArrayOutputStream.toByteArray();
+		if(bufferTemp[0]!=ACK_COMMAND_PROCESSED){
+			return false;
+		}
+		if(bufferTemp.length==1){
+			return true; //wait for what follows the ACK
+		}
+
+		//The in-stream reply to the GET command in flight
+		if(isSupportedInStreamCmds() && bufferTemp[1]==INSTREAM_CMD_RESPONSE){
+			if(bufferTemp.length==2){
+				return true; //wait for the response opcode
+			}
+			if(bufferTemp.length>3 || !isReplyToCommandInFlight(bufferTemp[2])){
+				return false;
+			}
+			printLogDataForDebugging("COMMAND TXed and ACK RECEIVED IN STREAM, with no data packet before it");
+			stopTimerCheckForAckOrResp(); //cancel the ack timer
+			mWaitForResponse=false;
+			mWaitForAck=false;
+
+			//Reads the rest of the response, and its CRC, from the port
+			processInstreamResponse(bufferTemp[2], true);
+
+			if(getListofInstructions().size()>0){
+				removeInstruction(0);
+			}
+			mTransactionCompleted=true;
+			setInstructionStackLock(false);
+			clearBuffers();
+			return true;
+		}
+
+		//A bare ACK to the SET command in flight
+		if(isKnownSetCommand(mCurrentCommand) && mBtCommsCrcModeCurrent!=BT_CRC_MODE.OFF){
+			int numCrcBytes = mBtCommsCrcModeCurrent.getNumCrcBytes();
+			for(int i=1;i<bufferTemp.length && i<=numCrcBytes;i++){
+				if(bufferTemp[i]!=BARE_ACK_CRC[i-1]){
+					return false;
+				}
+			}
+			if(bufferTemp.length<1+numCrcBytes){
+				return true; //wait for the rest of the ACK's CRC
+			}
+			clearBytesFromStartOfBuffers(bufferTemp, 1+numCrcBytes);
+			processAckWhileStreaming();
+			return true;
+		}
+		return false;
 	}
 	
 	private static boolean isKnownResponse(byte response) {
@@ -1156,75 +1307,93 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 		}
 	}
 	
+	/**
+	 * Whether an in-stream response is the reply to the command in flight. The
+	 * protocol matches a reply to its command by the response opcode, never by the
+	 * ACK (log-and-stream-common docs/SHIMMER3_BT_COMMUNICATION_PROTOCOL.md
+	 * section 5.4, rule 2).
+	 */
+	private boolean isReplyToCommandInFlight(byte inStreamResponseCommand) {
+		if(!mWaitForAck && !mWaitForResponse){
+			return false;
+		}
+		BtCommandDetails commandDetails = mBtGetCommandMap.get(mCurrentCommand);
+		return commandDetails!=null && commandDetails.expectedResponse==inStreamResponseCommand;
+	}
+	
 	/** process responses to in-stream response */
 	protected void processInstreamResponse(boolean shouldClearCrcFromBuffer) {
-		boolean responseWasParsed = true;
-		
 		byte[] inStreamResponseCommandBuffer = readBytes(1, INSTREAM_CMD_RESPONSE);
 		if(inStreamResponseCommandBuffer!=null){
-			byte inStreamResponseCommand = inStreamResponseCommandBuffer[0];
-			consolePrintLn("In-stream received = " + btCommandToString(inStreamResponseCommand));
+			processInstreamResponse(inStreamResponseCommandBuffer[0], shouldClearCrcFromBuffer);
+		}
+	}
 	
-			if(inStreamResponseCommand==DIR_RESPONSE){ 
-				byte[] responseData = readBytes(1, inStreamResponseCommand);
-				if(responseData!=null){
-					int directoryNameLength = responseData[0];
-					byte[] bufferDirectoryName = new byte[directoryNameLength];
-					bufferDirectoryName = readBytes(directoryNameLength, inStreamResponseCommand);
-					if(bufferDirectoryName!=null){
-						String tempDirectory = new String(bufferDirectoryName);
-						mDirectoryName = tempDirectory;
-						printLogDataForDebugging("Directory Name = " + mDirectoryName);
-					}
-				}
-			}
-			else if(inStreamResponseCommand==STATUS_RESPONSE){
-				int statusBytesToRead = 0;
-				if(isSupportedUSBPluggedInStatus()) {
-					statusBytesToRead = 2;
-				}else {
-					statusBytesToRead = 1;
-				}
-				byte[] responseData = readBytes(statusBytesToRead, inStreamResponseCommand);
-				if(responseData!=null){
-					parseStatusByte(responseData);
+	/** process an in-stream response whose response command has already been read */
+	protected void processInstreamResponse(byte inStreamResponseCommand, boolean shouldClearCrcFromBuffer) {
+		boolean responseWasParsed = true;
 		
-					if(!isSupportedRtcStateInStatus()){
-						if(!mIsSensing && !isInitialised()){
-							writeRealTimeClock();
-						}
-					} else {
-						//New case to make sure RTC is set if it hasn't been already
-						if(!isSDLogging() && (!isInitialised() || !mIsRtcSet)){
-							writeRealTimeClock();
-						}
+		consolePrintLn("In-stream received = " + btCommandToString(inStreamResponseCommand));
+
+		if(inStreamResponseCommand==DIR_RESPONSE){ 
+			byte[] responseData = readBytes(1, inStreamResponseCommand);
+			if(responseData!=null){
+				int directoryNameLength = responseData[0];
+				byte[] bufferDirectoryName = new byte[directoryNameLength];
+				bufferDirectoryName = readBytes(directoryNameLength, inStreamResponseCommand);
+				if(bufferDirectoryName!=null){
+					String tempDirectory = new String(bufferDirectoryName);
+					mDirectoryName = tempDirectory;
+					printLogDataForDebugging("Directory Name = " + mDirectoryName);
+				}
+			}
+		}
+		else if(inStreamResponseCommand==STATUS_RESPONSE){
+			int statusBytesToRead = 0;
+			if(isSupportedUSBPluggedInStatus()) {
+				statusBytesToRead = 2;
+			}else {
+				statusBytesToRead = 1;
+			}
+			byte[] responseData = readBytes(statusBytesToRead, inStreamResponseCommand);
+			if(responseData!=null){
+				parseStatusByte(responseData);
+	
+				if(!isSupportedRtcStateInStatus()){
+					if(!mIsSensing && !isInitialised()){
+						writeRealTimeClock();
 					}
-					
-					eventLogAndStreamStatusChanged(mCurrentCommand);
+				} else {
+					//New case to make sure RTC is set if it hasn't been already
+					if(!isSDLogging() && (!isInitialised() || !mIsRtcSet)){
+						writeRealTimeClock();
+					}
 				}
-			} 
-			else if(inStreamResponseCommand==VBATT_RESPONSE) {
-				byte[] responseData = readBytes(3, inStreamResponseCommand);
-				if(responseData!=null){
-					ShimmerBattStatusDetails battStatusDetails = new ShimmerBattStatusDetails(((responseData[1]&0xFF)<<8)+(responseData[0]&0xFF),responseData[2]);
-					setBattStatusDetails(battStatusDetails);
-					printLogDataForDebugging("Battery Status:"
-							+ "\tVoltage=" + battStatusDetails.getBattVoltageParsed()
-							+ "\tCharging status=" + battStatusDetails.getChargingStatusParsed()
-							+ "\tBatt %=" + battStatusDetails.getEstimatedChargePercentageParsed());
-				}
+				
+				eventLogAndStreamStatusChanged(mCurrentCommand);
 			}
-			else
-			{
-				responseWasParsed = false;
+		} 
+		else if(inStreamResponseCommand==VBATT_RESPONSE) {
+			byte[] responseData = readBytes(3, inStreamResponseCommand);
+			if(responseData!=null){
+				ShimmerBattStatusDetails battStatusDetails = new ShimmerBattStatusDetails(((responseData[1]&0xFF)<<8)+(responseData[0]&0xFF),responseData[2]);
+				setBattStatusDetails(battStatusDetails);
+				printLogDataForDebugging("Battery Status:"
+						+ "\tVoltage=" + battStatusDetails.getBattVoltageParsed()
+						+ "\tCharging status=" + battStatusDetails.getChargingStatusParsed()
+						+ "\tBatt %=" + battStatusDetails.getEstimatedChargePercentageParsed());
 			}
-			
-			if (shouldClearCrcFromBuffer && mBtCommsCrcModeCurrent != BT_CRC_MODE.OFF && responseWasParsed) {
-				// The driver doesn't currently support checking of CRC bytes on any response
-				// other then data packets but we still need to clear them from the buffer if
-				// CRC is enabled.
-				clearCrcBytesFromBuffer(inStreamResponseCommand);
-			}
+		}
+		else
+		{
+			responseWasParsed = false;
+		}
+		
+		if (shouldClearCrcFromBuffer && mBtCommsCrcModeCurrent != BT_CRC_MODE.OFF && responseWasParsed) {
+			// The driver doesn't currently support checking of CRC bytes on any response
+			// other then data packets but we still need to clear them from the buffer if
+			// CRC is enabled.
+			clearCrcBytesFromBuffer(inStreamResponseCommand);
 		}
 		
 	}
@@ -2832,6 +3001,14 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 	@Override
 	public void operationPrepare(){
 		stopAllTimers();
+
+		// Let a command already sent finish first. Clearing the list now would remove it while it is
+		// still in flight, and its reply, which retires the head of the list (removeInstruction(0)),
+		// would then remove this operation's first instruction in its place. After stopStreaming() the
+		// STOP is in flight for about 400 ms, as its stop handling sleeps that long, so a configuration
+		// started straight after a stop lost its first SET_INFOMEM, the chunk that holds the sampling
+		// rate (DEV-1306).
+		waitForInstructionInFlight(OPERATION_PREPARE_WAIT_MS);
 
 		//make sure no more instructions
 		//shouldnt matter since the configuration are being rewritten by consensys
@@ -5901,6 +6078,18 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 
 
 	/**
+	 * A copy made by serialisation (deepClone()) is of the configuration, not of the connection,
+	 * so it starts with none of the connection's queues. They are transient (DEV-1310), and a
+	 * deserialised object runs no field initialisers.
+	 */
+	private void readObject(ObjectInputStream in) throws IOException, ClassNotFoundException {
+		in.defaultReadObject();
+		mABQPacketByeArray = new ArrayBlockingQueue<RawBytePacketWithPCTimeStamp>(PACKET_QUEUE_CAPACITY);
+		mListofPCTimeStamps = new ArrayList<Long>();
+		mListofInstructions = new ArrayList<byte[]>();
+	}
+
+	/**
 	 * @return the mListofInstructions
 	 */
 	protected synchronized List<byte []> getListofInstructions() {
@@ -5909,6 +6098,46 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 		}
 	}
 	
+	/** How long operationPrepare() waits for a command in flight: past its 2 s ACK timeout */
+	private static final long OPERATION_PREPARE_WAIT_MS = 3000;
+
+	/**
+	 * Waits until the instruction at the head of the list, if it has been sent and is waiting for its
+	 * reply, has been answered and retired, or until the timeout. Returns at once on the IOThread,
+	 * which is the thread that would retire it.
+	 */
+	private void waitForInstructionInFlight(long timeoutMs) {
+		byte[] inFlight;
+		synchronized(mListofInstructions){
+			inFlight = (!mTransactionCompleted && !mListofInstructions.isEmpty()) ? mListofInstructions.get(0) : null;
+		}
+		if(inFlight==null || Thread.currentThread()==mIOThread){
+			return;
+		}
+		long end = System.currentTimeMillis()+timeoutMs;
+		while(System.currentTimeMillis()<end){
+			synchronized(mListofInstructions){
+				boolean stillListed = false;
+				for(byte[] instruction:mListofInstructions){
+					if(instruction==inFlight){
+						stillListed = true;
+						break;
+					}
+				}
+				if(mTransactionCompleted && !stillListed){
+					return;
+				}
+			}
+			try {
+				Thread.sleep(10);
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				return;
+			}
+		}
+		printLogDataForDebugging("operationPrepare: " + btCommandToString(inFlight[0]) + " was still in flight after " + timeoutMs + " ms; clearing it");
+	}
+
 	private synchronized void clearAllInstructions(){
 		synchronized(mListofInstructions){
 			getListofInstructions().clear();
@@ -5932,11 +6161,18 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 		}
 	}
 	
+	/**
+	 * Called by the IO thread for the next instruction. It locks only the list:
+	 * everything else locks the device first and the list second, so taking the
+	 * device here, through the synchronized getListofInstructions(), deadlocked
+	 * the IO thread against the timers that queue and clear instructions
+	 * (DEV-1266).
+	 */
 	private byte[] getInstruction(){
 		synchronized(mListofInstructions){
 			if(!mListofInstructions.isEmpty()){
 				if(mListofInstructions.get(0)!=null) {
-					byte[] insBytes = (byte[]) getListofInstructions().get(0);
+					byte[] insBytes = (byte[]) mListofInstructions.get(0);
 					return insBytes;
 				} else{
 					return mListofInstructions.remove(0);

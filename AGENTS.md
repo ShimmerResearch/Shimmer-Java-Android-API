@@ -18,6 +18,27 @@ all: they are legacy Eclipse ADT Android projects.
 
 Test results land in `**/build/test-results/test/*.xml`.
 
+## Releasing
+Releases are cut by the **Release Java API** workflow (`release.yml`), not from a developer machine,
+and need no uprev PR:
+1. Run the workflow on `master`. Leave `version` blank for the next patch after the last `API_v`
+   release, or type one. It tests and builds as CI does, publishes all three artifacts to GitHub
+   Packages in one `gradlew publish`, tags `API_v<version>`, and creates the GitHub Release with the
+   jars attached (not marked Latest — that stays with Consensys).
+2. It also builds `ShimmerJavaClass.jar` for MATLAB and opens a PR replacing
+   `Shimmer-MATLAB-ID/libs/ShimmerJavaClass.jar` (needs the `MATLAB_REPO_TOKEN` secret). Review and
+   merge it.
+3. Run `ShimmerAndroidAPI`'s own Release workflow, which builds against the newest Java release unless
+   told otherwise.
+
+The version is not stored in the source: the three publishing blocks read `-PreleaseVersion`, which
+the workflow passes, and fall back to `local`. The `API_v` tags are the record of what was released.
+
+`ShimmerJavaClass.jar` must be Java 8 bytecode, because MATLAB may load it on Java 8. Build it locally
+with `cd ShimmerDriverPC && ./gradlew shadowJar -PmatlabJava8`, which compiles all three projects with
+`--release 8` — that also rejects any API newer than Java 8, so `Process.onExit()`, `var` and the like
+fail the build here instead of throwing `NoSuchMethodError` inside MATLAB.
+
 ## Subprojects
 | Project | Role |
 |---|---|

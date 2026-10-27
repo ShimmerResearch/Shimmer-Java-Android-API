@@ -55,3 +55,7 @@ ShimmerAndroidInstrumentDriver/gen/com/shimmerresearch/androidinstrumentdriver/B
 ShimmerAndroidInstrumentDriver/gen/com/shimmerresearch/androidinstrumentdriver/R.java
 gradle.properties
 github.properties
+
+# Java HIL (tools/hil): the local rig file and run output
+tools/hil/rig-java.json
+tools/hil/out/

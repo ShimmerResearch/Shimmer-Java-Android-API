@@ -9334,6 +9334,13 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 		}
 	}
 
+	/** Shimmer3R low-noise accel range: 0 = +/-2g, 1 = +/-4g, 2 = +/-8g, 3 = +/-16g */
+	protected void setLSM6DSVAccelRange(int i){
+		if(mSensorLSM6DSV!=null){
+			mSensorLSM6DSV.setLSM6DSVAccelRange(i);
+		}
+	}
+
 	/**
 	 * @param mMPU9150MPLSamplingRate the mMPU9150MPLSamplingRate to set
 	 */
