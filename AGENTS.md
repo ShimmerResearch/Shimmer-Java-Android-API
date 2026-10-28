@@ -26,8 +26,9 @@ and need no uprev PR:
    Packages in one `gradlew publish`, tags `API_v<version>`, and creates the GitHub Release with the
    jars attached (not marked Latest — that stays with Consensys).
 2. It also builds `ShimmerJavaClass.jar` for MATLAB and opens a PR replacing
-   `Shimmer-MATLAB-ID/libs/ShimmerJavaClass.jar` (needs the `MATLAB_REPO_TOKEN` secret). Review and
-   merge it.
+   `Shimmer-MATLAB-ID/libs/ShimmerJavaClass.jar` (needs the `MATLAB_REPO_TOKEN` secret). Before
+   merging it, run a MATLAB example on a Shimmer3 and a Shimmer3R; MATLAB cannot run in CI. Merging
+   publishes a MATLAB API release (Shimmer-MATLAB-ID's `release.yml`).
 3. Run `ShimmerAndroidAPI`'s own Release workflow, which builds against the newest Java release unless
    told otherwise.
 

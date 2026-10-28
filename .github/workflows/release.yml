@@ -6,7 +6,8 @@
 #      gives a Jira key (the waiver goes into the release notes). Dry runs only warn.
 #   1. Actions -> "Release Java API" -> Run workflow (on master). Leave `version` blank for the next
 #      patch after the last API_v release (0.11.8_beta -> 0.11.9_beta), or type one.
-#   2. Review and merge the ShimmerJavaClass.jar PR it opens in Shimmer-MATLAB-ID.
+#   2. Run a MATLAB example on a Shimmer3 and a Shimmer3R with the ShimmerJavaClass.jar PR it opens in
+#      Shimmer-MATLAB-ID, then merge it. Merging publishes a MATLAB API release (that repo's release.yml).
 #   3. Run "Release Android API" in ShimmerAndroidAPI, which builds against this version by default.
 #
 # The version is not kept in the source. The build files read it from -PreleaseVersion, which this
@@ -24,9 +25,9 @@
 #   release      tags API_v<version> on the commit it built and creates the GitHub Release, with
 #                notes from the previous API_v release and the jars attached. It is not marked
 #                "Latest", which stays with the Consensys releases in this repo.
-#   update-matlab  opens a PR in Shimmer-MATLAB-ID replacing libs/ShimmerJavaClass.jar. Needs the
-#                MATLAB_REPO_TOKEN secret: a fine-grained token for ShimmerResearch/Shimmer-MATLAB-ID
-#                with Contents and Pull requests read/write.
+#   update-matlab  opens a PR in Shimmer-MATLAB-ID replacing libs/ShimmerJavaClass.jar; merging it
+#                publishes a MATLAB API release. Needs the MATLAB_REPO_TOKEN secret: a fine-grained
+#                token for ShimmerResearch/Shimmer-MATLAB-ID with Contents and Pull requests read/write.
 #
 # A failed job can be re-run on its own with "Re-run failed jobs"; the jobs before it are not
 # repeated. A failed publish can leave some of the three versions in GitHub Packages: delete those
@@ -346,7 +347,7 @@ jobs:
           echo "- Release: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$TAG"
           echo "- Packages: com.shimmerresearch:shimmerdriver, shimmerbluetoothmanager and shimmerdriverpc at $VERSION"
           echo "- ${HIL:-No hardware test result}"
-          echo "- Next: merge the MATLAB PR, then run Release Android API in ShimmerAndroidAPI; it builds against $VERSION unless you pick another driver version."
+          echo "- Next: run a MATLAB example on a Shimmer3 and a Shimmer3R and merge the MATLAB PR, which publishes a MATLAB API release; then run Release Android API in ShimmerAndroidAPI; it builds against $VERSION unless you pick another driver version."
         } >> "$GITHUB_STEP_SUMMARY"
 
   update-matlab:
@@ -406,6 +407,9 @@ jobs:
         url=$(gh pr create --repo "$MATLAB_REPO" --base master --head "$BRANCH" \
           --title "Update ShimmerJavaClass.jar to Shimmer Java API $VERSION" \
           --body "Replaces \`libs/ShimmerJavaClass.jar\` with the build from [$TAG]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$TAG) (\`$GITHUB_SHA\`), compiled as Java 8 bytecode with \`gradlew shadowJar -PmatlabJava8\`.
+
+        - Before merging, run an example such as \`plotandwriteexample.m\` on a Shimmer3 and a Shimmer3R. MATLAB cannot run in CI.
+        - Merging publishes a MATLAB API release: the next patch version, with Java API $VERSION in its title.
 
         Opened by the [Release Java API run]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID).")
         echo "Opened $url"
