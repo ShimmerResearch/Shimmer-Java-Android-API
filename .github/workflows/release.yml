@@ -1,4 +1,5 @@
-# One-click release of the Java API: GitHub Packages, a GitHub Release, and the MATLAB jar.
+# One-click release of the Java API: GitHub Packages, a GitHub Release, the MATLAB jar, and a PR moving
+# ShimmerAndroidAPI to the new driver.
 #
 # How to release
 #   0. On the bench, at the commit to release: tools/hil/run-java-hil.ps1 -Report (tools/hil/README.md).
@@ -8,7 +9,12 @@
 #      patch after the last API_v release (0.11.8_beta -> 0.11.9_beta), or type one.
 #   2. Run a MATLAB example on a Shimmer3 and a Shimmer3R with the ShimmerJavaClass.jar PR it opens in
 #      Shimmer-MATLAB-ID, then merge it. Merging publishes a MATLAB API release (that repo's release.yml).
-#   3. Run "Release Android API" in ShimmerAndroidAPI, which builds against this version by default.
+#   3. Android: the PR it opens in ShimmerAndroidAPI moves the default driver pin to this version, and
+#      its CI runs the unit tests and builds every example against it. Check the driver changes since
+#      the last pin for parser, CRC or ACK fixes: Android's Shimmer.java has its own Bluetooth stream
+#      parser, so those must be ported by hand. Merge it, run tools/hil/run-android-hil.ps1 -Report
+#      -DriverVersion <version> on the bench at master's new commit, then run "Release Android API",
+#      which builds against this version by default.
 #
 # The version is not kept in the source. The build files read it from -PreleaseVersion, which this
 # workflow passes, and say 'local' otherwise; the API_v tags record what was released.
@@ -28,6 +34,11 @@
 #   update-matlab  opens a PR in Shimmer-MATLAB-ID replacing libs/ShimmerJavaClass.jar; merging it
 #                publishes a MATLAB API release. Needs the MATLAB_REPO_TOKEN secret: a fine-grained
 #                token for ShimmerResearch/Shimmer-MATLAB-ID with Contents and Pull requests read/write.
+#   update-android  opens a PR in ShimmerAndroidAPI moving the default driver version in
+#                ShimmerAndroidInstrumentDriver/build.gradle to this one, listing the Android steps.
+#                The Android release stays manual: it needs a passing bench test on its own commit.
+#                Needs the ANDROID_REPO_TOKEN secret: a fine-grained token for
+#                ShimmerResearch/ShimmerAndroidAPI with Contents and Pull requests read/write.
 #
 # A failed job can be re-run on its own with "Re-run failed jobs"; the jobs before it are not
 # repeated. A failed publish can leave some of the three versions in GitHub Packages: delete those
@@ -347,7 +358,7 @@ jobs:
           echo "- Release: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$TAG"
           echo "- Packages: com.shimmerresearch:shimmerdriver, shimmerbluetoothmanager and shimmerdriverpc at $VERSION"
           echo "- ${HIL:-No hardware test result}"
-          echo "- Next: run a MATLAB example on a Shimmer3 and a Shimmer3R and merge the MATLAB PR, which publishes a MATLAB API release; then run Release Android API in ShimmerAndroidAPI; it builds against $VERSION unless you pick another driver version."
+          echo "- Next: run a MATLAB example on a Shimmer3 and a Shimmer3R and merge the MATLAB PR, which publishes a MATLAB API release. For Android, follow the steps in the ShimmerAndroidAPI driver PR: port any parser, CRC or ACK fix to Shimmer.java, merge, run the Android HIL with -DriverVersion $VERSION at master's new commit, then run Release Android API."
         } >> "$GITHUB_STEP_SUMMARY"
 
   update-matlab:
@@ -414,3 +425,85 @@ jobs:
         Opened by the [Release Java API run]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID).")
         echo "Opened $url"
         echo "- MATLAB PR: $url" >> "$GITHUB_STEP_SUMMARY"
+
+  # Only the default pin moves here. Release Android API already builds against the newest Java
+  # release; this PR is so ShimmerAndroidAPI's CI tries the new driver, and so the Android steps
+  # that follow a Java release are written down where they are done.
+  update-android:
+    needs: [build, release]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {} # writes to ShimmerAndroidAPI with ANDROID_REPO_TOKEN, not this repo's token
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+      TAG: ${{ needs.build.outputs.tag }}
+      ANDROID_REPO: ShimmerResearch/ShimmerAndroidAPI
+      BRANCH: driver_${{ needs.build.outputs.version }}
+      PIN_FILE: ShimmerAndroidInstrumentDriver/build.gradle
+      HAS_TOKEN: ${{ secrets.ANDROID_REPO_TOKEN != '' }}
+    steps:
+    - name: Check for ANDROID_REPO_TOKEN
+      if: env.HAS_TOKEN != 'true'
+      run: |
+        echo "::error::Secret ANDROID_REPO_TOKEN is not set, so the ShimmerAndroidAPI PR cannot be opened. Add a fine-grained token for $ANDROID_REPO (Contents and Pull requests: read/write) as a repo secret, then re-run this job."
+        exit 1
+
+    # Credentials stay persisted here on purpose: the git push below uses them. Nothing else runs
+    # in this job.
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      with:
+        repository: ${{ env.ANDROID_REPO }}
+        token: ${{ secrets.ANDROID_REPO_TOKEN }}
+        path: android
+
+    - name: Open the PR moving the default driver to this version
+      env:
+        GH_TOKEN: ${{ secrets.ANDROID_REPO_TOKEN }}
+      working-directory: android
+      run: |
+        existing=$(gh pr list --repo "$ANDROID_REPO" --head "$BRANCH" --state open --json url --jq '.[0].url // ""')
+        if [ -n "$existing" ]; then
+          echo "PR already open: $existing"
+          echo "- Android PR: $existing" >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+        # The default is the one line: def shimmerDriverVersion = findProperty('driverVersion') ?: '<version>'
+        old=$(sed -n "s/.*findProperty('driverVersion') ?: '\([^']*\)'.*/\1/p" "$PIN_FILE")
+        if [ -z "$old" ] || [ "$(wc -l <<<"$old")" -ne 1 ]; then
+          echo "::error::$ANDROID_REPO's $PIN_FILE no longer has exactly one line like findProperty('driverVersion') ?: '0.11.11_beta'. Update this job to match it."
+          exit 1
+        fi
+        if [ "$old" = "$VERSION" ]; then
+          echo "$PIN_FILE already defaults to $VERSION; no PR needed."
+          echo "- Android: master already builds against $VERSION; no PR needed." >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+        if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null; then
+          echo "::warning::Branch $BRANCH already exists in $ANDROID_REPO with no open PR, so this job leaves it alone. Open a PR from it, or delete it and re-run this job."
+          echo "- Android: branch $BRANCH already exists with no open PR. Open a PR from it, or delete it and re-run this job." >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+        # VERSION is checked against ^[0-9]+\.[0-9]+\.[0-9]+[A-Za-z0-9_.-]*$ in build, so it is safe in sed.
+        sed -i "s/\(findProperty('driverVersion') ?: '\)[^']*'/\1$VERSION'/" "$PIN_FILE"
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git switch -c "$BRANCH"
+        git add "$PIN_FILE"
+        git commit -m "Build against Shimmer Java API $VERSION by default" \
+                   -m "Moves the default driver version in $PIN_FILE from $old to $VERSION. Opened by $GITHUB_REPOSITORY's Release workflow for $TAG ($GITHUB_SHA)."
+        git push origin "HEAD:refs/heads/$BRANCH"
+        url=$(gh pr create --repo "$ANDROID_REPO" --base master --head "$BRANCH" \
+          --title "Build against Shimmer Java API $VERSION by default" \
+          --body "Moves the default driver version in \`$PIN_FILE\` from $old to $VERSION, released as [$TAG]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$TAG). CI and local builds use the default. Release Android API builds against the newest Java release whether or not this merges, so this PR is the check that the library and the examples still work with it.
+
+        Before merging:
+        - [ ] CI passes: the library's unit tests and every example, built against $VERSION.
+        - [ ] Check the [driver changes since $old]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/compare/API_v$old...$TAG) for Bluetooth stream parser, CRC or ACK fixes. \`Shimmer.java\` has its own copy of that parser, so those fixes never reach it through this pin: port each one by hand. AGENTS.md explains why (DEV-1148 ported DEV-1147's fix).
+
+        After merging:
+        - [ ] On the bench, at master's new commit: \`tools/hil/run-android-hil.ps1 -Report -DriverVersion $VERSION\`. The \`android-hil (driver $VERSION)\` status it posts is per commit, so a run on this branch does not count for the release.
+        - [ ] Run **Release Android API** with \`driver_version\` $VERSION, or blank for the newest Java release.
+
+        Opened by the [Release Java API run]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID).")
+        echo "Opened $url"
+        echo "- Android PR: $url" >> "$GITHUB_STEP_SUMMARY"
