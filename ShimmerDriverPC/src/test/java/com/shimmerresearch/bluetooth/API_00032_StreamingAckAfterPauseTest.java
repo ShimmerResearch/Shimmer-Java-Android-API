@@ -251,16 +251,17 @@ public class API_00032_StreamingAckAfterPauseTest {
 	private void bareAckInThePause(BT_CRC_MODE crcMode) {
 		streamingShimmer3r(crcMode);
 		mDevice.stopSDLogging();
-		mDevice.startSDLogging(); // SET_RWC_COMMAND, then START_LOGGING_ONLY_COMMAND
+		mDevice.startSDLogging(); // START_LOGGING_ONLY_COMMAND: no clock write to a streaming Shimmer3R (DEV-1337)
+		mDevice.readBattery();
 		assertEquals(3, mDevice.getListofInstructions().size());
 		stopLoggingAndReceiveItsAck(crcMode);
 
 		sendNextInstruction();
-		assertEquals(ShimmerObject.SET_RWC_COMMAND, mDevice.mCurrentCommand);
+		assertEquals(ShimmerObject.START_LOGGING_ONLY_COMMAND, mDevice.mCurrentCommand);
 		receive(bareAck(crcMode), dataPacket(2, crcMode), new byte[] {ShimmerObject.DATA_PACKET});
 		assertCompleted();
-		assertEquals("START_LOGGING_ONLY_COMMAND is still queued", 1, mDevice.getListofInstructions().size());
-		assertEquals(ShimmerObject.START_LOGGING_ONLY_COMMAND, mDevice.getListofInstructions().get(0)[0]);
+		assertEquals("GET_VBATT_COMMAND is still queued", 1, mDevice.getListofInstructions().size());
+		assertEquals(ShimmerObject.GET_VBATT_COMMAND, mDevice.getListofInstructions().get(0)[0]);
 		assertParsed(payload(1), payload(2));
 	}
 

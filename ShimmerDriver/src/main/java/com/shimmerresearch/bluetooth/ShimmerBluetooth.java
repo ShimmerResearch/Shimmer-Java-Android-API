@@ -3097,6 +3097,11 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 		mSync=true; // a backup sync done every time you start streaming
 	}
 	
+	/**
+	 * Starts SD logging, writing the PC's time to the clock first. On a Shimmer3R that is streaming
+	 * the clock isn't written (see isRealTimeClockWriteBlocked()), and logging starts on the clock
+	 * the connect sequence set.
+	 */
 	@Override
 	public void startSDLogging(){
 		//Shouldn't be logging anyway but just incase.
@@ -4213,11 +4218,17 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 		}
 	}
 	
-	/**Gets pc time and writes the 8 byte value to shimmer device
-	 * 
+	/**
+	 * Queues a write of the PC's time to the Shimmer's real-world clock; the time is read just before
+	 * the command is sent. Nothing is queued for a Shimmer3R that is streaming (see
+	 * isRealTimeClockWriteBlocked()): the connect sequence sets the clock instead.
 	 */
 	public void writeRealTimeClock(){
 		if(getFirmwareIdentifier()==FW_ID.LOGANDSTREAM){
+			if(isRealTimeClockWriteBlocked()){
+				printLogDataForDebugging("SET_RWC_COMMAND not queued: the Shimmer3R is streaming (DEV-1337)");
+				return;
+			}
 			//Just fill empty bytes here for RTC, set them just before writing to Shimmer
 		    byte[] bytearraycommand= new byte[9];
 			bytearraycommand[0]=SET_RWC_COMMAND;
@@ -4225,6 +4236,20 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 		}
 	}
 	
+	/**
+	 * Whether a clock write must not be queued now. On a Shimmer3R the counter that stamps each
+	 * streamed packet is the real-world clock, so setting the clock mid-stream steps it: packets come
+	 * out off the sample grid and sometimes behind the one before, and a step back beyond the
+	 * timestamp unwrap's reorder window reads as a counter wrap, stamping the rest of the session
+	 * 512 s late (DEV-1245, firmware). So the clock is not written to a streaming Shimmer3R
+	 * (DEV-1337). The connect sequence sets it, and if a status reply shows it unset, it is written at
+	 * the next reply while the unit isn't streaming. A Shimmer3 keeps its timestamps in order across
+	 * a clock write, so it is still written there.
+	 */
+	protected boolean isRealTimeClockWriteBlocked() {
+		return mIsStreaming && getHardwareVersion()==HW_ID.SHIMMER_3R;
+	}
+
 	public void readGyroRange() {
 		writeInstruction(GET_MPU9150_GYRO_RANGE_COMMAND);
 	}

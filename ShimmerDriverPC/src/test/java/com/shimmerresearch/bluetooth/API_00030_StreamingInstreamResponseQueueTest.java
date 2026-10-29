@@ -181,25 +181,28 @@ public class API_00030_StreamingInstreamResponseQueueTest {
 	}
 
 	/**
-	 * startSDLogging() queues SET_RWC_COMMAND and START_LOGGING_ONLY_COMMAND. A
-	 * status push between SET_RWC_COMMAND and its ACK must leave both queued, and
-	 * the ACK must then complete SET_RWC_COMMAND, not START_LOGGING_ONLY_COMMAND.
+	 * startSDLogging() queues START_LOGGING_ONLY_COMMAND (no clock write to a
+	 * streaming Shimmer3R, DEV-1337), and readBattery() queues GET_VBATT_COMMAND
+	 * behind it. A status push between START_LOGGING_ONLY_COMMAND and its ACK must
+	 * leave both queued, and the ACK must then complete START_LOGGING_ONLY_COMMAND,
+	 * not GET_VBATT_COMMAND.
 	 */
 	private void statusPushWhileASetCommandAwaitsItsAck(BT_CRC_MODE crcMode) {
 		streamingShimmer3r(crcMode);
 		mDevice.startSDLogging();
+		mDevice.readBattery();
 		assertEquals(2, mDevice.getListofInstructions().size());
 		sendNextInstruction();
-		assertEquals(ShimmerObject.SET_RWC_COMMAND, mDevice.mCurrentCommand);
+		assertEquals(ShimmerObject.START_LOGGING_ONLY_COMMAND, mDevice.mCurrentCommand);
 
 		receive(dataPacket(1, crcMode), statusPush(crcMode), dataPacket(2, crcMode));
 		assertTrue("the status push is still processed", mDevice.isDocked());
-		assertStillWaitingFor(ShimmerObject.SET_RWC_COMMAND, 2);
+		assertStillWaitingFor(ShimmerObject.START_LOGGING_ONLY_COMMAND, 2);
 
 		receive(dataPacket(3, crcMode), bareAck(crcMode), dataPacket(4, crcMode), dataPacket(5, crcMode));
 		assertCompleted();
-		assertEquals("START_LOGGING_ONLY_COMMAND is still queued", 1, mDevice.getListofInstructions().size());
-		assertEquals(ShimmerObject.START_LOGGING_ONLY_COMMAND, mDevice.getListofInstructions().get(0)[0]);
+		assertEquals("GET_VBATT_COMMAND is still queued", 1, mDevice.getListofInstructions().size());
+		assertEquals(ShimmerObject.GET_VBATT_COMMAND, mDevice.getListofInstructions().get(0)[0]);
 	}
 
 	@Test
