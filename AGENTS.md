@@ -29,8 +29,14 @@ and need no uprev PR:
    `Shimmer-MATLAB-ID/libs/ShimmerJavaClass.jar` (needs the `MATLAB_REPO_TOKEN` secret). Before
    merging it, run a MATLAB example on a Shimmer3 and a Shimmer3R; MATLAB cannot run in CI. Merging
    publishes a MATLAB API release (Shimmer-MATLAB-ID's `release.yml`).
-3. Run `ShimmerAndroidAPI`'s own Release workflow, which builds against the newest Java release unless
-   told otherwise.
+3. It also opens a PR in `ShimmerAndroidAPI` moving the default driver version in
+   `ShimmerAndroidInstrumentDriver/build.gradle` to this one (needs the `ANDROID_REPO_TOKEN` secret),
+   so that repo's CI runs its unit tests and builds every example against it. The PR lists the steps
+   that stay manual. Android's `Shimmer.java` has its own Bluetooth stream parser, so a parser, CRC or
+   ACK fix in this release must be ported there by hand (see `ShimmerAndroidAPI`'s AGENTS.md). After
+   merging, run the Android HIL at master's new commit, then `ShimmerAndroidAPI`'s own Release
+   workflow, which builds against the newest Java release unless told otherwise. That release cannot
+   be automatic: its gate needs a passing bench run on its exact commit and driver.
 
 The version is not stored in the source: the three publishing blocks read `-PreleaseVersion`, which
 the workflow passes, and fall back to `local`. The `API_v` tags are the record of what was released.
