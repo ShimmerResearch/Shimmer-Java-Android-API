@@ -36,6 +36,7 @@ import com.shimmerresearch.driver.calibration.CalibDetailsKinematic;
 import com.shimmerresearch.driver.calibration.UtilCalibration;
 import com.shimmerresearch.driver.calibration.CalibDetails.CALIB_READ_SOURCE;
 import com.shimmerresearch.driver.shimmer2r3.BluetoothModuleVersionDetails;
+import com.shimmerresearch.driver.shimmer2r3.ButtonLogMode;
 import com.shimmerresearch.driver.shimmer2r3.ConfigByteLayoutShimmer3;
 import com.shimmerresearch.driver.shimmerGq.ConfigByteLayoutShimmerGq802154;
 import com.shimmerresearch.driverUtilities.ChannelDetails;
@@ -460,6 +461,7 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 	public static final byte GET_RWC_COMMAND                        = (byte) 0x91;
 	
 	public static final byte ROUTINE_COMMUNICATION					= (byte) 0xE0;
+	public static final byte NACK_COMMAND_PROCESSED           		= (byte) 0xFE;
 	public static final byte ACK_COMMAND_PROCESSED            		= (byte) 0xFF;
 	
 	public static final byte START_LOGGING_ONLY_COMMAND				= (byte) 0x92;
@@ -574,6 +576,13 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 	private boolean isOverrideShowErrorLedsSd = false;
 	private int mShowErrorLedsSd = 0;
 	private boolean mLowBattAutoStop = false;
+
+	/** Configuration byte 232 as read from the Shimmer or set by the host (DEV-971), see {@link ButtonLogMode} */
+	private int mButtonLogMode = 0;
+	/** Whether mButtonLogMode is the Shimmer's own: read from it, or set by the host */
+	private boolean mIsButtonLogModeKnown = false;
+	/** The Shimmer's answer to the event channel probe (SET_FEATURE): null until it has answered */
+	private Boolean mIsEventChannelSupported = null;
 
 	protected int mTrialId = 0;
 	protected int mTrialNumberOfShimmers = 0;
@@ -4977,6 +4986,10 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 			setButtonStart(true);
 			setShowErrorLedsRtc(true);
 			setShowErrorLedsSd(true);
+			// Byte 232's own default, legacy. Whether it is the Shimmer's is
+			// left as it was: a default the Shimmer was never read for is not
+			// written to it over Bluetooth.
+			mButtonLogMode = 0;
 			
 			setBluetoothBaudRate(9); //460800
 
@@ -5159,6 +5172,13 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 
 				if(isVerCompatibleWithAnyOf(Configuration.Shimmer3.configOptionLowPowerAutoStop.mListOfCompatibleVersionInfo)) {
 					setLowBattAutoStop((configBytes[configByteLayoutCast.idxSDExperimentConfig1] >> configByteLayoutCast.bitShiftLowBattStop) & configByteLayoutCast.maskLowBattStop);
+				}
+
+				// Kept as read, 0xFF included, so that a full configuration
+				// write gives the Shimmer back its own byte
+				if(configByteLayoutCast.idxButtonLogMode>0 && configBytes.length>configByteLayoutCast.idxButtonLogMode) {
+					mButtonLogMode = configBytes[configByteLayoutCast.idxButtonLogMode] & 0xFF;
+					mIsButtonLogModeKnown = true;
 				}
 					
 				byte[] macIdBytes = new byte[configByteLayoutCast.lengthMacIdBytes];
@@ -5375,6 +5395,15 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 					mConfigBytes[configByteLayoutCast.idxSDMyTrialID] = (byte) (mTrialId & 0xFF);
 		
 					mConfigBytes[configByteLayoutCast.idxSDNumOfShimmers] = (byte) (mTrialNumberOfShimmers & 0xFF);
+				}
+
+				// Byte 232 (DEV-971). The image starts from zeros, so without
+				// this a full write turned the button mode back to legacy. The
+				// rules go first: they hold userButtonEnable and singleTouchStart,
+				// packed into bytes 217 and 218 below, as the firmware will.
+				if(configByteLayoutCast.idxButtonLogMode>0) {
+					applyButtonLogModeRules();
+					mConfigBytes[configByteLayoutCast.idxButtonLogMode] = (byte) getButtonLogModeToWrite();
 				}
 				
 				if(getFirmwareIdentifier()==FW_ID.SDLOG || getFirmwareIdentifier()==FW_ID.LOGANDSTREAM || getFirmwareIdentifier()==FW_ID.STROKARE) {
@@ -6615,6 +6644,150 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 	 */
 	public void setButtonStart(int state) {
 		this.mButtonStart = state;
+	}
+
+	/**
+	 * Configuration byte 232 (DEV-971) as the driver holds it: as read from the
+	 * Shimmer, 0xFF included, or as set. {@link #getButtonLogModeCorrected()}
+	 * is what the firmware acts on.
+	 */
+	public int getButtonLogMode() {
+		return mButtonLogMode;
+	}
+
+	/**
+	 * Sets configuration byte 232 (DEV-971) whole. The firmware corrects a
+	 * value it cannot act on to 0 (see {@link ButtonLogMode#correct(int)}).
+	 * Like the field setters, it holds userButtonEnable and singleTouchStart
+	 * where the button mode decides them.
+	 */
+	public void setButtonLogMode(int value) {
+		mButtonLogMode = value & 0xFF;
+		mIsButtonLogModeKnown = true;
+		applyButtonLogModeRules();
+	}
+
+	/**
+	 * Sets the three fields of configuration byte 232 (DEV-971) at once.
+	 *
+	 * @param buttonMode one of ButtonLogMode.BUTTON_MODE_*
+	 * @param logTriggers one of ButtonLogMode.LOG_TRIGGERS_*, read only when buttonMode is not legacy
+	 * @param ttlInputEnabled whether the TTL input's edges are recorded
+	 */
+	public void setButtonLogMode(int buttonMode, int logTriggers, boolean ttlInputEnabled) {
+		setButtonLogMode(ButtonLogMode.compose(0, buttonMode, logTriggers, ttlInputEnabled));
+	}
+
+	/** What the user button does: one of ButtonLogMode.BUTTON_MODE_*, as the firmware will act on it */
+	public int getButtonMode() {
+		return getButtonLogModeCorrected() & ButtonLogMode.MASK_BUTTON_MODE;
+	}
+
+	/**
+	 * Sets what the user button does (byte 232 bits 0-2). The other two fields
+	 * keep the values last set, so they can be set in any order. Not
+	 * BUTTON_MODE_LEGACY, it holds userButtonEnable at the mode's nearest
+	 * equivalent and clears singleTouchStart where no press can start logging,
+	 * as the firmware does.
+	 *
+	 * @param buttonMode one of ButtonLogMode.BUTTON_MODE_*
+	 */
+	public void setButtonMode(int buttonMode) {
+		setButtonLogMode(ButtonLogMode.compose(mButtonLogMode, buttonMode, ButtonLogMode.getRawLogTriggers(mButtonLogMode), ButtonLogMode.isRawTtlInputEnabled(mButtonLogMode)));
+	}
+
+	/**
+	 * What else starts SD logging: one of ButtonLogMode.LOG_TRIGGERS_*, as the
+	 * firmware will act on it. Always LOG_TRIGGERS_HOST while the button mode
+	 * is legacy, which does not read them.
+	 */
+	public int getLogTriggers() {
+		return (getButtonLogModeCorrected() & ButtonLogMode.MASK_LOG_TRIGGERS) >> ButtonLogMode.BIT_SHIFT_LOG_TRIGGERS;
+	}
+
+	/**
+	 * Sets what else starts SD logging (byte 232 bits 3-4). Read only when the
+	 * button mode is not legacy, but kept for when it is set.
+	 *
+	 * @param logTriggers one of ButtonLogMode.LOG_TRIGGERS_*
+	 */
+	public void setLogTriggers(int logTriggers) {
+		setButtonLogMode(ButtonLogMode.compose(mButtonLogMode, ButtonLogMode.getRawButtonMode(mButtonLogMode), logTriggers, ButtonLogMode.isRawTtlInputEnabled(mButtonLogMode)));
+	}
+
+	/** Whether the TTL input's edges are recorded, as the firmware will act on it */
+	public boolean isTtlInputEnabled() {
+		return (getButtonLogModeCorrected() & ButtonLogMode.MASK_TTL_INPUT)!=0;
+	}
+
+	/** Sets whether the TTL input's edges are recorded (byte 232 bit 5), whatever the button mode */
+	public void setTtlInputEnabled(boolean ttlInputEnabled) {
+		setButtonLogMode(ButtonLogMode.compose(mButtonLogMode, ButtonLogMode.getRawButtonMode(mButtonLogMode), ButtonLogMode.getRawLogTriggers(mButtonLogMode), ttlInputEnabled));
+	}
+
+	/**
+	 * Whether the driver has the Shimmer's own byte 232: read from it, or set
+	 * here. When it has neither, a full configuration write over Bluetooth
+	 * leaves the Shimmer's byte as it is.
+	 */
+	public boolean isButtonLogModeKnown() {
+		return mIsButtonLogModeKnown;
+	}
+
+	/**
+	 * Whether byte 232 can be taken at its word: the Shimmer answered the event
+	 * channel probe, or the byte holds a value the firmware keeps. Firmware
+	 * without the byte leaves it 0xFF, which is not one, and the dock cannot
+	 * probe.
+	 */
+	public boolean isButtonLogModeMeaningful() {
+		return (mIsEventChannelSupported!=null && mIsEventChannelSupported) || ButtonLogMode.isValid(mButtonLogMode);
+	}
+
+	/**
+	 * Byte 232 as this Shimmer's firmware will act on it, corrected for its
+	 * board; 0, legacy, where the byte cannot be taken at its word
+	 * ({@link #isButtonLogModeMeaningful()}).
+	 */
+	public int getButtonLogModeCorrected() {
+		if(!isButtonLogModeMeaningful()) {
+			return 0;
+		}
+		return ButtonLogMode.correctForBoard(mButtonLogMode, getHardwareVersion(), getExpansionBoardDetails());
+	}
+
+	/** The byte a full configuration write puts at 232: corrected where meaningful, otherwise as read */
+	protected int getButtonLogModeToWrite() {
+		return isButtonLogModeMeaningful() ? getButtonLogModeCorrected() : mButtonLogMode;
+	}
+
+	/**
+	 * Holds userButtonEnable (byte 217 bit 5) at byte 232's button mode's
+	 * nearest equivalent, and clears singleTouchStart (byte 218 bit 7) where no
+	 * press can start logging, as the firmware does when it takes a
+	 * configuration (ShimConfig_checkAndCorrectConfig). Byte 232 in the legacy
+	 * mode changes neither.
+	 */
+	protected void applyButtonLogModeRules() {
+		int value = getButtonLogModeCorrected();
+		if(!ButtonLogMode.isSingleTouchAllowed(value)) {
+			setSingleTouch(false);
+		}
+		setButtonStart(ButtonLogMode.getNearestUserButtonEnable(value, isButtonStart()));
+	}
+
+	/**
+	 * The Shimmer's answer to the event channel probe (DEV-971): true if it
+	 * ACKed SET_FEATURE's FEATURE_EVENT_STREAM, false if it NACKed it or its
+	 * firmware is older than SET_FEATURE, null until asked. Not version-based:
+	 * the event channel's builds report the release before them.
+	 */
+	public Boolean isEventChannelSupported() {
+		return mIsEventChannelSupported;
+	}
+
+	protected void setEventChannelSupported(Boolean isEventChannelSupported) {
+		mIsEventChannelSupported = isEventChannelSupported;
 	}
 	
 	protected void setDisableBluetooth(int state) {
@@ -9716,6 +9889,15 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 			case(Configuration.Shimmer3.GuiLabelConfig.EXPERIMENT_SYNC_WHEN_LOGGING):
 				returnValue = isSyncWhenLogging();
 	        	break;
+			case(Configuration.Shimmer3.GuiLabelConfig.BUTTON_MODE):
+				returnValue = getButtonMode();
+	        	break;
+			case(Configuration.Shimmer3.GuiLabelConfig.LOG_TRIGGERS):
+				returnValue = getLogTriggers();
+	        	break;
+			case(Configuration.Shimmer3.GuiLabelConfig.TTL_INPUT):
+				returnValue = isTtlInputEnabled();
+	        	break;
 			
 			case(Configuration.Shimmer3.GuiLabelConfig.KINEMATIC_LPM): 
 				if(isLSM303DigitalAccelLPM()&&checkLowPowerGyro()&&checkLowPowerMag()) {
@@ -9885,6 +10067,15 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 			case(Configuration.Shimmer3.GuiLabelConfig.EXPERIMENT_SYNC_WHEN_LOGGING):
 				setDisableBluetooth(!(boolean)valueToSet);
 				setSyncWhenLogging((boolean)valueToSet);
+	        	break;
+			case(Configuration.Shimmer3.GuiLabelConfig.BUTTON_MODE):
+				setButtonMode((int)valueToSet);
+	        	break;
+			case(Configuration.Shimmer3.GuiLabelConfig.LOG_TRIGGERS):
+				setLogTriggers((int)valueToSet);
+	        	break;
+			case(Configuration.Shimmer3.GuiLabelConfig.TTL_INPUT):
+				setTtlInputEnabled((boolean)valueToSet);
 	        	break;
 
 			case(Configuration.Shimmer3.GuiLabelConfig.KINEMATIC_LPM):

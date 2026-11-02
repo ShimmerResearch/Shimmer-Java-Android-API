@@ -748,4 +748,22 @@ public class ShimmerVerObject implements Serializable {
 				|| compareVersions(HW_ID.SHIMMER_3, FW_ID.BTSTREAM, 0, 8, 1));
 	}
 	
+	/**
+	 * Whether the firmware has SET_FEATURE (0xB7), with its feature id and
+	 * value, and NACKs a feature id it does not know. It came with
+	 * log-and-stream-common: LogAndStream_Shimmer3R v1.0.52 and
+	 * LogAndStream_Shimmer3 v1.0.20. Older firmware discards the 0xB7 byte
+	 * unanswered and takes the two bytes after it as commands, so a feature id
+	 * of 3 there is GET_SAMPLING_RATE_COMMAND, which is ACKed. SET_FEATURE must
+	 * not be sent to it.
+	 * <p>
+	 * This is also the earliest firmware whose builds can carry the DEV-971
+	 * event channel and configuration byte 232: those builds report the release
+	 * before them, so the version alone cannot say whether they do.
+	 */
+	public boolean isSupportedSetFeature() {
+		return compareVersions(HW_ID.SHIMMER_3R, FW_ID.LOGANDSTREAM, 1, 0, 52)
+				|| compareVersions(HW_ID.SHIMMER_3, FW_ID.LOGANDSTREAM, 1, 0, 20);
+	}
+
 }

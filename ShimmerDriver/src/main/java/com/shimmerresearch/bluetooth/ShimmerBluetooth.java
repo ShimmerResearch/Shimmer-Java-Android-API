@@ -106,6 +106,7 @@ import com.shimmerresearch.driver.Configuration.CHANNEL_UNITS;
 import com.shimmerresearch.driver.Configuration.COMMUNICATION_TYPE;
 import com.shimmerresearch.driver.Configuration.Shimmer3;
 import com.shimmerresearch.driver.calibration.CalibDetails.CALIB_READ_SOURCE;
+import com.shimmerresearch.driver.shimmer2r3.ConfigByteLayoutShimmer3;
 import com.shimmerresearch.driver.ShimmerObject;
 import com.shimmerresearch.driverUtilities.AssembleShimmerConfig;
 import com.shimmerresearch.driverUtilities.ExpansionBoardDetails;
@@ -305,9 +306,13 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 	 */
 	private static final byte[] BARE_ACK_CRC = ShimmerCrc.shimmerUartCrcCalc(new byte[] {ACK_COMMAND_PROCESSED}, 1);
 	
+	/** SET_FEATURE's feature ids, by ordinal */
 	public enum SHIMMER_FEATURE {
 		NONE,
 		RN4678_ERROR_DETECTION,
+		REBOOT_ON_DISCONNECT,
+		/** The event channel's records, sent to a host that opts in (DEV-971). Firmware without the event channel NACKs it. */
+		EVENT_STREAM,
 	}
 
     public static final Map<Byte, BtCommandDetails> mBtCommandMapOther;
@@ -932,6 +937,12 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 							removeInstruction(0);
 						}
 					
+					}
+					/* Firmware without the event channel NACKs its probe. Without
+					 * this the NACK was discarded and the ACK timer then dropped the
+					 * connection. Other NACKs are left as they were. */
+					else if((byte)byteBuffer[0]==NACK_COMMAND_PROCESSED && isEventChannelProbeInFlight()) {
+						processEventChannelProbeNack();
 					}
 				}
 			}
@@ -2533,7 +2544,10 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 					InShimmerTest = true;
 				}
 				else if (currentCommand == SET_FEATURE) {
-					// TODO: do something?
+					if(isEventChannelProbeInFlight()) {
+						// Only firmware with the event channel ACKs FEATURE_EVENT_STREAM
+						setEventChannelSupported(true);
+					}
 				}
 				else {
 					//unhandled set command
@@ -2876,6 +2890,10 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 		if (RN4678_ERROR_DETECTION_ENABLED && isSupportedRn4678ErrorDetection()) {
 			writeSetFeatureCommand(SHIMMER_FEATURE.RN4678_ERROR_DETECTION.ordinal(), 1);
 		}
+		
+		// The firmware may have changed since the last connection
+		setEventChannelSupported(null);
+		readEventChannelSupport();
 		
 		if (isSetupDeviceWhileConnecting()){
 			if(mFixedShimmerConfigMode!=null && mFixedShimmerConfigMode!=FIXED_SHIMMER_CONFIG_MODE.NONE){
@@ -4901,7 +4919,20 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 
 	public void writeConfigBytes(boolean readBackAfter){
 		if(this.getFirmwareVersionCode()>=6){
-			writeConfigBytes(mConfigByteLayout.MSP430_5XX_INFOMEM_D_ADDRESS, generateConfigBytesForWritingToShimmer(), mConfigByteLayout.MSP430_5XX_INFOMEM_LAST_ADDRESS, readBackAfter);
+			byte[] configBytes = generateConfigBytesForWritingToShimmer();
+			int idxButtonLogMode = (mConfigByteLayout instanceof ConfigByteLayoutShimmer3) ? ((ConfigByteLayoutShimmer3) mConfigByteLayout).idxButtonLogMode : 0;
+			if(idxButtonLogMode>0 && !isButtonLogModeKnown()){
+				// Byte 232 (DEV-971) was never read from this Shimmer nor set,
+				// as when a configuration is written on connect before it is
+				// read. Skip it, so that the Shimmer keeps its own.
+				writeMem(SET_INFOMEM_COMMAND, mConfigByteLayout.MSP430_5XX_INFOMEM_D_ADDRESS, configBytes, mConfigByteLayout.MSP430_5XX_INFOMEM_LAST_ADDRESS, idxButtonLogMode);
+				if(readBackAfter){
+					readConfigBytes();
+				}
+			}
+			else {
+				writeConfigBytes(mConfigByteLayout.MSP430_5XX_INFOMEM_D_ADDRESS, configBytes, mConfigByteLayout.MSP430_5XX_INFOMEM_LAST_ADDRESS, readBackAfter);
+			}
 		}
 	}
 
@@ -4922,6 +4953,19 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 	}
 
 	public void writeMem(int command, int startAddress, byte[] buf, int maxMemAddress){
+		writeMem(command, startAddress, buf, maxMemAddress, -1);
+	}
+
+	/**
+	 * Writes buf in chunks of up to 128 bytes, as {@link #writeMem(int, int, byte[], int)}
+	 * does, but leaves out the byte at skipIndex: the chunk holding it goes as
+	 * the bytes before it and the bytes after it. Every other chunk starts
+	 * where it would have, which matters to the firmware for the chunks at 0
+	 * and 128.
+	 *
+	 * @param skipIndex the index into buf of the byte not to write, or -1 to write them all
+	 */
+	private void writeMem(int command, int startAddress, byte[] buf, int maxMemAddress, int skipIndex){
 		this.mNumOfMemSetCmds  = 0;
 		
 		if(this.getFirmwareVersionCode()>=6){
@@ -4945,10 +4989,23 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 						currentPacketNumBytes = numBytesRemaining;
 					}
 
-					byte[] infoSegBuf = Arrays.copyOfRange(buf, currentBytePointer, currentBytePointer + currentPacketNumBytes);
+					int chunkEnd = currentBytePointer + currentPacketNumBytes;
+					if(skipIndex>=currentBytePointer && skipIndex<chunkEnd){
+						if(skipIndex>currentBytePointer){
+							writeMemCommand(command, currentStartAddr, Arrays.copyOfRange(buf, currentBytePointer, skipIndex));
+							mNumOfMemSetCmds += 1;
+						}
+						if(skipIndex+1<chunkEnd){
+							writeMemCommand(command, currentStartAddr + (skipIndex+1-currentBytePointer), Arrays.copyOfRange(buf, skipIndex+1, chunkEnd));
+							mNumOfMemSetCmds += 1;
+						}
+					}
+					else {
+						byte[] infoSegBuf = Arrays.copyOfRange(buf, currentBytePointer, chunkEnd);
 
-					writeMemCommand(command, currentStartAddr, infoSegBuf);
-					mNumOfMemSetCmds += 1;
+						writeMemCommand(command, currentStartAddr, infoSegBuf);
+						mNumOfMemSetCmds += 1;
+					}
 
 					currentStartAddr += currentPacketNumBytes;
 					numBytesRemaining -= currentPacketNumBytes;
@@ -4997,6 +5054,62 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 	 */
 	public void writeSetFeatureCommand(int feature, int setting){
 		writeInstruction(new byte[]{SET_FEATURE, (byte)feature, (byte)setting});
+	}
+
+	/**
+	 * Asks the Shimmer whether its firmware has the event channel, and with it
+	 * configuration byte 232 (DEV-971): SET_FEATURE with FEATURE_EVENT_STREAM
+	 * and 0, which changes nothing, since a connection starts opted out.
+	 * Firmware with the event channel ACKs it and firmware without NACKs it;
+	 * {@link #isEventChannelSupported()} has the answer. There is no version to
+	 * go by: the event channel's builds report the release before them.
+	 * <p>
+	 * Firmware older than SET_FEATURE is not asked, and has no event channel.
+	 * Nor is a Shimmer that is streaming, where a NACK is not yet handled.
+	 */
+	public void readEventChannelSupport() {
+		if(!getShimmerVerObject().isSupportedSetFeature()) {
+			setEventChannelSupported(false);
+		}
+		else if(!isStreaming()) {
+			writeSetFeatureCommand(SHIMMER_FEATURE.EVENT_STREAM.ordinal(), 0);
+		}
+	}
+
+	/** Whether the command awaiting its ACK is SET_FEATURE for FEATURE_EVENT_STREAM, which tells whether the event channel is there */
+	private boolean isEventChannelProbeInFlight() {
+		if(mCurrentCommand!=SET_FEATURE) {
+			return false;
+		}
+		List<byte[]> instructions = getListofInstructions();
+		if(instructions.isEmpty()) {
+			return false;
+		}
+		byte[] instruction = instructions.get(0);
+		return instruction!=null && instruction.length>1
+				&& instruction[0]==SET_FEATURE
+				&& instruction[1]==(byte) SHIMMER_FEATURE.EVENT_STREAM.ordinal();
+	}
+
+	/**
+	 * The firmware NACKed FEATURE_EVENT_STREAM, so it has no event channel.
+	 * Completes the command as an ACK does, the progress report included, so
+	 * that the connection stays up and the operation it is part of finishes.
+	 */
+	private void processEventChannelProbeNack() {
+		stopTimerCheckForAckOrResp(); //cancel the ack timer
+		mWaitForAck=false;
+		printLogDataForDebugging("NACK Received for Command: \t\t" + btCommandToString(mCurrentCommand) + ", no event channel");
+
+		setEventChannelSupported(false);
+
+		if(mOperationUnderway){
+			sendProgressReport(new BluetoothProgressReportPerCmd(mCurrentCommand, getListofInstructions().size(), mMyBluetoothAddress, getComPort()));
+		}
+		removeInstruction(0);
+
+		mTransactionCompleted = true;
+		setInstructionStackLock(false);
 	}
 
 	//endregion --------- READ/WRITE FUNCTIONS --------- 
