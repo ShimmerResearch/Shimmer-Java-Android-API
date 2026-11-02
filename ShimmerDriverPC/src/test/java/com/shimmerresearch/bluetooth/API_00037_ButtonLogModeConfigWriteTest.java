@@ -207,7 +207,7 @@ public class API_00037_ButtonLogModeConfigWriteTest {
 	public void firmwareThatCannotHaveTheByteIsWrittenAsBefore() {
 		ShimmerVerObject[] older = {
 				new ShimmerVerObject(HW_ID.SHIMMER_3R, FW_ID.LOGANDSTREAM, 1, 0, 51),
-				new ShimmerVerObject(HW_ID.SHIMMER_3, FW_ID.LOGANDSTREAM, 1, 0, 19),
+				new ShimmerVerObject(HW_ID.SHIMMER_3, FW_ID.LOGANDSTREAM, 1, 0, 16),
 		};
 		for(ShimmerVerObject svo:older){
 			ProbedShimmer shimmer = readFrom(svo, 0x11, USER_BUTTON_ENABLE, 0);
@@ -297,7 +297,7 @@ public class API_00037_ButtonLogModeConfigWriteTest {
 			}
 		}
 
-		ProbedShimmer s3 = shimmer(new ShimmerVerObject(HW_ID.SHIMMER_3, FW_ID.LOGANDSTREAM, 1, 0, 20));
+		ProbedShimmer s3 = shimmer(new ShimmerVerObject(HW_ID.SHIMMER_3, FW_ID.LOGANDSTREAM, 1, 0, 17));
 		s3.writeConfigBytes(false);
 		assertChunks("the first Shimmer3 release that can", chunksWithout232(s3), s3);
 	}
@@ -320,7 +320,7 @@ public class API_00037_ButtonLogModeConfigWriteTest {
 	public void olderFirmwareIsWrittenInWholeChunksAsBefore() {
 		ShimmerVerObject[] older = {
 				new ShimmerVerObject(HW_ID.SHIMMER_3R, FW_ID.LOGANDSTREAM, 1, 0, 51),
-				new ShimmerVerObject(HW_ID.SHIMMER_3, FW_ID.LOGANDSTREAM, 1, 0, 19),
+				new ShimmerVerObject(HW_ID.SHIMMER_3, FW_ID.LOGANDSTREAM, 1, 0, 16),
 		};
 		for(ShimmerVerObject svo:older){
 			ProbedShimmer shimmer = shimmer(svo);

@@ -195,7 +195,7 @@ public class API_00038_EventChannelProbeTest {
 	public void firmwareOlderThanSetFeatureIsNotAsked() throws Exception {
 		ShimmerVerObject[] older = {
 				new ShimmerVerObject(HW_ID.SHIMMER_3R, FW_ID.LOGANDSTREAM, 1, 0, 51),
-				new ShimmerVerObject(HW_ID.SHIMMER_3, FW_ID.LOGANDSTREAM, 1, 0, 19),
+				new ShimmerVerObject(HW_ID.SHIMMER_3, FW_ID.LOGANDSTREAM, 1, 0, 16),
 				new ShimmerVerObject(HW_ID.SHIMMER_3, FW_ID.BTSTREAM, 0, 8, 1),
 		};
 		for(ShimmerVerObject svo:older){
@@ -207,7 +207,7 @@ public class API_00038_EventChannelProbeTest {
 		}
 
 		WatchedShimmer s3 = new WatchedShimmer();
-		s3.setShimmerVersionObjectAndCreateSensorMap(new ShimmerVerObject(HW_ID.SHIMMER_3, FW_ID.LOGANDSTREAM, 1, 0, 20));
+		s3.setShimmerVersionObjectAndCreateSensorMap(new ShimmerVerObject(HW_ID.SHIMMER_3, FW_ID.LOGANDSTREAM, 1, 0, 17));
 		s3.readEventChannelSupport();
 		assertNull("the first Shimmer3 release with SET_FEATURE is asked", s3.isEventChannelSupported());
 		assertEquals(1, s3.getListofInstructions().size());

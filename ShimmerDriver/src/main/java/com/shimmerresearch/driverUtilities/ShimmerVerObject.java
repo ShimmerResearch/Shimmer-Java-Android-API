@@ -752,7 +752,7 @@ public class ShimmerVerObject implements Serializable {
 	 * Whether the firmware has SET_FEATURE (0xB7), with its feature id and
 	 * value, and NACKs a feature id it does not know. It came with
 	 * log-and-stream-common: LogAndStream_Shimmer3R v1.0.52 and
-	 * LogAndStream_Shimmer3 v1.0.20. Older firmware discards the 0xB7 byte
+	 * LogAndStream_Shimmer3 v1.0.17. Older firmware discards the 0xB7 byte
 	 * unanswered and takes the two bytes after it as commands, so a feature id
 	 * of 3 there is GET_SAMPLING_RATE_COMMAND, which is ACKed. SET_FEATURE must
 	 * not be sent to it.
@@ -763,7 +763,7 @@ public class ShimmerVerObject implements Serializable {
 	 */
 	public boolean isSupportedSetFeature() {
 		return compareVersions(HW_ID.SHIMMER_3R, FW_ID.LOGANDSTREAM, 1, 0, 52)
-				|| compareVersions(HW_ID.SHIMMER_3, FW_ID.LOGANDSTREAM, 1, 0, 20);
+				|| compareVersions(HW_ID.SHIMMER_3, FW_ID.LOGANDSTREAM, 1, 0, 17);
 	}
 
 }
