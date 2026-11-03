@@ -24,8 +24,8 @@ import com.shimmerresearch.pcDriver.ShimmerPC;
  * input, through a full configuration write. The write builds its image from
  * zeros, so before DEV-971 every configure from Consensys or Android put 0
  * there and turned a Shimmer's button back on. It now carries the byte read
- * from the Shimmer, or the one set, and holds userButtonEnable and
- * singleTouchStart where the button mode decides them, as the firmware does.
+ * from the Shimmer, or the one set, holds userButtonEnable at the button
+ * mode's nearest equivalent and clears singleTouchStart, as the firmware does.
  * Before anything is read, a Bluetooth write leaves the byte out, so the
  * Shimmer keeps its own.
  * <p>
@@ -125,20 +125,22 @@ public class API_00037_ButtonLogModeConfigWriteTest {
 		assertEquals("legacy leaves it as it is", 0, written(legacy, IDX_TRIAL_CONFIG0) & USER_BUTTON_ENABLE);
 	}
 
+	/** LogAndStream is built without single touch, and clears it whatever byte 232 holds */
 	@Test
-	public void singleTouchIsClearedWhereNoPressCanStartLogging() {
-		ProbedShimmer disabled = readFrom(S3R_EVENT_CHANNEL_CAPABLE, 0x01, USER_BUTTON_ENABLE, SINGLE_TOUCH_START);
-		disabled.setSingleTouch(true);
-		assertEquals(0, written(disabled, IDX_TRIAL_CONFIG1) & SINGLE_TOUCH_START);
-		assertFalse(disabled.isSingleTouch());
-
-		ProbedShimmer loggingOff = readFrom(S3R_EVENT_CHANNEL_CAPABLE, 0x12, USER_BUTTON_ENABLE, SINGLE_TOUCH_START);
-		loggingOff.setSingleTouch(true);
-		assertEquals("a press that could, but logging is off", 0, written(loggingOff, IDX_TRIAL_CONFIG1) & SINGLE_TOUCH_START);
-
-		ProbedShimmer singlePress = readFrom(S3R_EVENT_CHANNEL_CAPABLE, 0x02, USER_BUTTON_ENABLE, SINGLE_TOUCH_START);
-		singlePress.setSingleTouch(true);
-		assertEquals(SINGLE_TOUCH_START, written(singlePress, IDX_TRIAL_CONFIG1) & SINGLE_TOUCH_START);
+	public void singleTouchIsClearedInEveryMode() {
+		int[] values = {
+				0x00,	// legacy
+				0x01,	// no press can start logging
+				0x12,	// a press that could, but logging is off
+				0x02,	// a press that starts logging
+				0x03,	// a double press that does
+		};
+		for(int value:values){
+			ProbedShimmer shimmer = readFrom(S3R_EVENT_CHANNEL_CAPABLE, value, USER_BUTTON_ENABLE, SINGLE_TOUCH_START);
+			shimmer.setSingleTouch(true);
+			assertEquals(hex(value), 0, written(shimmer, IDX_TRIAL_CONFIG1) & SINGLE_TOUCH_START);
+			assertFalse(hex(value), shimmer.isSingleTouch());
+		}
 	}
 
 	@Test
@@ -178,8 +180,8 @@ public class API_00037_ButtonLogModeConfigWriteTest {
 		assertFalse(shimmer.isButtonLogModeMeaningful());
 		assertEquals(ButtonLogMode.BUTTON_MODE_LEGACY, shimmer.getButtonMode());
 		assertEquals(0xFF, written(shimmer, IDX_BUTTON_LOG_MODE));
-		assertEquals("legacy changes neither", 0, written(shimmer, IDX_TRIAL_CONFIG0) & USER_BUTTON_ENABLE);
-		assertEquals(SINGLE_TOUCH_START, written(shimmer, IDX_TRIAL_CONFIG1) & SINGLE_TOUCH_START);
+		assertEquals("legacy leaves userButtonEnable", 0, written(shimmer, IDX_TRIAL_CONFIG0) & USER_BUTTON_ENABLE);
+		assertEquals("the firmware clears single touch all the same", 0, written(shimmer, IDX_TRIAL_CONFIG1) & SINGLE_TOUCH_START);
 	}
 
 	@Test
@@ -216,6 +218,21 @@ public class API_00037_ButtonLogModeConfigWriteTest {
 		}
 		ProbedShimmer s3 = readFrom(new ShimmerVerObject(HW_ID.SHIMMER_3, FW_ID.LOGANDSTREAM, 1, 1, 9), 0x11, USER_BUTTON_ENABLE, 0);
 		assertEquals("a Shimmer3 release that can", 0x11, written(s3, IDX_BUTTON_LOG_MODE));
+	}
+
+	@Test
+	public void firmwareThatCannotHaveTheByteKeepsBytes217And218() {
+		ShimmerVerObject[] older = {
+				new ShimmerVerObject(HW_ID.SHIMMER_3R, FW_ID.LOGANDSTREAM, 1, 0, 51),
+				new ShimmerVerObject(HW_ID.SHIMMER_3, FW_ID.LOGANDSTREAM, 1, 0, 16),
+				new ShimmerVerObject(HW_ID.SHIMMER_3, FW_ID.SDLOG, 0, 19, 0),
+		};
+		for(ShimmerVerObject svo:older){
+			ProbedShimmer shimmer = readFrom(svo, 0x00, 0, SINGLE_TOUCH_START);
+			shimmer.setButtonMode(ButtonLogMode.BUTTON_MODE_DISABLED);
+			assertEquals(svo.getFirmwareVersionParsed(), 0, written(shimmer, IDX_TRIAL_CONFIG0) & USER_BUTTON_ENABLE);
+			assertEquals(svo.getFirmwareVersionParsed(), SINGLE_TOUCH_START, written(shimmer, IDX_TRIAL_CONFIG1) & SINGLE_TOUCH_START);
+		}
 	}
 
 	// ---- The Bluetooth write's SET_INFOMEM chunks

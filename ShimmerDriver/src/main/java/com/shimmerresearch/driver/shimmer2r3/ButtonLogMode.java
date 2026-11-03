@@ -168,7 +168,9 @@ public class ButtonLogMode {
 
 	/**
 	 * Whether single touch can work: it needs a press that can start logging.
-	 * The firmware clears singleTouchStart when this is false.
+	 * Firmware built with single touch clears singleTouchStart when this is
+	 * false. No LogAndStream release is built with it, and each clears
+	 * singleTouchStart whatever this byte holds.
 	 */
 	public static boolean isSingleTouchAllowed(int raw) {
 		int buttonMode = getButtonMode(raw);

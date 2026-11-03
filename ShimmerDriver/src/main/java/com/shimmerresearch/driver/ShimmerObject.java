@@ -6659,7 +6659,7 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 	 * Sets configuration byte 232 (DEV-971) whole. The firmware corrects a
 	 * value it cannot act on to 0 (see {@link ButtonLogMode#correct(int)}).
 	 * Like the field setters, it holds userButtonEnable and singleTouchStart
-	 * where the button mode decides them.
+	 * as that firmware will ({@link #applyButtonLogModeRules()}).
 	 */
 	public void setButtonLogMode(int value) {
 		mButtonLogMode = value & 0xFF;
@@ -6762,18 +6762,21 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 	}
 
 	/**
-	 * Holds userButtonEnable (byte 217 bit 5) at byte 232's button mode's
-	 * nearest equivalent, and clears singleTouchStart (byte 218 bit 7) where no
-	 * press can start logging, as the firmware does when it takes a
-	 * configuration (ShimConfig_checkAndCorrectConfig). Byte 232 in the legacy
-	 * mode changes neither.
+	 * On firmware that has byte 232, does what it does when it takes a
+	 * configuration (ShimConfig_checkAndCorrectConfig): holds userButtonEnable
+	 * (byte 217 bit 5) at the button mode's nearest equivalent, which the legacy
+	 * mode leaves as it is, and clears singleTouchStart (byte 218 bit 7). That
+	 * firmware is LogAndStream from the release that brought SET_FEATURE, none
+	 * of it built with single touch (IS_SUPPORTED_SINGLE_TOUCH is 0 in
+	 * log-and-stream-common), so it clears the bit whatever byte 232 holds.
+	 * Other firmware changes neither here.
 	 */
 	protected void applyButtonLogModeRules() {
-		int value = getButtonLogModeCorrected();
-		if(!ButtonLogMode.isSingleTouchAllowed(value)) {
-			setSingleTouch(false);
+		if(!mShimmerVerObject.isSupportedSetFeature()) {
+			return;
 		}
-		setButtonStart(ButtonLogMode.getNearestUserButtonEnable(value, isButtonStart()));
+		setSingleTouch(false);
+		setButtonStart(ButtonLogMode.getNearestUserButtonEnable(getButtonLogModeCorrected(), isButtonStart()));
 	}
 
 	/**
