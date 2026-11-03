@@ -324,7 +324,7 @@ public abstract class ShimmerDevice extends BasicProcessWithCallBack implements 
 		public static final String TRIAL_ID = "Trial_Id";
 		public static final String N_SHIMMER = "NShimmer";
 		public static final String LOW_POWER_AUTOSTOP = "Low_Power_Autostop";
-		public static final String RAW_AUDIO = "Raw_Audio";
+		public static final String AUDIO_MODE = "Audio_Mode";
 		
 		public static final String SHIMMER_VERSION = "Shimmer_Version";
 		public static final String FW_VERSION = "FW_ID";

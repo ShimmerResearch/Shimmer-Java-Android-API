@@ -574,7 +574,7 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 	private boolean isOverrideShowErrorLedsSd = false;
 	private int mShowErrorLedsSd = 0;
 	private boolean mLowBattAutoStop = false;
-	private boolean mRawAudio = false;
+	private int mAudioMode = Configuration.Shimmer3.AUDIO_MODE_OFF;
 	/** Only internal apps may switch raw audio on; any other app writes it off. */
 	private static boolean sIsRawAudioAllowed = false;
 
@@ -4992,7 +4992,7 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 			setSingleTouch(false);
 			setTCXO(false);
 			setLowBattAutoStop(false);
-			setRawAudio(false);
+			setAudioMode(Configuration.Shimmer3.AUDIO_MODE_OFF);
 			
 			setPacketSize(0);
 			mConfigByte0=0;
@@ -5165,8 +5165,10 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 					setLowBattAutoStop((configBytes[configByteLayoutCast.idxSDExperimentConfig1] >> configByteLayoutCast.bitShiftLowBattStop) & configByteLayoutCast.maskLowBattStop);
 				}
 
-				if(isVerCompatibleWithAnyOf(Configuration.Shimmer3.configOptionRawAudio.mListOfCompatibleVersionInfo)) {
-					setRawAudio(((configBytes[configByteLayoutCast.idxSDExperimentConfig1] >> configByteLayoutCast.bitShiftRawAudio) & configByteLayoutCast.maskRawAudio) > 0);
+				if(configByteLayoutCast.idxAudioMode>0 && configBytes.length>configByteLayoutCast.idxAudioMode) {
+					// anything the firmware cannot act on reads as off: bit 7 set (erased) or a gain preset
+					int audioMode = configBytes[configByteLayoutCast.idxAudioMode] & 0xFF;
+					setAudioMode((audioMode & 0x8C) != 0 ? Configuration.Shimmer3.AUDIO_MODE_OFF : audioMode & configByteLayoutCast.maskAudioMode);
 				}
 					
 				byte[] macIdBytes = new byte[configByteLayoutCast.lengthMacIdBytes];
@@ -5427,8 +5429,8 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 					mConfigBytes[configByteLayoutCast.idxSDExperimentConfig1] |= (byte) ((isLowBattAutoStop()?1:0 & configByteLayoutCast.maskLowBattStop) << configByteLayoutCast.bitShiftLowBattStop);
 				}
 
-				if(isVerCompatibleWithAnyOf(Configuration.Shimmer3.configOptionRawAudio.mListOfCompatibleVersionInfo)) {
-					mConfigBytes[configByteLayoutCast.idxSDExperimentConfig1] |= (byte) ((((sIsRawAudioAllowed && isRawAudio())?1:0) & configByteLayoutCast.maskRawAudio) << configByteLayoutCast.bitShiftRawAudio);
+				if(configByteLayoutCast.idxAudioMode>0 && mConfigBytes.length>configByteLayoutCast.idxAudioMode) {
+					mConfigBytes[configByteLayoutCast.idxAudioMode] = (byte) (getAudioModeToWrite() & configByteLayoutCast.maskAudioMode);
 				}
 
 				if(getFirmwareIdentifier()==FW_ID.LOGANDSTREAM || getFirmwareIdentifier()==FW_ID.SDLOG || getFirmwareIdentifier()==FW_ID.STROKARE) {
@@ -6219,16 +6221,32 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 		return mLowBattAutoStop;
 	}
 
-	public void setRawAudio(boolean state) {
-		mRawAudio = state;
+	public void setAudioMode(int audioMode) {
+		mAudioMode = audioMode;
 	}
 
-	public boolean isRawAudio() {
-		return mRawAudio;
+	public int getAudioMode() {
+		return mAudioMode;
+	}
+
+	public static boolean isRawAudioMode(int audioMode) {
+		return audioMode == Configuration.Shimmer3.AUDIO_MODE_FINGERPRINT_AND_RAW || audioMode == Configuration.Shimmer3.AUDIO_MODE_RAW;
+	}
+
+	/** An app that may not record raw audio keeps only the fingerprint. */
+	private int getAudioModeToWrite() {
+		if (sIsRawAudioAllowed || !isRawAudioMode(mAudioMode)) {
+			return mAudioMode;
+		}
+		return mAudioMode == Configuration.Shimmer3.AUDIO_MODE_FINGERPRINT_AND_RAW ? Configuration.Shimmer3.AUDIO_MODE_FINGERPRINT : Configuration.Shimmer3.AUDIO_MODE_OFF;
 	}
 
 	public static void setRawAudioAllowed(boolean isAllowed) {
 		sIsRawAudioAllowed = isAllowed;
+	}
+
+	public static boolean isRawAudioAllowed() {
+		return sIsRawAudioAllowed;
 	}
 
 	/**
@@ -9759,8 +9777,8 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 			case(Configuration.Shimmer3.GuiLabelConfig.LOW_POWER_AUTOSTOP):
 				returnValue = isLowBattAutoStop();
 	        	break;
-			case(Configuration.Shimmer3.GuiLabelConfig.RAW_AUDIO):
-				returnValue = isRawAudio();
+			case(Configuration.Shimmer3.GuiLabelConfig.AUDIO_MODE):
+				returnValue = getAudioMode();
 	        	break;
 
 			case(Configuration.Shimmer3.GuiLabelConfig.BLUETOOTH_BAUD_RATE):
@@ -9930,8 +9948,8 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 			case(Configuration.Shimmer3.GuiLabelConfig.LOW_POWER_AUTOSTOP):
             	setLowBattAutoStop((boolean)valueToSet);
 	        	break;
-			case(Configuration.Shimmer3.GuiLabelConfig.RAW_AUDIO):
-            	setRawAudio((boolean)valueToSet && isVerCompatibleWithAnyOf(Configuration.Shimmer3.configOptionRawAudio.mListOfCompatibleVersionInfo));
+			case(Configuration.Shimmer3.GuiLabelConfig.AUDIO_MODE):
+            	setAudioMode(isVerCompatibleWithAnyOf(Configuration.Shimmer3.configOptionAudioMode.mListOfCompatibleVersionInfo) ? (int)valueToSet : Configuration.Shimmer3.AUDIO_MODE_OFF);
 	        	break;
 
 			case(Configuration.Shimmer3.GuiLabelConfig.BLUETOOTH_BAUD_RATE):
@@ -10181,7 +10199,7 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 		configMapForDb.put(DatabaseConfigHandleShimmerObject.TRIAL_DURATION_MAXIMUM, (double) getTrialDurationMaximumInSecs());
 
 		configMapForDb.put(ShimmerDevice.DatabaseConfigHandle.LOW_POWER_AUTOSTOP, (double) (isLowBattAutoStop()? 1:0));
-		configMapForDb.put(ShimmerDevice.DatabaseConfigHandle.RAW_AUDIO, (double) (isRawAudio()? 1:0));
+		configMapForDb.put(ShimmerDevice.DatabaseConfigHandle.AUDIO_MODE, (double) getAudioMode());
 
 		//Now handled in the algorithm class in super
 		/**
@@ -10231,8 +10249,8 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 		if(mapOfConfigPerShimmer.containsKey(DatabaseConfigHandle.LOW_POWER_AUTOSTOP)){
 			setLowBattAutoStop(((Double) mapOfConfigPerShimmer.get(DatabaseConfigHandle.LOW_POWER_AUTOSTOP))>0? true:false);
 		}
-		if(mapOfConfigPerShimmer.containsKey(DatabaseConfigHandle.RAW_AUDIO)){
-			setRawAudio(((Double) mapOfConfigPerShimmer.get(DatabaseConfigHandle.RAW_AUDIO))>0);
+		if(mapOfConfigPerShimmer.containsKey(DatabaseConfigHandle.AUDIO_MODE)){
+			setAudioMode(((Double) mapOfConfigPerShimmer.get(DatabaseConfigHandle.AUDIO_MODE)).intValue());
 		}
 		
 		//EXG Configuration
