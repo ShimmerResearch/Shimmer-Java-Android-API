@@ -247,6 +247,7 @@ public class ShimmerVerObject implements Serializable {
 				|| (mHardwareVersion==HW_ID.SHIMMER_GQ_BLE && mFirmwareIdentifier==FW_ID.GQ_BLE)
 				|| ((mHardwareVersion==HW_ID.SHIMMER_GQ_802154_NR || mHardwareVersion==HW_ID.SHIMMER_GQ_802154_LR) && mFirmwareIdentifier==FW_ID.GQ_802154)
 				|| (mHardwareVersion==HW_ID.SHIMMER_2R_GQ && mFirmwareIdentifier==FW_ID.GQ_802154)
+				|| isVerisenseNeuroLynQ()
 				|| mHardwareVersion==HW_ID.SPAN
 				|| mHardwareVersion==HW_ID.SHIMMER_4_SDK
 				|| mHardwareVersion==HW_ID.SWEATCH
@@ -410,6 +411,7 @@ public class ShimmerVerObject implements Serializable {
 				|| (hwVer==HW_ID.SHIMMER_GQ_802154_NR)
 				|| (hwVer==HW_ID.SHIMMER_GQ_802154_LR)
 				|| (hwVer==HW_ID.SHIMMER_2R_GQ)
+				|| isVerisenseNeuroLynQ(hwVer, fwId)
 				|| (hwVer==HW_ID.SHIMMER_4_SDK)
 				|| (hwVer==HW_ID.SHIMMER_3R)){
 			return true;
@@ -427,6 +429,7 @@ public class ShimmerVerObject implements Serializable {
 				|| hwVer==HW_ID.SHIMMER_GQ_802154_NR
 				|| hwVer==HW_ID.SHIMMER_GQ_802154_LR
 				|| hwVer==HW_ID.SHIMMER_2R_GQ
+				|| isVerisenseNeuroLynQ(hwVer, fwId)
 				|| hwVer==HW_ID.SHIMMER_4_SDK){
 			return true;
 		}
@@ -445,7 +448,8 @@ public class ShimmerVerObject implements Serializable {
 				|| (hwVer==HW_ID.SHIMMER_GQ_BLE && fwId == FW_ID.GQ_BLE)
 //				|| hwVer==HW_ID.SHIMMER_GQ_802154_NR
 //				|| hwVer==HW_ID.SHIMMER_GQ_802154_LR
-				|| fwId==ShimmerVerDetails.FW_ID.GQ_802154
+				// A NeuroLynQ-mode Verisense runs the GQ's firmware but has no SD card
+				|| (fwId==ShimmerVerDetails.FW_ID.GQ_802154 && !isVerisenseNeuroLynQ(hwVer, fwId))
 				|| hwVer==HW_ID.SHIMMER_2R_GQ
 				|| (hwVer==HW_ID.SHIMMER_4_SDK && fwId == FW_ID.SHIMMER4_SDK_STOCK)
 				){
@@ -645,12 +649,25 @@ public class ShimmerVerObject implements Serializable {
 	 * @return
 	 */
 	public boolean isShimmerGenGq(int hwVer, int fwId) {
-		if(isShimmerGenGq(hwVer)){
+		if(isShimmerGenGq(hwVer) || isVerisenseNeuroLynQ(hwVer, fwId)){
 //		if(((hwVer==HW_ID.SHIMMER_GQ_802154_LR) || (hwVer==HW_ID.SHIMMER_GQ_802154_NR) || (hwVer==HW_ID.SHIMMER_2R_GQ))
 //				&& (fwId==FW_ID.GQ_802154 || fwId==FW_ID.GQ_BLE)){
 			return true;
 		}
 		return false;
+	}
+
+	/**
+	 * A Verisense in NeuroLynQ mode (verisense-firmware ASM_NeuroLynQ): Verisense
+	 * hardware running the GQ 802.15.4 firmware. It reports its own hardware ID, but it
+	 * answers and streams as a GQ does, so to the host it is a GQ (DEV-1047).
+	 */
+	public boolean isVerisenseNeuroLynQ() {
+		return isVerisenseNeuroLynQ(getHardwareVersion(), getFirmwareIdentifier());
+	}
+
+	public static boolean isVerisenseNeuroLynQ(int hwVer, int fwId) {
+		return isShimmerGenVerisense(hwVer) && fwId==FW_ID.GQ_802154;
 	}
 	
 	public boolean isShimmerVideoDevice(){
@@ -667,8 +684,10 @@ public class ShimmerVerObject implements Serializable {
 			return false;
 	}
 
+	/** Verisense hardware running its own firmware. In NeuroLynQ mode it runs the GQ's
+	 * firmware and sends GQ data instead, see {@link #isVerisenseNeuroLynQ()}. */
 	public boolean isShimmerGenVerisense() {
-		return isShimmerGenVerisense(getHardwareVersion());
+		return isShimmerGenVerisense(getHardwareVersion()) && !isVerisenseNeuroLynQ();
 	}
 
 	public static boolean isShimmerGenVerisense(int hwVer) {

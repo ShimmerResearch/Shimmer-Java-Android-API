@@ -57,10 +57,17 @@ public class HwDriverShimmerDeviceDetails {
 		UNKNOWN,
 		SPAN_SR1_3_1, // 115200 baud
 		SPAN_SR1_3_0, // 230400 baud
-		VIRTUAL; 
+		VIRTUAL,
+		/** nRF52840 with native USB (verisense-firmware SR9_SPAN_NRF52840): one CDC port, no FTDI bridge and no BSL */
+		SPAN_NRF52840;
 		
 		public boolean isSupported(){
-			return this==SPAN_VERSION.SPAN_SR1_3_1;
+			return this==SPAN_VERSION.SPAN_SR1_3_1 || this==SPAN_VERSION.SPAN_NRF52840;
+		}
+		
+		/** Whether the Span is an MSP430 that is reset and programmed through the BSL on its FTDI's first port */
+		public boolean isMspBslSupported(){
+			return this==SPAN_VERSION.SPAN_SR1_3_0 || this==SPAN_VERSION.SPAN_SR1_3_1;
 		}
 	}
 
@@ -105,6 +112,15 @@ public class HwDriverShimmerDeviceDetails {
         public static final String[] SPAN_SR1_3_1 = new String[] {
 //        	"SHIMMER SPAN SR1-3.1 25/9/2015",
     		"SHIMMER SPAN SR1-3.1",
+        };
+
+        /** USB product string of the nRF52840 Span (verisense-firmware
+         * SR9_SPAN_NRF52840/pca10056/blank/config/app_config.h). It is matched with
+         * {@link SERIAL_PORT#NORDIC_VEND_ID} and any PID: its PID, 0x5210, is
+         * provisional and unallocated under Nordic's VID, and matching on it would need a
+         * host release whenever it changes. See {@link HwDriverShimmerDeviceDetails#isSpanNrf52840}. */
+        public static final String[] SPAN_NRF52840 = new String[] {
+    		"NeuroLynQ Span",
         };
 
         public static final String[] DISK_DRIVE = new String[] {
@@ -161,6 +177,14 @@ public class HwDriverShimmerDeviceDetails {
 		    "verisense",
 		};
 
+		/** A Verisense in NeuroLynQ mode says so in its USB product string, e.g.
+		 * "Verisense-NeuroLynQ-01-2511210195BC" (verisense-firmware hal_usb_cdc.c,
+		 * USB_PRODUCT_NAME_MODE_MARKER). It keeps the stock VID/PID, so this is the only
+		 * way a host can tell it from a stock unit (DEV-1047). */
+		public static final String[] VERISENSE_NEUROLYNQ = new String[] {
+		    "-NeuroLynQ-",
+		};
+
 		public static final String[] SHIMMER3R_DFU_DEVICE_BUS_DESCRITION = new String[] { "DFU in HS Mode" };
 
 		public static final class SERVICE_DESCRIPTION {
@@ -194,6 +218,9 @@ public class HwDriverShimmerDeviceDetails {
 	        public static final String FTDI_VEND_ID = "0403";
 	        public static final String FTDI_FT2232H_PROD_ID = "6010";
 	        public static final String FTDI_FT4232H_PROD_ID = "6011";
+	        
+	        /** Nordic Semiconductor: the vendor ID of the Verisense and of the nRF52840 Span */
+	        public static final String NORDIC_VEND_ID = "1915";
 	        
 	        public static final String VIRTUAL_PORT = "COM0COM";
 	        
@@ -319,6 +346,26 @@ public class HwDriverShimmerDeviceDetails {
 	    else if(this.deviceType == DEVICE_TYPE.BASE6) {
 		    mNumberOfSlots = 6;
 	    }
+	}
+	
+	/** Whether a USB device is an nRF52840 Span: Nordic's vendor ID with the Span's
+	 * product string, whatever its product ID. Every platform's detection calls this so
+	 * that they all apply the same rule.
+	 * @param usbVendorId the vendor ID as four hex digits, e.g. "1915"
+	 * @param usbProductString the USB product string (iProduct)
+	 */
+	public static boolean isSpanNrf52840(String usbVendorId, String usbProductString) {
+		return SH_SEARCH.SERIAL_PORT.NORDIC_VEND_ID.equalsIgnoreCase(usbVendorId)
+				&& usbProductString!=null
+				&& UtilShimmer.stringContainsItemFromListUpperCaseCheck(usbProductString, SH_SEARCH.SPAN_NRF52840);
+	}
+
+	/** Whether a Verisense is in NeuroLynQ mode, from its USB product string (iProduct).
+	 * A NeuroLynQ-mode Verisense serves the ShimmerGQ $ dock protocol and not its native
+	 * one, so the two need different drivers. */
+	public static boolean isVerisenseNeuroLynQ(String usbProductString) {
+		return usbProductString!=null
+				&& UtilShimmer.stringContainsItemFromListUpperCaseCheck(usbProductString, SH_SEARCH.VERISENSE_NEUROLYNQ);
 	}
 	
 	public static DEVICE_TYPE getDeviceTypeFromLabel(String label){
