@@ -123,7 +123,7 @@ public abstract class BasicProcessWithCallBack {
 					if (shimmerMSG.mB instanceof EndThread){
 						stop=true;
 					} else {
-						processMsgFromCallback(shimmerMSG);
+						processMsgSafely(shimmerMSG);
 					}
 				} catch (InterruptedException e) {
 					// TODO Auto-generated catch block
@@ -134,8 +134,22 @@ public abstract class BasicProcessWithCallBack {
 			
 			//as a safety precaution, remove all its callbacks
 			removeSetWaitForDataAll();
-			
+
 		};
+
+		/** One bad message must not kill the consumer. If this thread died,
+		 * mQueue would stop draining, every producer would block in put() once
+		 * it held 1024 messages, and anything that then sends a callback -
+		 * including an application's shutdown hook - would hang for good. */
+		private void processMsgSafely(ShimmerMsg shimmerMSG) {
+			try {
+				processMsgFromCallback(shimmerMSG);
+			} catch (RuntimeException e) {
+				System.err.println(getName() + ": exception processing callback message "
+						+ shimmerMSG.mIdentifier + "; the consumer thread continues");
+				e.printStackTrace();
+			}
+		}
 	}
 	
 	/** This allows the class to receive msgs from the class passed in as an argument
