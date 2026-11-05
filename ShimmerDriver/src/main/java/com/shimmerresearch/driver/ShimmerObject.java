@@ -6234,7 +6234,8 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 	}
 
 	/** An app that may not record raw audio keeps only the fingerprint. */
-	private int getAudioModeToWrite() {
+	/** What a config write saves: a raw audio mode drops to Fingerprint only or Off unless raw audio is allowed. */
+	public int getAudioModeToWrite() {
 		if (sIsRawAudioAllowed || !isRawAudioMode(mAudioMode)) {
 			return mAudioMode;
 		}
