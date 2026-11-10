@@ -6,6 +6,12 @@ Best examples to start with are
 
 For help with using on Ubuntu please check the [wiki](https://github.com/ShimmerEngineering/Shimmer-Java-Android-API/wiki).
 
+## Hardware tests
+
+[`tools/hil`](tools/hil/README.md) runs the driver on real Shimmer3 and Shimmer3R units over
+Bluetooth Classic: streaming, SD logging and in-stream commands while streaming, and reconnects, with
+the driver's timers on. **Release Java API** requires a passing run on the commit it releases.
+
 Rev 3.00
 - Change to Handler MSGs
 

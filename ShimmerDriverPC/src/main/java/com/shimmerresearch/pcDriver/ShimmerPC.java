@@ -900,8 +900,13 @@ public class ShimmerPC extends ShimmerBluetooth implements Serializable{
 			}
 			else{
 //				if(!isStreaming() && !isSDLogging() && isConnected()){
-				if(!mIsStreaming && !isSDLogging() && isConnected() && mBluetoothRadioState!=BT_STATE.CONNECTED){
-					setBluetoothRadioState(BT_STATE.CONNECTED);	
+				// While connecting, the connect sequence's own end (inquiryDone(), then
+				// isReadyForStreaming()) moves CONNECTING to CONNECTED. The sequence reads the
+				// status part way through, and if that reply did it, the app would be told the
+				// unit is ready while the rest of the sequence is still queued (DEV-1275).
+				if(!mIsStreaming && !isSDLogging() && isConnected()
+						&& mBluetoothRadioState!=BT_STATE.CONNECTED && mBluetoothRadioState!=BT_STATE.CONNECTING){
+					setBluetoothRadioState(BT_STATE.CONNECTED);
 				}
 //				if(getBTState() == BT_STATE.INITIALISED){
 //					

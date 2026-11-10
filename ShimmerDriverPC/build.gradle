@@ -32,19 +32,41 @@ repositories {
 test {
     // this test requires a physical Shimmer2r to run
     exclude '**/API_00001_ShimmerPC_GeneralBluetoothShimmer2R.class'
-    exclude '**/API_0000X_ByteCommunicationShimmer3lns0_16_11_w_sd_only.class'
-    exclude '**/API_0000X_ByteCommunicationShimmer3lns0_16_11_w_sync_master.class'
-    exclude '**/API_0000X_ByteCommunicationShimmer3lns0_16_11_w_sync_slave.class'
+    // the hardware-in-the-loop scenarios need a unit; hilTest runs them (tools/hil/run-java-hil.ps1)
+    exclude '**/hil/JavaHilScenariosTest.class'
+}
+
+// Hardware-in-the-loop scenarios on a real Shimmer over a paired Bluetooth serial port, run by
+// tools/hil/run-java-hil.ps1 (see tools/hil/README.md). Each -Phil.<name>=<value> reaches the tests
+// as the system property hil.<name>.
+tasks.register('hilTest', Test) {
+    description = 'Runs the hardware-in-the-loop scenarios on a real unit (tools/hil/run-java-hil.ps1)'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    include '**/hil/JavaHilScenariosTest.class'
+    dependsOn 'testClasses'
+    systemProperties project.properties.findAll { k, v -> k.startsWith('hil.') }
+    outputs.upToDateWhen { false }
+    testLogging {
+        events 'passed', 'skipped', 'failed'
+        showStandardStreams = true
+        exceptionFormat 'full'
+    }
 }
 
 publishing {
     publications {
         mavenJava(MavenPublication) {
             from components.java
+            // The Shadow plugin adds ShimmerJavaClass.jar (no classifier) to components.java, where it
+            // collides with the plain jar and fails publish on Gradle 8. Publish the plain jar with its
+            // dependencies in the POM, as releases up to 0.11.7_beta did; the fat jar goes to MATLAB
+            // and the GitHub Release instead.
+            components.java.withVariantsFromConfiguration(configurations.shadowRuntimeElements) { skip() }
 
             groupId = 'com.shimmerresearch' // Replace with your package's group/organization name
             artifactId = 'shimmerdriverpc' // Replace with the name of your package
-            version = '0.11.8_beta' // Replace with your package version
+            version = project.findProperty('releaseVersion') ?: 'local' // set by the Release Java API workflow (-PreleaseVersion)
 
             // Jar publication
             //(
@@ -57,7 +79,7 @@ publishing {
     repositories {
         maven {
             name = "GitHubPackages"
-            url = uri("https://maven.pkg.github.com/ShimmerEngineering/Shimmer-Java-Android-API")
+            url = uri("https://maven.pkg.github.com/ShimmerResearch/Shimmer-Java-Android-API")
             credentials {
                 /* Create gradle.properties file in GRADLE_USER_HOME/.gradle/ 
                 (e.g. C:/Users/YourUsername/.gradle/) with the two lines listed below. Fill in your 
@@ -101,6 +123,8 @@ dependencies {
     // testCompile dependency to testCompile 'org.testng:testng:6.8.1' and add
     // 'test.useTestNG()' to your build script.
     testImplementation 'junit:junit:4.12'
+    // the HIL reports (src/test/java/com/shimmerresearch/hil)
+    testImplementation 'com.google.code.gson:gson:2.10.1'
     implementation 'com.parse.bolts:bolts-tasks:1.4.0'
     
     // https://mvnrepository.com/artifact/org.bouncycastle/bcpkix-jdk15on
@@ -110,12 +134,18 @@ dependencies {
 	implementation("org.bouncycastle:bcprov-jdk15on:1.61")
 }
 
-// Shadow JAR task to create a runnable JAR with dependencies
-/*
-Change to using the following below for ShimmerDriverPC/ShimmerDriver/ShimmerBluetoothManager
-sourceCompatibility = '1.8'  // Ensure code is compiled with Java 8
-targetCompatibility = '1.8'  // Ensure bytecode is compatible with Java 8
-*/
+// Shadow JAR task to create a runnable JAR with dependencies.
+// ShimmerJavaClass.jar is loaded by MATLAB, which may run it on Java 8, so build it as Java 8
+// bytecode with:   ./gradlew shadowJar -PmatlabJava8
+// This applies to the ShimmerDriver and ShimmerBluetoothManager subprojects too, so their build files
+// no longer need editing to 1.8 by hand. --release 8 also fails the compile if the code uses an API
+// newer than Java 8, which sourceCompatibility = '1.8' alone would let through to fail in MATLAB.
+// The "Release Java API" workflow builds the jar this way and opens a PR into Shimmer-MATLAB-ID/libs.
+if (hasProperty('matlabJava8')) {
+    allprojects {
+        tasks.withType(JavaCompile).configureEach { options.release = 8 }
+    }
+}
 shadowJar {
     archiveBaseName.set('ShimmerJavaClass')  // Use archiveBaseName instead of baseName
     archiveClassifier.set('')  // Remove classifier so it’s named shimmerjavaclass.jar
@@ -125,4 +155,15 @@ shadowJar {
     }
 
     mergeServiceFiles()  // Merges service files (if any)
+}
+
+// Without -PreleaseVersion the version is 'local', and GitHub Packages never lets a version be
+// overwritten. Releases go through the Release Java API workflow; publishToMavenLocal is unaffected.
+tasks.withType(PublishToMavenRepository).configureEach {
+    doFirst {
+        if (publication.version == 'local') {
+            throw new GradleException("Refusing to publish ${publication.artifactId} as version 'local'. " +
+                "Release with the Release Java API workflow, or pass -PreleaseVersion.")
+        }
+    }
 }
