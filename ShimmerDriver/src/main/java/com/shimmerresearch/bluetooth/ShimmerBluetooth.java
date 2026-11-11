@@ -5061,8 +5061,10 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 	 * configuration byte 232 (DEV-971): SET_FEATURE with FEATURE_EVENT_STREAM
 	 * and 0, which changes nothing, since a connection starts opted out.
 	 * Firmware with the event channel ACKs it and firmware without NACKs it;
-	 * {@link #isEventChannelSupported()} has the answer. There is no version to
-	 * go by: the event channel's builds report the release before them.
+	 * {@link #isEventChannelSupported()} has the answer. LogAndStream_Shimmer3R
+	 * v1.01.026 is the first Shimmer3R release with the event channel, and no
+	 * Shimmer3 release has it yet. The builds before a release report the
+	 * release before them, so the driver asks rather than going by the version.
 	 * <p>
 	 * Firmware older than SET_FEATURE is not asked, and has no event channel.
 	 * Nor is a Shimmer that is streaming, where a NACK is not yet handled.
