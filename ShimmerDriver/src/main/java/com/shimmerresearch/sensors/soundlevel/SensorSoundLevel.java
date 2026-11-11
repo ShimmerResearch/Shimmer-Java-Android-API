@@ -27,7 +27,7 @@ import com.shimmerresearch.sensors.ActionSetting;
 /**
  * The Shimmer3R sound level channel (DEV-1413): the A-weighted sound level
  * from the microphone, LAeq over the most recent completed 128 ms block, in
- * dB(A) SPL.
+ * dB(A) SPL. LogAndStream_Shimmer3R v1.01.026 is the first release with it.
  * <p>
  * <b>Nominal.</b> The firmware adds the microphone's datasheet sensitivity and
  * nothing more; no unit has been checked against a calibrated sound level
@@ -49,9 +49,9 @@ import com.shimmerresearch.sensors.ActionSetting;
  * 2-3), which this class keeps as read so that a full configuration write,
  * which builds its image from zeros, gives the Shimmer back its own. Firmware
  * that has the byte but not the channel clears bit 4, so a write and a read
- * back says whether a unit has it. Firmware from before the byte (before
- * DEV-99) stores it untouched, so there the bit reads back set while no
- * channel is sent; the channel list is what the decoder goes by.
+ * back says whether a unit has it. Firmware from before the byte (releases
+ * before v1.01.026, DEV-99) stores it untouched, so there the bit reads back
+ * set while no channel is sent; the channel list is what the decoder goes by.
  * <p>
  * This class is only created for a Shimmer3R. A Shimmer3's byte 233 stays 0.
  */
