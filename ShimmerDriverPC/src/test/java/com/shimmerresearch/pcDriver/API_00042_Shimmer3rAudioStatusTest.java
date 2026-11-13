@@ -25,6 +25,15 @@ public class API_00042_Shimmer3rAudioStatusTest {
 			parseStatusByte(new byte[] {0, (byte) statusByte1});
 			return this;
 		}
+
+		StatusShimmer answer(int state, int fault) {
+			byte[] audioStatus = new byte[32];
+			audioStatus[0] = 1;
+			audioStatus[2] = (byte) state;
+			audioStatus[3] = (byte) fault;
+			parseAudioStatus(audioStatus);
+			return this;
+		}
 	}
 
 	@Test
@@ -48,5 +57,32 @@ public class API_00042_Shimmer3rAudioStatusTest {
 		StatusShimmer shimmer = new StatusShimmer(1, 1, 25).parse(0x06);
 		assertFalse(shimmer.isAudioRecording());
 		assertFalse(shimmer.isAudioFault());
+	}
+
+	/** v1.01.026 records audio by its version; v1.01.025 only if a development build answers GET_AUDIO_STATUS */
+	@Test
+	public void audioSupportByVersionOrAnswer() {
+		assertTrue(new StatusShimmer(1, 1, 26).isAudioSupported());
+		assertFalse(new StatusShimmer(1, 1, 26).isAudioStatusToAsk());
+		assertFalse(new StatusShimmer(1, 1, 24).isAudioSupported());
+		assertFalse(new StatusShimmer(1, 1, 24).isAudioStatusToAsk());
+
+		StatusShimmer devBuild = new StatusShimmer(1, 1, 25);
+		assertTrue(devBuild.isAudioStatusToAsk());
+		assertFalse("unknown until it answers", devBuild.isAudioSupported());
+		assertTrue(devBuild.answer(2, 0).isAudioSupported());
+		assertTrue(devBuild.isAudioRecording());
+		assertFalse(devBuild.isAudioFault());
+
+		StatusShimmer release = new StatusShimmer(1, 1, 25);
+		release.setIsAudioStatusAnswered(false);
+		assertFalse("no answer: no audio", release.isAudioSupported());
+	}
+
+	@Test
+	public void audioStatusFault() {
+		StatusShimmer shimmer = new StatusShimmer(1, 1, 25).answer(4, 3);
+		assertFalse(shimmer.isAudioRecording());
+		assertTrue(shimmer.isAudioFault());
 	}
 }

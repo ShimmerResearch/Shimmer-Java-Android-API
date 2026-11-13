@@ -505,6 +505,10 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 	public static final byte SET_TEST								= (byte) 0xA8;
 	
 	public static final byte SET_FEATURE							= (byte) 0xB7;
+
+	/** Shimmer3R audio (DEV-99): firmware without audio leaves it unanswered */
+	public static final byte GET_AUDIO_STATUS_COMMAND				= (byte) 0xBC;
+	public static final byte AUDIO_STATUS_RESPONSE					= (byte) 0xBD;
 	
 	public static final int MAX_NUMBER_OF_SIGNALS = 77;//50; //used to be 11 but now 13 because of the SR30 + 8 for 3d orientation
 	public static final int MAX_INQUIRY_PACKET_SIZE = 47;

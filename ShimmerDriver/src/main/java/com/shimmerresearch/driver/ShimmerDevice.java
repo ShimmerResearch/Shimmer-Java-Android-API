@@ -153,6 +153,8 @@ public abstract class ShimmerDevice extends BasicProcessWithCallBack implements 
 	/** Shimmer3R microphone, from the status: audio captured for the current log, and this session's audio failed or degraded */
 	private boolean mIsAudioRecording = false;
 	private boolean mIsAudioFault = false;
+	/** A v1.01.025 unit's answer to GET_AUDIO_STATUS: null until asked */
+	private Boolean mIsAudioStatusAnswered = null;
 	private boolean mIsDockCommsSuccessful = false;
 	public boolean mIsUsbDfuMode= false;
 	protected boolean mHaveAttemptedToReadConfig = false;
@@ -1100,6 +1102,22 @@ public abstract class ShimmerDevice extends BasicProcessWithCallBack implements 
 
 	public boolean isAudioFault() {
 		return mIsAudioFault;
+	}
+
+	public void setIsAudioStatusAnswered(boolean isAnswered) {
+		mIsAudioStatusAnswered = isAnswered;
+	}
+
+	/**
+	 * Whether this unit records audio: LogAndStream_Shimmer3R v1.01.026 or later by its version; a v1.01.025
+	 * development build only once it has answered GET_AUDIO_STATUS (SHIMMER3R_AUDIO.md §5).
+	 */
+	public boolean isAudioSupported() {
+		if (isVerCompatibleWithAnyOf(Configuration.Shimmer3.CompatibilityInfoForMaps.listOfCompatibleVersionInfoSoundLevel)) {
+			return true;
+		}
+		return isVerCompatibleWithAnyOf(Configuration.Shimmer3.configOptionAudioMode.mListOfCompatibleVersionInfo)
+				&& Boolean.TRUE.equals(mIsAudioStatusAnswered);
 	}
 	
 	public boolean isUsbDfuMode(){

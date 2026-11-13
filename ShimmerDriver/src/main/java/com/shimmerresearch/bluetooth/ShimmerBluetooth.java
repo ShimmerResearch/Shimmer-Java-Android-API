@@ -141,6 +141,8 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 	protected long mSetEnabledSensors = SENSOR_ACCEL;								// Only used during the initialization process, see initialize();
 	
 	private int mNumberofTXRetriesCount=1;
+	private static final int AUDIO_STATUS_LENGTH = 32;
+	private static final byte AUDIO_STATE_RECORDING = 2;
 	private final static int NUMBER_OF_TX_RETRIES_LIMIT = 0;
 	private class DUMMY_READ_WAIT_TIME_MS {
 		private final static int START = 50;
@@ -379,6 +381,7 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
         aMap.put(GET_RWC_COMMAND, 				new BtCommandDetails(GET_RWC_COMMAND, "GET_RWC_COMMAND", RWC_RESPONSE));
         aMap.put(GET_VBATT_COMMAND, 			new BtCommandDetails(GET_VBATT_COMMAND, "GET_VBATT_COMMAND", VBATT_RESPONSE));
         aMap.put(GET_BT_FW_VERSION_STR_COMMAND,	new BtCommandDetails(GET_BT_FW_VERSION_STR_COMMAND, "GET_BT_FW_VERSION_STR_COMMAND", BT_FW_VERSION_STR_RESPONSE));
+        aMap.put(GET_AUDIO_STATUS_COMMAND,		new BtCommandDetails(GET_AUDIO_STATUS_COMMAND, "GET_AUDIO_STATUS_COMMAND", AUDIO_STATUS_RESPONSE));
         
         mBtGetCommandMap = Collections.unmodifiableMap(aMap);
     }
@@ -500,6 +503,7 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
         aMap.put(RWC_RESPONSE, 					new BtCommandDetails(RWC_RESPONSE, "RWC_RESPONSE", 8));
         aMap.put(VBATT_RESPONSE, 				new BtCommandDetails(VBATT_RESPONSE, "VBATT_RESPONSE", 3));
         aMap.put(BT_FW_VERSION_STR_RESPONSE,		new BtCommandDetails(BT_FW_VERSION_STR_RESPONSE, "BT_FW_VERSION_STR_RESPONSE", -1));
+        aMap.put(AUDIO_STATUS_RESPONSE,			new BtCommandDetails(AUDIO_STATUS_RESPONSE, "AUDIO_STATUS_RESPONSE", AUDIO_STATUS_LENGTH));
         
         mBtResponseMap = Collections.unmodifiableMap(aMap);
     }
@@ -2196,6 +2200,13 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 			}
 		}
 		
+		else if(responseCommand==AUDIO_STATUS_RESPONSE) {
+			byte[] responseData = readBytes(AUDIO_STATUS_LENGTH, responseCommand);
+			if(responseData!=null) {
+				parseAudioStatus(responseData);
+			}
+		}
+		
 		else {
 			consolePrintLn("Unhandled BT response: " + responseCommand);
 			responseWasParsed = false;
@@ -3122,6 +3133,10 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 			readBtFwVersion();
 		}
 		
+		if(isAudioStatusToAsk()) {
+			readAudioStatus();
+		}
+		
 		//TODO this could actually be causing a lot of misunderstanding and a disconnect between what the user thinks is set and what is actually set.
 		// Only read calibration dump over bluetooth if the Shimmer3 is not
 		// docked as the Shimmer3 won't have access to the SD card. The Shimmer3R does.
@@ -3416,6 +3431,19 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 					return;
 				}
 				
+
+				//firmware without audio leaves it unanswered, which says the unit records none
+				if(mCurrentCommand==GET_AUDIO_STATUS_COMMAND){
+					setIsAudioStatusAnswered(false);
+					mWaitForAck=false;
+					mWaitForResponse=false;
+					
+					removeInstruction(0);
+					mTransactionCompleted = true;
+					setInstructionStackLock(false);
+					
+					return;
+				}
 
 				if(mCurrentCommand==GET_FW_VERSION_COMMAND){
 					setShimmerVersionObjectAndCreateSensorMap(new ShimmerVerObject(HW_ID.SHIMMER_2R, FW_ID.BOILER_PLATE, 0, 1, 0));
@@ -3933,6 +3961,22 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 			writeInstruction(GET_STATUS_COMMAND);
 			consolePrintLn("GET_STATUS_COMMAND Instruction added to the list");
 		}
+	}
+
+	/** v1.01.025 development builds may record audio; later releases do by version, so are not asked */
+	public boolean isAudioStatusToAsk() {
+		return isVerCompatibleWithAnyOf(Configuration.Shimmer3.configOptionAudioMode.mListOfCompatibleVersionInfo) && !isSupportedAudioStatus();
+	}
+
+	public void readAudioStatus() {
+		writeInstruction(GET_AUDIO_STATUS_COMMAND);
+	}
+
+	/** AUDIO_STATUS_RESPONSE (log-and-stream-common SHIMMER3R_AUDIO.md §5): byte 2 the state, 2 recording; byte 3 the fault, 0 none */
+	protected void parseAudioStatus(byte[] audioStatus) {
+		setIsAudioStatusAnswered(true);
+		setIsAudioRecording(audioStatus[2] == AUDIO_STATE_RECORDING);
+		setIsAudioFault(audioStatus[3] != 0);
 	}
 
 	public void readBtFwVersion() {
