@@ -6775,6 +6775,16 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 	}
 
 	/**
+	 * Whether the driver has the Shimmer3R's own byte 233, the microphone's
+	 * configuration ({@link SensorSoundLevel#isAudioConfigKnown()}). True
+	 * where there is no such byte.
+	 */
+	public boolean isAudioConfigKnown() {
+		AbstractSensor abstractSensor = getSensorClass(AbstractSensor.SENSORS.SOUND_LEVEL);
+		return !(abstractSensor instanceof SensorSoundLevel) || ((SensorSoundLevel) abstractSensor).isAudioConfigKnown();
+	}
+
+	/**
 	 * Whether byte 232 can be taken at its word: the Shimmer answered the event
 	 * channel probe, or the byte holds a value the firmware keeps. Firmware
 	 * without the byte leaves it 0xFF, which is not one, and the dock cannot

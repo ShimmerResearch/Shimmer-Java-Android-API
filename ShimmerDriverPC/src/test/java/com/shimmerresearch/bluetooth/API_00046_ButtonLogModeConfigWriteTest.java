@@ -34,7 +34,7 @@ import com.shimmerresearch.pcDriver.ShimmerPC;
  *
  * @author Mark Nolan
  */
-public class API_00037_ButtonLogModeConfigWriteTest {
+public class API_00046_ButtonLogModeConfigWriteTest {
 
 	private static final int IDX_BUTTON_LOG_MODE = 232;
 	private static final int IDX_TRIAL_CONFIG0 = 217;
@@ -282,13 +282,12 @@ public class API_00037_ButtonLogModeConfigWriteTest {
 		return chunks;
 	}
 
-	/** The same, with the chunk at 128 sent either side of byte 232 */
-	private static int[][] chunksWithout232(ShimmerBluetooth shimmer) {
+	/** The same, with the chunk at 128 sent as the parts given */
+	private static int[][] chunk128As(ShimmerBluetooth shimmer, int[]... parts) {
 		List<int[]> chunks = new ArrayList<int[]>();
 		for(int[] chunk:allChunks(shimmer)){
 			if(chunk[0]==128){
-				chunks.add(new int[] {128, 104});
-				chunks.add(new int[] {233, 23});
+				chunks.addAll(Arrays.asList(parts));
 			}
 			else {
 				chunks.add(chunk);
@@ -297,14 +296,30 @@ public class API_00037_ButtonLogModeConfigWriteTest {
 		return chunks.toArray(new int[0][]);
 	}
 
+	/** Either side of byte 232 */
+	private static int[][] chunksWithout232(ShimmerBluetooth shimmer) {
+		return chunk128As(shimmer, new int[] {128, 104}, new int[] {233, 23});
+	}
+
+	/** Either side of bytes 232 and 233: a Shimmer3R's, before a read (API_00047) */
+	private static int[][] chunksWithout232And233(ShimmerBluetooth shimmer) {
+		return chunk128As(shimmer, new int[] {128, 104}, new int[] {234, 22});
+	}
+
+	/** Either side of byte 233 */
+	private static int[][] chunksWithout233(ShimmerBluetooth shimmer) {
+		return chunk128As(shimmer, new int[] {128, 105}, new int[] {234, 22});
+	}
+
 	@Test
 	public void beforeAReadTheBluetoothWriteLeavesTheShimmersByte() {
 		ProbedShimmer shimmer = shimmer(S3R_EVENT_CHANNEL_CAPABLE);
 		assertFalse(shimmer.isButtonLogModeKnown());
 		shimmer.writeConfigBytes(false);
-		assertChunks("a configuration written on connect, before the read", chunksWithout232(shimmer), shimmer);
+		assertChunks("a configuration written on connect, before the read; a Shimmer3R's byte 233 is left out too",
+				chunksWithout232And233(shimmer), shimmer);
 
-		// The bytes either side of 232 are the image's
+		// The bytes either side of 232 and 233 are the image's
 		byte[] image = shimmer.generateConfigBytesForWritingToShimmer();
 		for(byte[] instruction:shimmer.getListofInstructions()){
 			if(instruction!=null && instruction[0]==ShimmerObject.SET_INFOMEM_COMMAND){
@@ -328,7 +343,7 @@ public class API_00037_ButtonLogModeConfigWriteTest {
 		ProbedShimmer set = shimmer(S3R_EVENT_CHANNEL_CAPABLE);
 		set.setButtonMode(ButtonLogMode.BUTTON_MODE_DISABLED);
 		set.writeConfigBytes(false);
-		assertChunks("set", allChunks(set), set);
+		assertChunks("set, with byte 233 still unread", chunksWithout233(set), set);
 		byte[] chunk = infoMemChunkAt(set, 128);
 		assertEquals("set, before anything was read", 0x01, chunk[4 + IDX_BUTTON_LOG_MODE - 128] & 0xFF);
 	}

@@ -23,7 +23,7 @@ import com.shimmerresearch.driverUtilities.ShimmerVerDetails.HW_ID_SR_CODES;
  *
  * @author Mark Nolan
  */
-public class API_00036_ButtonLogModeTest {
+public class API_00045_ButtonLogModeTest {
 
 	/** What a press does, in the table's words */
 	private enum PRESS {
