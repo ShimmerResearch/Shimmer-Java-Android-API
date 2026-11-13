@@ -46,8 +46,22 @@ public final class PlotView extends JPanel {
 		}
 	}
 
+	/** An event marker: a vertical line at a device time, with a short label */
+	private static final class Marker {
+		final double t;
+		final String label;
+		final Color color;
+
+		Marker(double t, String label, Color color) {
+			this.t = t;
+			this.label = label;
+			this.color = color;
+		}
+	}
+
 	private final String mTitle;
 	private final Map<String, Series> mSeries = new LinkedHashMap<String, Series>();
+	private final List<Marker> mMarkers = new ArrayList<Marker>();
 	private volatile double mWindowMs = 10000;
 
 	public PlotView(String title) {
@@ -75,6 +89,15 @@ public final class PlotView extends JPanel {
 
 	public synchronized void clear() {
 		mSeries.clear();
+		mMarkers.clear();
+	}
+
+	/** Marks an event at {@code timeMs} of device time, on the same axis as the samples */
+	public synchronized void addMarker(double timeMs, String label, Color color) {
+		mMarkers.add(new Marker(timeMs, label, color));
+		if (mMarkers.size() > 500) {
+			mMarkers.remove(0);
+		}
 	}
 
 	public synchronized boolean isEmpty() {
@@ -160,6 +183,17 @@ public final class PlotView extends JPanel {
 			}
 			g.drawString(e.getKey(), legendX, 13);
 			legendX += fm.stringWidth(e.getKey()) + 14;
+		}
+
+		g.setStroke(new BasicStroke(1.5f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 10f, new float[] {4f, 3f}, 0f));
+		for (Marker m : mMarkers) {
+			if (m.t < from || m.t > latest) {
+				continue;
+			}
+			int x = left + (int) Math.round((m.t - from) / mWindowMs * plotW);
+			g.setColor(m.color);
+			g.drawLine(x, top, x, top + plotH);
+			g.drawString(m.label, x + 3, top + plotH - 3);
 		}
 	}
 

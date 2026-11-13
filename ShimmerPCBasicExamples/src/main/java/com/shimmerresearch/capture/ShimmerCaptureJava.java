@@ -35,6 +35,9 @@ import javax.swing.table.DefaultTableModel;
 
 import com.shimmerresearch.bluetooth.ShimmerBluetooth;
 import com.shimmerresearch.driver.ObjectCluster;
+import com.shimmerresearch.driver.ShimmerDevice;
+import com.shimmerresearch.driver.shimmer2r3.EventRecord;
+import com.shimmerresearch.simpleexamples.EventMarkersFrame;
 import com.shimmerresearch.driverUtilities.ChannelDetails.CHANNEL_TYPE;
 import com.shimmerresearch.guiUtilities.configuration.EnableSensorsDialog;
 import com.shimmerresearch.guiUtilities.configuration.SensorConfigDialog;
@@ -84,6 +87,9 @@ public final class ShimmerCaptureJava implements CaptureDevice.Listener {
 	private final List<JButton> mConnectedOnly = new ArrayList<JButton>();
 	private final SimpleDateFormat mLogTime = new SimpleDateFormat("HH:mm:ss.SSS");
 	private long mLastWindowEnd = System.currentTimeMillis();
+	/** The latest sample's device time (Timestamp, calibrated, ms): the plot's x axis, to place event markers on */
+	private volatile double mLastDeviceMs = Double.NaN;
+	private EventMarkersFrame mEventMarkers;
 
 	public static void main(String[] args) {
 		try {
@@ -236,6 +242,13 @@ public final class ShimmerCaptureJava implements CaptureDevice.Listener {
 				clearPlots();
 			}
 		}));
+		JButton events = button("Event markers...", mConnectedOnly, new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				openEventMarkers();
+			}
+		});
+		events.setToolTipText("The button and TTL event channel (Shimmer3R, LogAndStream v1.01.026 on): byte 232, opt in, live records; each edge is marked on the plot");
+		bar.add(events);
 
 		mPlotPanel.setLayout(new BoxLayout(mPlotPanel, BoxLayout.Y_AXIS));
 		for (String panel : Panels.ALL) {
@@ -438,6 +451,50 @@ public final class ShimmerCaptureJava implements CaptureDevice.Listener {
 		}
 	}
 
+	private void openEventMarkers() {
+		if (mEventMarkers == null || !mEventMarkers.isDisplayable()) {
+			mEventMarkers = new EventMarkersFrame(new EventMarkersFrame.Host() {
+				@Override
+				public ShimmerDevice getConnectedDevice() {
+					return mDevice.shimmer();
+				}
+
+				@Override
+				public void plotEventRecord(ShimmerBluetooth shimmer, EventRecord record) {
+					markEvent(record);
+				}
+			});
+			mEventMarkers.setLocationRelativeTo(mFrame);
+		}
+		mEventMarkers.refresh();
+		mEventMarkers.setVisible(true);
+		mEventMarkers.toFront();
+	}
+
+	/**
+	 * Marks an event record's edge on every panel shown, and logs it. The plot's x axis is the
+	 * samples' device time, and a record carries the same clock in full: its low 24 bits line up
+	 * with a packet's timestamp, which the driver unwraps from where the stream began. Called on
+	 * the Swing thread.
+	 */
+	void markEvent(EventRecord record) {
+		log("Event seq " + record.getSequenceNumber() + ": " + record.getDescription());
+		double latest = mLastDeviceMs;
+		if (!record.isEdge() || Double.isNaN(latest) || !mDevice.isStreaming()) {
+			return;
+		}
+		double ticksPerMs = EventRecord.TICKS_PER_SECOND / 1000.0;
+		double eventMs = record.getTicksOnStreamTimeline(latest * ticksPerMs) / ticksPerMs;
+		java.awt.Color colour = record.getChannel() == EventRecord.CHANNEL_TTL ? new java.awt.Color(0x6A1B9A) : java.awt.Color.RED;
+		String label = record.getChannel() == EventRecord.CHANNEL_TTL ? (record.isTtlHigh() ? "TTL high" : "TTL low")
+				: (record.isButtonDown() ? "press" : "release");
+		for (PlotView p : mPlots.values()) {
+			if (!p.isEmpty()) {
+				p.addMarker(eventMs, label, colour);
+			}
+		}
+	}
+
 	private void clearPlots() {
 		for (PlotView p : mPlots.values()) {
 			p.clear();
@@ -475,6 +532,7 @@ public final class ShimmerCaptureJava implements CaptureDevice.Listener {
 		if (Double.isNaN(deviceMs)) {
 			return;
 		}
+		mLastDeviceMs = deviceMs;
 		String format = mFormat.getSelectedIndex() == 0 ? CAL : UNCAL;
 		final List<PlotView> shown = new ArrayList<PlotView>();
 		for (String channel : sample.getChannelNamesByInsertionOrder()) {

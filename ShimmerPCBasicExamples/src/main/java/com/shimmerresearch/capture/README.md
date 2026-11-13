@@ -111,3 +111,25 @@ CI does not build this module, so run the tests locally.
 | `ReceptionStats` | The figures' arithmetic |
 | `CsvRecording` | The CSV |
 | `Panels`, `PlotView` | The plot |
+
+## Event markers
+
+The Stream tab's **Event markers...** opens the event channel window (`EventMarkersFrame`, DEV-971,
+stacked on ShimmerResearch/Shimmer-Java-Android-API#348). It covers a Shimmer3R on LogAndStream
+v1.01.026 or later:
+- byte 232: the button mode, what starts logging, and the TTL input;
+- opt in and out of live records, with sequence gaps flagged;
+- the status, and an event file read from a card.
+
+While streaming, each button press and release, and each TTL edge, is also drawn on every plot panel
+shown, as a dashed line labelled `press`, `release`, `TTL high` or `TTL low`. The plot's x axis is the
+samples' device time, and a record carries the same clock in full: its low 24 bits line up with a
+packet's timestamp.
+
+To try it:
+1. Connect, then open Event markers.
+2. Set the button to mode 5 (every press recorded) and click Write.
+3. Click Opt in.
+4. Start streaming and press the button.
+
+Markers are not written to the CSV.
