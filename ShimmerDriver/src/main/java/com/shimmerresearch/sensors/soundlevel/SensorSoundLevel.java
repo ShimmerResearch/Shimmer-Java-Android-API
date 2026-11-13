@@ -283,14 +283,22 @@ public class SensorSoundLevel extends AbstractSensor {
 
 	/**
 	 * Whether a configuration write has a byte 233 to give: it was read from
-	 * the Shimmer, or the sound level is on, the one part of it set here.
-	 * Before a read, bits 0-3 are not known, and writing them as 0 would turn
-	 * the Shimmer's audio mode off. With the sound level turned on before a
-	 * read they are written as 0 all the same, since one bit cannot be written
-	 * on its own.
+	 * the Shimmer, or a part of it was set here, the sound level turned on or
+	 * the audio mode (DEV-1459) changed from the one read. Before a read, bits
+	 * 0-3 are not known, and writing them as 0 would turn the Shimmer's audio
+	 * mode off. With the sound level or an audio mode set before a read, the
+	 * rest of bits 0-3 are written as 0 all the same, since one bit cannot be
+	 * written on its own. An audio mode set back to Off before a read looks
+	 * like one never set, so the Shimmer keeps its own.
 	 */
-	public boolean isAudioConfigKnown() {
-		return mIsAudioConfigRead || isSensorEnabled(Configuration.Shimmer3.SENSOR_ID.SHIMMER_SOUND_LEVEL);
+	public boolean isAudioConfigKnown(ShimmerDevice shimmerDevice) {
+		if(mIsAudioConfigRead || isSensorEnabled(Configuration.Shimmer3.SENSOR_ID.SHIMMER_SOUND_LEVEL)){
+			return true;
+		}
+		// As configBytesGenerate() decides whether to write the mode set here
+		ConfigByteLayout configByteLayout = shimmerDevice.getConfigByteLayout();
+		return isAudioModeSupported(shimmerDevice) && configByteLayout instanceof ConfigByteLayoutShimmer3
+				&& ((ShimmerObject) shimmerDevice).getAudioMode()!=(mAudioModeAndGain & ((ConfigByteLayoutShimmer3) configByteLayout).maskAudioMode);
 	}
 
 	@Override

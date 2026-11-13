@@ -19,11 +19,12 @@ import com.shimmerresearch.pcDriver.ShimmerPC;
 /**
  * Configuration byte 233 on a Shimmer3R (DEV-99 audio mode and gain in bits
  * 0-3, DEV-1413 sound level in bit 4) through a Bluetooth configuration write.
- * The host can set bit 4 but never bits 0-3, which it only gives back as read.
- * So before a read, the write leaves the byte out, as it does byte 232
- * (API_00046), and the Shimmer keeps its own. The one exception is the sound
- * level turned on before a read: the byte is then written with bits 0-3 at 0,
- * since a SET_INFOMEM cannot write one bit.
+ * The host can set bit 4 and the audio mode (bits 0-1, DEV-1459), but not the
+ * gain preset (bits 2-3), which it only gives back as read. So before a read,
+ * the write leaves the byte out, as it does byte 232 (API_00046), and the
+ * Shimmer keeps its own. The exceptions are the sound level turned on, or an
+ * audio mode set, before a read: the byte is then written with the rest of
+ * bits 0-3 at 0, since a SET_INFOMEM cannot write one bit.
  * <p>
  * No hardware. It lives in this package because the instruction list is a
  * protected member of ShimmerBluetooth.
@@ -146,5 +147,22 @@ public class API_00047_AudioConfigWriteTest {
 		shimmer.writeConfigBytes(false);
 		assertEquals(0x01, writtenAt(shimmer, IDX_BUTTON_LOG_MODE));
 		assertEquals(-1, writtenAt(shimmer, IDX_AUDIO_CONFIG));
+	}
+
+	/** DEV-1459: the audio mode, bits 0-1, can be set here too */
+	@Test
+	public void anAudioModeSetBeforeAReadIsWritten() {
+		ShimmerPC shimmer = shimmer();
+		shimmer.setConfigValueUsingConfigLabel(Configuration.Shimmer3.GuiLabelConfig.AUDIO_MODE, Configuration.Shimmer3.AUDIO_MODE_FINGERPRINT);
+		shimmer.writeConfigBytes(false);
+		assertEquals("the mode set, with the rest of the byte at 0", Configuration.Shimmer3.AUDIO_MODE_FINGERPRINT, writtenAt(shimmer, IDX_AUDIO_CONFIG));
+	}
+
+	@Test
+	public void anAudioModeLeftAsItIsBeforeAReadIsLeftOut() {
+		ShimmerPC shimmer = shimmer();
+		shimmer.setConfigValueUsingConfigLabel(Configuration.Shimmer3.GuiLabelConfig.AUDIO_MODE, Configuration.Shimmer3.AUDIO_MODE_OFF);
+		shimmer.writeConfigBytes(false);
+		assertEquals("Off is the default, so it says nothing about the Shimmer's own", -1, writtenAt(shimmer, IDX_AUDIO_CONFIG));
 	}
 }

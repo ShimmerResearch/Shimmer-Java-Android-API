@@ -6812,12 +6812,12 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 
 	/**
 	 * Whether the driver has the Shimmer3R's own byte 233, the microphone's
-	 * configuration ({@link SensorSoundLevel#isAudioConfigKnown()}). True
-	 * where there is no such byte.
+	 * configuration ({@link SensorSoundLevel#isAudioConfigKnown(ShimmerDevice)}).
+	 * True where there is no such byte.
 	 */
 	public boolean isAudioConfigKnown() {
 		AbstractSensor abstractSensor = getSensorClass(AbstractSensor.SENSORS.SOUND_LEVEL);
-		return !(abstractSensor instanceof SensorSoundLevel) || ((SensorSoundLevel) abstractSensor).isAudioConfigKnown();
+		return !(abstractSensor instanceof SensorSoundLevel) || ((SensorSoundLevel) abstractSensor).isAudioConfigKnown(this);
 	}
 
 	/**

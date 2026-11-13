@@ -5402,8 +5402,8 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 					if(!isButtonLogModeKnown()){
 						skipIndexes.add(configByteLayoutCast.idxButtonLogMode);
 					}
-					// Byte 233 (DEV-99, DEV-1413) on a Shimmer3R, not read
-					// and the sound level not turned on
+					// Byte 233 (DEV-99, DEV-1413) on a Shimmer3R, neither read
+					// nor set (the sound level or the audio mode)
 					if(configByteLayoutCast.idxAudioConfig>0 && !isAudioConfigKnown()){
 						skipIndexes.add(configByteLayoutCast.idxAudioConfig);
 					}

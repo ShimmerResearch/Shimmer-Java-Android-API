@@ -12,7 +12,7 @@ import com.shimmerresearch.driverUtilities.ShimmerVerObject;
  * DEV-1459: status byte 1 bits 1-2, audio recording and audio fault
  * (log-and-stream-common SHIMMER3R_AUDIO.md §5). No hardware.
  */
-public class API_00042_Shimmer3rAudioStatusTest {
+public class API_00048_Shimmer3rAudioStatusTest {
 
 	/** Reaches the status parser, which the driver calls on each status frame */
 	private static class StatusShimmer extends ShimmerPC {
