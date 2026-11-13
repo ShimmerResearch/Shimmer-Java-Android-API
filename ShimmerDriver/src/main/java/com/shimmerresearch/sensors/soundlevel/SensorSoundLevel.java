@@ -74,6 +74,8 @@ public class SensorSoundLevel extends AbstractSensor {
 
 	/** Byte 233's audio mode and gain preset as read (bits 0-3, DEV-99), written back as they are */
 	private int mAudioModeAndGain = 0;
+	/** Whether byte 233 has been read from the Shimmer, and so mAudioModeAndGain is its own */
+	private boolean mIsAudioConfigRead = false;
 
 	public class GuiLabelSensors{
 		public static final String SOUND_LEVEL = "Sound Level";
@@ -241,6 +243,7 @@ public class SensorSoundLevel extends AbstractSensor {
 				value = 0;
 			}
 			mAudioModeAndGain = value & configByteLayoutCast.maskAudioModeAndGain;
+			mIsAudioConfigRead = true;
 
 			SensorDetails sensorDetails = mSensorMap.get(Configuration.Shimmer3.SENSOR_ID.SHIMMER_SOUND_LEVEL);
 			if(sensorDetails!=null){
@@ -262,6 +265,18 @@ public class SensorSoundLevel extends AbstractSensor {
 	/** Byte 233's audio mode and gain preset (bits 0-3, DEV-99) as last read, which a configuration write gives back */
 	public int getAudioModeAndGain() {
 		return mAudioModeAndGain;
+	}
+
+	/**
+	 * Whether a configuration write has a byte 233 to give: it was read from
+	 * the Shimmer, or the sound level is on, the one part of it set here.
+	 * Before a read, bits 0-3 are not known, and writing them as 0 would turn
+	 * the Shimmer's audio mode off. With the sound level turned on before a
+	 * read they are written as 0 all the same, since one bit cannot be written
+	 * on its own.
+	 */
+	public boolean isAudioConfigKnown() {
+		return mIsAudioConfigRead || isSensorEnabled(Configuration.Shimmer3.SENSOR_ID.SHIMMER_SOUND_LEVEL);
 	}
 
 	@Override

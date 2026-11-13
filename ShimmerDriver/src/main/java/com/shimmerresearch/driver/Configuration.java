@@ -907,6 +907,12 @@ public class Configuration {
 			public static final String ENABLE_ERROR_LEDS_RTC = "RTC Error LEDs";
 			public static final String ENABLE_ERROR_LEDS_SD = "SD Error LEDs";
 			public static final String LOW_POWER_AUTOSTOP = "Low-power Autostop";
+			/** Configuration byte 232 bits 0-2 (DEV-971), an Integer, see ButtonLogMode.BUTTON_MODE_* */
+			public static final String BUTTON_MODE = "Button Mode";
+			/** Configuration byte 232 bits 3-4 (DEV-971), an Integer, see ButtonLogMode.LOG_TRIGGERS_* */
+			public static final String LOG_TRIGGERS = "Log Triggers";
+			/** Configuration byte 232 bit 5 (DEV-971), a Boolean */
+			public static final String TTL_INPUT = "TTL Input";
 
 			public static final String KINEMATIC_LPM = "Kinematic Sensors Low-Power Mode";//XXX-RS-LSM-SensorClass? What about HighResolutionMode?!
 			public static final String CALIBRATION_ALL = AbstractSensor.GuiLabelConfigCommon.CALIBRATION_ALL;
