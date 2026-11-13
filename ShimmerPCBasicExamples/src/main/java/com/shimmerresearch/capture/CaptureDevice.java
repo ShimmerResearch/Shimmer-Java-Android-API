@@ -113,6 +113,11 @@ public final class CaptureDevice {
 		return "STREAMING".equals(mState);
 	}
 
+	/** A connect has begun and the driver has not yet said how it ended */
+	public boolean isConnecting() {
+		return "CONNECTING".equals(mState);
+	}
+
 	public boolean isConnected() {
 		return shimmer() != null && !"DISCONNECTED".equals(mState) && !"FAILED".equals(mState) && !"CONNECTING".equals(mState);
 	}
@@ -127,6 +132,7 @@ public final class CaptureDevice {
 			return "READY";
 		case STREAMING:
 		case STREAMING_AND_SDLOGGING:
+		case STREAMING_LOGGED_DATA:
 			return "STREAMING";
 		case CONFIGURING:
 			return "CONFIGURING";
@@ -378,7 +384,14 @@ public final class CaptureDevice {
 			} catch (IOException e) {
 				error("Recording: " + e.getMessage());
 				mRecordRequested = false;
-				mRecording = null;
+				if (mRecording != null) {
+					try {
+						mRecording.close();
+					} catch (IOException closing) {
+						// the write's error is the one reported
+					}
+					mRecording = null;
+				}
 			}
 		}
 	}

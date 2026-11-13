@@ -103,9 +103,18 @@ public final class CsvRecording implements AutoCloseable {
 			names.add(c.name);
 			units.add(c.units);
 		}
-		writeRow(names);
-		writeRow(units);
-		out.flush();
+		try {
+			writeRow(names);
+			writeRow(units);
+			out.flush();
+		} catch (IOException e) {
+			try {
+				out.close();
+			} catch (IOException closing) {
+				// the write's error is the one reported
+			}
+			throw e;
+		}
 		flushedAt = System.currentTimeMillis();
 	}
 

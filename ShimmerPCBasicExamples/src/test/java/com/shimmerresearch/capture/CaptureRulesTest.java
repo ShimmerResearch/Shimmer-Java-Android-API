@@ -238,6 +238,7 @@ public class CaptureRulesTest {
 		assertEquals("READY", CaptureDevice.captureState(BT_STATE.SDLOGGING));
 		assertEquals("STREAMING", CaptureDevice.captureState(BT_STATE.STREAMING));
 		assertEquals("STREAMING", CaptureDevice.captureState(BT_STATE.STREAMING_AND_SDLOGGING));
+		assertEquals("STREAMING", CaptureDevice.captureState(BT_STATE.STREAMING_LOGGED_DATA));
 		assertEquals("CONNECTING", CaptureDevice.captureState(BT_STATE.CONNECTING));
 		assertEquals("CONFIGURING", CaptureDevice.captureState(BT_STATE.CONFIGURING));
 		assertEquals("FAILED", CaptureDevice.captureState(BT_STATE.CONNECTION_FAILED));

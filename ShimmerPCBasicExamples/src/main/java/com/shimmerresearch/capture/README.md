@@ -57,7 +57,8 @@ Recordings go to `Shimmer Capture` in Documents.
   alone. Then a row of units.
 - **Rows:** one per sample, each value written as JavaScript writes a number. RFC 4180 cells, CRLF
   line ends.
-- **When it closes:** when the recording stops, the stream stops, or the link drops.
+- **When it closes:** when the recording stops, the stream stops, the link drops, or the window is
+  closed.
 
 The driver reports most answers by updating its own state rather than with an event. So the window
 reads that state back twice a second, and a figure or detail can take up to half a second to show an

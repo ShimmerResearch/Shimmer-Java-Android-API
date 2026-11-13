@@ -6,6 +6,8 @@ import java.awt.FlowLayout;
 import java.awt.GridLayout;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
 import java.io.File;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -89,6 +91,8 @@ public final class ShimmerCaptureJava implements CaptureDevice.Listener {
 	private long mLastWindowEnd = System.currentTimeMillis();
 	/** The latest sample's device time (Timestamp, calibrated, ms): the plot's x axis, to place event markers on */
 	private volatile double mLastDeviceMs = Double.NaN;
+	/** The plot's format, as the Stream tab's box has it; read on the driver's thread */
+	private volatile boolean mPlotRaw;
 	private EventMarkersFrame mEventMarkers;
 
 	public static void main(String[] args) {
@@ -131,7 +135,20 @@ public final class ShimmerCaptureJava implements CaptureDevice.Listener {
 	// ------------------------------------------------------------------
 
 	private void build() {
-		mFrame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+		// Closing the window stops a stream, closes a recording (so its last rows are written) and
+		// closes the link, then exits
+		mFrame.setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
+		mFrame.addWindowListener(new WindowAdapter() {
+			@Override
+			public void windowClosing(WindowEvent e) {
+				try {
+					mDevice.stopRecording("the window was closed");
+					mDevice.disconnect();
+				} finally {
+					System.exit(0);
+				}
+			}
+		});
 		mFrame.setSize(1280, 860);
 
 		JPanel top = new JPanel(new FlowLayout(FlowLayout.LEFT));
@@ -150,6 +167,10 @@ public final class ShimmerCaptureJava implements CaptureDevice.Listener {
 				Object port = mPorts.getSelectedItem();
 				if (port == null || port.toString().trim().isEmpty()) {
 					log("Choose a port first");
+					return;
+				}
+				if (mDevice.isConnecting()) {
+					log("Already connecting on " + mDevice.getPort());
 					return;
 				}
 				if (mDevice.isConnected()) {
@@ -233,6 +254,7 @@ public final class ShimmerCaptureJava implements CaptureDevice.Listener {
 		bar.add(mWindow);
 		mFormat.addActionListener(new ActionListener() {
 			public void actionPerformed(ActionEvent e) {
+				mPlotRaw = mFormat.getSelectedIndex() == 1;
 				clearPlots();
 			}
 		});
@@ -533,7 +555,7 @@ public final class ShimmerCaptureJava implements CaptureDevice.Listener {
 			return;
 		}
 		mLastDeviceMs = deviceMs;
-		String format = mFormat.getSelectedIndex() == 0 ? CAL : UNCAL;
+		String format = mPlotRaw ? UNCAL : CAL;
 		final List<PlotView> shown = new ArrayList<PlotView>();
 		for (String channel : sample.getChannelNamesByInsertionOrder()) {
 			String panel = Panels.of(channel);

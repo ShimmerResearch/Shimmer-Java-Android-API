@@ -17,7 +17,7 @@ import javax.swing.JPanel;
 /**
  * One plot panel: the channels of one group (Panels), each a line over a window of 5, 10 or 30 s
  * of device time, the y axis fitted to what is shown. Points are added on any thread; painting is
- * on the Swing thread.
+ * on the Swing thread, and holds the lock only to copy out what it will draw.
  */
 public final class PlotView extends JPanel {
 
@@ -104,8 +104,63 @@ public final class PlotView extends JPanel {
 		return mSeries.isEmpty();
 	}
 
+	/** What one paint draws of a series: its points inside the window, copied out */
+	private static final class Shown {
+		final String name;
+		final double[] t;
+		final double[] v;
+
+		Shown(String name, double[] t, double[] v) {
+			this.name = name;
+			this.t = t;
+			this.v = v;
+		}
+	}
+
+	/**
+	 * Copies out what is inside the window, and the markers. This is all a paint does under the
+	 * lock that add() takes on the driver's thread, so drawing never holds a sample up.
+	 *
+	 * @return the latest time of any series, or NaN where there is no point
+	 */
+	private synchronized double copyShown(double windowMs, List<Shown> shown, List<Marker> markers) {
+		double latest = Double.NEGATIVE_INFINITY;
+		for (Series s : mSeries.values()) {
+			if (s.size > 0) {
+				latest = Math.max(latest, s.t[(s.start + s.size - 1) % CAPACITY]);
+			}
+		}
+		if (latest == Double.NEGATIVE_INFINITY) {
+			return Double.NaN;
+		}
+		double from = latest - windowMs;
+		for (Map.Entry<String, Series> e : mSeries.entrySet()) {
+			Series s = e.getValue();
+			// times rise, so the window is the newest points: count back to its start
+			int n = 0;
+			while (n < s.size && s.t[(s.start + s.size - 1 - n) % CAPACITY] >= from) {
+				n++;
+			}
+			double[] t = new double[n];
+			double[] v = new double[n];
+			int first = s.start + s.size - n;
+			for (int i = 0; i < n; i++) {
+				int k = (first + i) % CAPACITY;
+				t[i] = s.t[k];
+				v[i] = s.v[k];
+			}
+			shown.add(new Shown(e.getKey(), t, v));
+		}
+		markers.addAll(mMarkers);
+		return latest;
+	}
+
+	private static boolean finite(double v) {
+		return !Double.isNaN(v) && !Double.isInfinite(v);
+	}
+
 	@Override
-	protected synchronized void paintComponent(Graphics g0) {
+	protected void paintComponent(Graphics g0) {
 		super.paintComponent(g0);
 		Graphics2D g = (Graphics2D) g0;
 		g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
@@ -118,24 +173,21 @@ public final class PlotView extends JPanel {
 		g.setColor(Color.DARK_GRAY);
 		g.drawString(mTitle, left, 13);
 
-		double latest = Double.NEGATIVE_INFINITY;
-		for (Series s : mSeries.values()) {
-			if (s.size > 0) {
-				latest = Math.max(latest, s.t[(s.start + s.size - 1) % CAPACITY]);
-			}
-		}
-		if (latest == Double.NEGATIVE_INFINITY) {
+		double windowMs = mWindowMs;
+		List<Shown> shown = new ArrayList<Shown>();
+		List<Marker> markers = new ArrayList<Marker>();
+		double latest = copyShown(windowMs, shown, markers);
+		if (Double.isNaN(latest)) {
 			return;
 		}
-		double from = latest - mWindowMs;
+		double from = latest - windowMs;
 		double min = Double.POSITIVE_INFINITY;
 		double max = Double.NEGATIVE_INFINITY;
-		for (Series s : mSeries.values()) {
-			for (int i = 0; i < s.size; i++) {
-				int k = (s.start + i) % CAPACITY;
-				if (s.t[k] >= from && !Double.isNaN(s.v[k]) && !Double.isInfinite(s.v[k])) {
-					min = Math.min(min, s.v[k]);
-					max = Math.max(max, s.v[k]);
+		for (Shown s : shown) {
+			for (int i = 0; i < s.v.length; i++) {
+				if (finite(s.v[i])) {
+					min = Math.min(min, s.v[i]);
+					max = Math.max(max, s.v[i]);
 				}
 			}
 		}
@@ -156,41 +208,41 @@ public final class PlotView extends JPanel {
 		String minText = format(min);
 		g.drawString(maxText, left - 4 - fm.stringWidth(maxText), top + fm.getAscent());
 		g.drawString(minText, left - 4 - fm.stringWidth(minText), top + plotH);
-		g.drawString(String.format("%.0f s", mWindowMs / 1000.0), left, h - 3);
+		g.drawString(String.format("%.0f s", windowMs / 1000.0), left, h - 3);
 
 		int colour = 0;
 		int legendX = left + 80;
 		g.setStroke(new BasicStroke(1.2f));
-		for (Map.Entry<String, Series> e : mSeries.entrySet()) {
-			Series s = e.getValue();
-			Color c = COLORS[colour++ % COLORS.length];
-			g.setColor(c);
-			List<int[]> points = new ArrayList<int[]>();
-			for (int i = 0; i < s.size; i++) {
-				int k = (s.start + i) % CAPACITY;
-				if (s.t[k] < from || Double.isNaN(s.v[k]) || Double.isInfinite(s.v[k])) {
+		for (Shown s : shown) {
+			g.setColor(COLORS[colour++ % COLORS.length]);
+			// at most two points a pixel are drawn
+			int step = Math.max(1, s.t.length / (plotW * 2));
+			boolean have = false;
+			int lastX = 0;
+			int lastY = 0;
+			for (int i = 0; i < s.t.length; i += step) {
+				if (!finite(s.v[i])) {
 					continue;
 				}
-				int x = left + (int) Math.round((s.t[k] - from) / mWindowMs * plotW);
-				int y = top + plotH - (int) Math.round((s.v[k] - min) / (max - min) * plotH);
-				points.add(new int[] {x, y});
+				int x = left + (int) Math.round((s.t[i] - from) / windowMs * plotW);
+				int y = top + plotH - (int) Math.round((s.v[i] - min) / (max - min) * plotH);
+				if (have) {
+					g.drawLine(lastX, lastY, x, y);
+				}
+				have = true;
+				lastX = x;
+				lastY = y;
 			}
-			int step = Math.max(1, points.size() / (plotW * 2));
-			for (int i = step; i < points.size(); i += step) {
-				int[] a = points.get(i - step);
-				int[] b = points.get(i);
-				g.drawLine(a[0], a[1], b[0], b[1]);
-			}
-			g.drawString(e.getKey(), legendX, 13);
-			legendX += fm.stringWidth(e.getKey()) + 14;
+			g.drawString(s.name, legendX, 13);
+			legendX += fm.stringWidth(s.name) + 14;
 		}
 
 		g.setStroke(new BasicStroke(1.5f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 10f, new float[] {4f, 3f}, 0f));
-		for (Marker m : mMarkers) {
+		for (Marker m : markers) {
 			if (m.t < from || m.t > latest) {
 				continue;
 			}
-			int x = left + (int) Math.round((m.t - from) / mWindowMs * plotW);
+			int x = left + (int) Math.round((m.t - from) / windowMs * plotW);
 			g.setColor(m.color);
 			g.drawLine(x, top, x, top + plotH);
 			g.drawString(m.label, x + 3, top + plotH - 3);
