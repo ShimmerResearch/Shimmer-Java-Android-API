@@ -91,6 +91,7 @@ import java.util.Stack;
 import java.util.Timer;
 import java.util.TimerTask;
 import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 
 import org.apache.commons.lang3.ArrayUtils;
@@ -107,6 +108,9 @@ import com.shimmerresearch.driver.Configuration.COMMUNICATION_TYPE;
 import com.shimmerresearch.driver.Configuration.Shimmer3;
 import com.shimmerresearch.driver.calibration.CalibDetails.CALIB_READ_SOURCE;
 import com.shimmerresearch.driver.shimmer2r3.ConfigByteLayoutShimmer3;
+import com.shimmerresearch.driver.shimmer2r3.EventChannelStatus;
+import com.shimmerresearch.driver.shimmer2r3.EventFrame;
+import com.shimmerresearch.driver.shimmer2r3.EventRecord;
 import com.shimmerresearch.driver.ShimmerObject;
 import com.shimmerresearch.driverUtilities.AssembleShimmerConfig;
 import com.shimmerresearch.driverUtilities.ExpansionBoardDetails;
@@ -270,7 +274,35 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 	//endregion --------- TIMERS ---------
 
 	protected transient ByteArrayOutputStream mByteArrayOutputStream = new ByteArrayOutputStream();
-	
+
+	//region --------- EVENT CHANNEL (DEV-971) ---------
+	/**
+	 * Told of the event channel's records as they arrive, and of its status
+	 * (DEV-971). Called on the driver's IO thread: hand the work to your own
+	 * thread rather than block it.
+	 */
+	public interface EventChannelListener {
+		/** A record from a connection that opted in with {@link ShimmerBluetooth#writeEventStream(boolean)} */
+		void onEventRecord(ShimmerBluetooth shimmer, EventRecord record);
+		/** The answer to {@link ShimmerBluetooth#readEventChannelStatus()} */
+		void onEventChannelStatus(ShimmerBluetooth shimmer, EventChannelStatus status);
+	}
+
+	private transient List<EventChannelListener> mEventChannelListeners = new CopyOnWriteArrayList<EventChannelListener>();
+	/**
+	 * Whether record frames may arrive on this connection: set when the opt-in
+	 * is sent, since the firmware sends the first record straight after its
+	 * ACK, and kept until the next connection, since frames sent before an
+	 * opt-out took effect can still be on their way. The protocol says never to
+	 * parse them without opting in.
+	 */
+	private volatile boolean mEventFramesPossible = false;
+	private volatile boolean mEventStreamRequested = false;
+	private volatile EventChannelStatus mEventChannelStatus = null;
+	private volatile int mEventFramesReceived = 0;
+	private volatile int mEventFramesBadCrc = 0;
+	//endregion --------- EVENT CHANNEL ---------
+
 //	private boolean mVerboseMode = true;
 //	private String mParentClassName = "ShimmerBluetooth";
 	
@@ -384,7 +416,8 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
         aMap.put(GET_RWC_COMMAND, 				new BtCommandDetails(GET_RWC_COMMAND, "GET_RWC_COMMAND", RWC_RESPONSE));
         aMap.put(GET_VBATT_COMMAND, 			new BtCommandDetails(GET_VBATT_COMMAND, "GET_VBATT_COMMAND", VBATT_RESPONSE));
         aMap.put(GET_BT_FW_VERSION_STR_COMMAND,	new BtCommandDetails(GET_BT_FW_VERSION_STR_COMMAND, "GET_BT_FW_VERSION_STR_COMMAND", BT_FW_VERSION_STR_RESPONSE));
-        
+        aMap.put(GET_EVENT_CHANNEL_STATUS_COMMAND, new BtCommandDetails(GET_EVENT_CHANNEL_STATUS_COMMAND, "GET_EVENT_CHANNEL_STATUS_COMMAND", EVENT_CHANNEL_STATUS_RESPONSE));
+
         mBtGetCommandMap = Collections.unmodifiableMap(aMap);
     }
     
@@ -505,7 +538,8 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
         aMap.put(RWC_RESPONSE, 					new BtCommandDetails(RWC_RESPONSE, "RWC_RESPONSE", 8));
         aMap.put(VBATT_RESPONSE, 				new BtCommandDetails(VBATT_RESPONSE, "VBATT_RESPONSE", 3));
         aMap.put(BT_FW_VERSION_STR_RESPONSE,		new BtCommandDetails(BT_FW_VERSION_STR_RESPONSE, "BT_FW_VERSION_STR_RESPONSE", -1));
-        
+        aMap.put(EVENT_CHANNEL_STATUS_RESPONSE,	new BtCommandDetails(EVENT_CHANNEL_STATUS_RESPONSE, "EVENT_CHANNEL_STATUS_RESPONSE", EventChannelStatus.LENGTH));
+
         mBtResponseMap = Collections.unmodifiableMap(aMap);
     }
 	
@@ -854,7 +888,18 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 				if(byteBuffer!=null){
 					mNumberofTXRetriesCount = 0;
 					setIamAlive(true);
-					
+
+					/* An event record frame sent before the ACK: take it and keep
+					 * waiting. The firmware never holds a reply back for one, but a
+					 * frame already queued can go out first (DEV-971). */
+					if(byteBuffer[0]==INSTREAM_CMD_RESPONSE && mEventFramesPossible) {
+						byte[] subtype = readBytes(1, INSTREAM_CMD_RESPONSE);
+						if(subtype!=null && subtype[0]==EVENT_RECORD_RESPONSE) {
+							readEventFrameRestFromPort();
+						}
+						return;
+					}
+
 					//TODO: ACK is probably now working for STOP_STREAMING_COMMAND so merge in with others?
 					if(mCurrentCommand==STOP_STREAMING_COMMAND 
 							|| mCurrentCommand==STOP_SDBT_COMMAND) { //due to not receiving the ack from stop streaming command we will skip looking for it.
@@ -977,8 +1022,27 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 					//Check to see whether it is a response byte
 					else if(isKnownResponse(byteBuffer[0])){
 						byte responseCommand = byteBuffer[0];
-						
-						processResponseCommand(responseCommand);
+
+						if(responseCommand==INSTREAM_CMD_RESPONSE && mEventFramesPossible) {
+							/* 0x8A can be the reply (a wrapped one such as the status)
+							 * or an event record frame sent before it, which is taken
+							 * and the reply still waited for (DEV-971) */
+							byte[] subtype = readBytes(1, INSTREAM_CMD_RESPONSE);
+							if(subtype==null) {
+								return;
+							}
+							if(subtype[0]==EVENT_RECORD_RESPONSE) {
+								readEventFrameRestFromPort();
+								return;
+							}
+							processInstreamResponse(subtype[0], false);
+							if (mBtCommsCrcModeCurrent != BT_CRC_MODE.OFF) {
+								clearCrcBytesFromBuffer(responseCommand);
+							}
+						}
+						else {
+							processResponseCommand(responseCommand);
+						}
 						//JD: only stop timer after process because there are readbyte opeartions in the processresponsecommand
 						stopTimerCheckForAckOrResp(); //cancel the ack timer
 						mWaitForResponse=false;
@@ -1021,6 +1085,16 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 					 * refusal. The buffer is cleared below either way. */
 					if(byteBuffer[0]==NACK_COMMAND_PROCESSED) {
 						printLogDataForDebugging("NACK received with no command awaiting a reply - ignored");
+					}
+					/* An event record frame, which comes with no ACK (DEV-971). The
+					 * serial buffer is not cleared after it, since another frame may
+					 * already be behind it. */
+					else if(byteBuffer[0]==INSTREAM_CMD_RESPONSE && mEventFramesPossible) {
+						byte[] subtype = readBytes(1, INSTREAM_CMD_RESPONSE);
+						if(subtype!=null && subtype[0]==EVENT_RECORD_RESPONSE) {
+							readEventFrameRestFromPort();
+							return;
+						}
 					}
 					else if(byteBuffer[0]==ACK_COMMAND_PROCESSED) {
 						printLogDataForDebugging("ACK RECEIVED , Connected State!!");
@@ -1106,6 +1180,19 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 					// undock, the user button, a low-battery stop), so this completes the
 					// command in flight only if the response is that command's reply
 					byte[] inStreamResponseCommand = readBytes(1, INSTREAM_CMD_RESPONSE);
+
+					// An event record frame has no ACK of its own, so this ACK is a bare
+					// one: the reply to the SET command in flight, such as the opt-in,
+					// which the firmware follows at once with its first record (DEV-971)
+					if(mEventFramesPossible && inStreamResponseCommand!=null
+							&& inStreamResponseCommand[0]==EVENT_RECORD_RESPONSE){
+						processDataPacket(bufferTemp);
+						processAckWhileStreaming();
+						readEventFrameRestFromPort();
+						clearBuffers();
+						return;
+					}
+
 					boolean isReplyToCommandInFlight = inStreamResponseCommand!=null
 							&& isReplyToCommandInFlight(inStreamResponseCommand[0]);
 					if(isReplyToCommandInFlight){
@@ -1145,6 +1232,19 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 			}
 			
 		} 
+		//Data packet followed by an event record frame, which has no ACK before it
+		//(DEV-971). The packet is taken and the frame left at the start of the
+		//buffer for processEventFrameAtStartOfBuffer().
+		else if(mEventFramesPossible
+				&& bufferTemp[0]==DATA_PACKET
+				&& bufferTemp[getPacketSizeWithCrc()+1]==INSTREAM_CMD_RESPONSE){
+			if (mBtCommsCrcModeCurrent != BT_CRC_MODE.OFF && !checkCrc(bufferTemp, getPacketSize() + 1)) {
+				discardBufferBytesToNextPacket();
+				return;
+			}
+			processDataPacket(bufferTemp);
+			clearBytesFromStartOfBuffers(bufferTemp, getPacketSizeWithCrc()+1);
+		}
 		//Data packet followed by a NACK (a command refused while streaming, e.g.
 		//any SET blocked by the firmware because it is sensing, or a log start the
 		//device cannot carry out, DEV-1431)
@@ -1207,6 +1307,10 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 			printLogDataForDebugging("readbyte null");
 		}
 
+		if(processEventFrameAtStartOfBuffer()){
+			return;
+		}
+
 		if(processAckAtStartOfBuffer()){
 			return;
 		}
@@ -1253,6 +1357,14 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 		if(isSupportedInStreamCmds() && bufferTemp[1]==INSTREAM_CMD_RESPONSE){
 			if(bufferTemp.length==2){
 				return true; //wait for the response opcode
+			}
+			//Or a bare ACK to the SET command in flight, followed by an event record
+			//frame, which has no ACK of its own (DEV-971)
+			if(mEventFramesPossible && bufferTemp[2]==EVENT_RECORD_RESPONSE
+					&& isKnownSetCommand(mCurrentCommand) && mBtCommsCrcModeCurrent==BT_CRC_MODE.OFF){
+				clearBytesFromStartOfBuffers(bufferTemp, 1);
+				processAckWhileStreaming();
+				return true;
 			}
 			if(bufferTemp.length>3 || !isReplyToCommandInFlight(bufferTemp[2])){
 				return false;
@@ -1475,6 +1587,11 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 						+ "\tCharging status=" + battStatusDetails.getChargingStatusParsed()
 						+ "\tBatt %=" + battStatusDetails.getEstimatedChargePercentageParsed());
 			}
+		}
+		else if(inStreamResponseCommand==EVENT_RECORD_RESPONSE && mEventFramesPossible){
+			// Carries its own CRC and never the link CRC, so nothing more to clear
+			readEventFrameRestFromPort();
+			responseWasParsed = false;
 		}
 		else
 		{
@@ -2206,7 +2323,23 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 				}
 			}
 		}
-		
+
+		else if(responseCommand==EVENT_CHANNEL_STATUS_RESPONSE) {
+			byte[] responseData = readBytes(EventChannelStatus.LENGTH, responseCommand);
+			if(responseData!=null){
+				EventChannelStatus status = EventChannelStatus.parse(responseData, 0);
+				mEventChannelStatus = status;
+				printLogDataForDebugging("Event channel status:\t" + status);
+				for(EventChannelListener listener:getEventChannelListeners()){
+					try {
+						listener.onEventChannelStatus(this, status);
+					} catch (RuntimeException e) {
+						printLogDataForDebugging("Event channel listener threw: " + e);
+					}
+				}
+			}
+		}
+
 		else {
 			consolePrintLn("Unhandled BT response: " + responseCommand);
 			responseWasParsed = false;
@@ -3057,6 +3190,7 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 		
 		// The firmware may have changed since the last connection
 		setEventChannelSupported(null);
+		resetEventChannelConnectionState();
 		readEventChannelSupport();
 		
 		if (isSetupDeviceWhileConnecting()){
@@ -5323,6 +5457,185 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 
 		mTransactionCompleted = true;
 		setInstructionStackLock(false);
+	}
+
+	/**
+	 * Opts this connection in to, or out of, the event channel's records
+	 * (DEV-971): SET_FEATURE with FEATURE_EVENT_STREAM. Once in, every button and
+	 * TTL record reaches each {@link EventChannelListener}, starting with the
+	 * inputs' state at the opt-in, whether or not the Shimmer is streaming or
+	 * logging.
+	 * <p>
+	 * It lasts for this connection only: the firmware clears it on connect and
+	 * on disconnect, so call it again after every reconnection. It enables no
+	 * input, since configuration byte 232 decides which are recorded, but it
+	 * does arm an enabled TTL input outside a logging session.
+	 * <p>
+	 * Android's {@code Shimmer.java} has its own streaming parser, which does
+	 * not know the record frame: don't opt in there until it is ported.
+	 *
+	 * @return false, and nothing is sent, when the firmware is older than
+	 *         SET_FEATURE or is known not to have the event channel
+	 */
+	public boolean writeEventStream(boolean enable) {
+		if(!getShimmerVerObject().isSupportedSetFeature() || Boolean.FALSE.equals(isEventChannelSupported())) {
+			return false;
+		}
+		/* Before the write, not after the ACK: the firmware sends the first
+		 * record straight after its ACK */
+		if(enable) {
+			mEventFramesPossible = true;
+		}
+		mEventStreamRequested = enable;
+		writeSetFeatureCommand(SHIMMER_FEATURE.EVENT_STREAM.ordinal(), enable? 1:0);
+		return true;
+	}
+
+	/** Whether this connection asked for the event channel's records with {@link #writeEventStream(boolean)} */
+	public boolean isEventStreamRequested() {
+		return mEventStreamRequested;
+	}
+
+	/**
+	 * Asks for the event channel's status, GET_EVENT_CHANNEL_STATUS_COMMAND
+	 * (0xB9). The answer goes to each {@link EventChannelListener} and to
+	 * {@link #getEventChannelStatus()}.
+	 * <p>
+	 * Only sent to a Shimmer known to have the event channel, since firmware
+	 * without it does not answer, and only while it is not streaming: the reply,
+	 * {@code [ACK][0xBA][status x 9]}, is not wrapped in 0x8A as replies sent
+	 * between data packets are, so the streaming parser could not tell it from
+	 * a packet.
+	 *
+	 * @return whether it was sent
+	 */
+	public boolean readEventChannelStatus() {
+		if(!Boolean.TRUE.equals(isEventChannelSupported()) || isStreaming()) {
+			return false;
+		}
+		writeInstruction(new byte[]{GET_EVENT_CHANNEL_STATUS_COMMAND});
+		return true;
+	}
+
+	/** The last answer to {@link #readEventChannelStatus()}, or null */
+	public EventChannelStatus getEventChannelStatus() {
+		return mEventChannelStatus;
+	}
+
+	/** Event record frames taken on this connection */
+	public int getEventFramesReceived() {
+		return mEventFramesReceived;
+	}
+
+	/** Event record frames dropped on this connection because their CRC did not check out */
+	public int getEventFramesBadCrc() {
+		return mEventFramesBadCrc;
+	}
+
+	public void addEventChannelListener(EventChannelListener listener) {
+		if(listener!=null && !getEventChannelListeners().contains(listener)) {
+			getEventChannelListeners().add(listener);
+		}
+	}
+
+	public void removeEventChannelListener(EventChannelListener listener) {
+		getEventChannelListeners().remove(listener);
+	}
+
+	private List<EventChannelListener> getEventChannelListeners() {
+		if(mEventChannelListeners==null) {
+			// null after deserialisation, since the list is transient
+			mEventChannelListeners = new CopyOnWriteArrayList<EventChannelListener>();
+		}
+		return mEventChannelListeners;
+	}
+
+	/** Clears the event channel's per-connection state: the firmware clears the opt-in on every connect */
+	protected void resetEventChannelConnectionState() {
+		mEventFramesPossible = false;
+		mEventStreamRequested = false;
+		mEventChannelStatus = null;
+		mEventFramesReceived = 0;
+		mEventFramesBadCrc = 0;
+	}
+
+	/**
+	 * While streaming: takes an event record frame at the start of the buffer,
+	 * {@code [0x8A][0xBB][len][record][CRC-16]} with no ACK before it. A frame
+	 * is only taken once its own CRC checks out.
+	 *
+	 * @return true while the bytes so far are taken, or may still turn out to be
+	 *         a frame
+	 */
+	private boolean processEventFrameAtStartOfBuffer() {
+		if(!mEventFramesPossible || mByteArrayOutputStream.size()==0) {
+			return false;
+		}
+		byte[] bufferTemp = mByteArrayOutputStream.toByteArray();
+		if(bufferTemp[0]!=INSTREAM_CMD_RESPONSE) {
+			return false;
+		}
+		int frameLength = EventFrame.getFrameLength(bufferTemp, 0, bufferTemp.length);
+		if(frameLength==EventFrame.NEED_MORE) {
+			return true;
+		}
+		if(frameLength==EventFrame.NOT_A_FRAME) {
+			if(bufferTemp.length>=EventFrame.HEAD_LENGTH && bufferTemp[1]==EVENT_RECORD_RESPONSE) {
+				mEventFramesBadCrc++;
+				printLogDataForDebugging("Event record frame discarded, its CRC does not check out: "
+						+ UtilShimmer.bytesToHexStringWithSpacesFormatted(bufferTemp));
+			}
+			return false;
+		}
+		dispatchEventRecord(EventRecord.parse(bufferTemp, EventFrame.HEAD_LENGTH));
+		clearBytesFromStartOfBuffers(bufferTemp, frameLength);
+		return true;
+	}
+
+	/**
+	 * Reads the rest of an event record frame off the port, once its 0x8A and
+	 * 0xBB have been read, and hands the record on if its CRC checks out.
+	 */
+	private void readEventFrameRestFromPort() {
+		byte[] lengthByte = readBytes(1, EVENT_RECORD_RESPONSE);
+		if(lengthByte==null) {
+			return;
+		}
+		int recordLength = lengthByte[0]&0xFF;
+		if(recordLength<EventRecord.LENGTH || recordLength>EventFrame.MAX_RECORD_LENGTH) {
+			mEventFramesBadCrc++;
+			printLogDataForDebugging("0x8A 0xBB with a record length of " + recordLength + " is not an event record frame");
+			return;
+		}
+		byte[] rest = readBytes(recordLength+EventFrame.CRC_LENGTH, EVENT_RECORD_RESPONSE);
+		if(rest==null) {
+			return;
+		}
+		byte[] frame = new byte[EventFrame.HEAD_LENGTH+rest.length];
+		frame[0] = INSTREAM_CMD_RESPONSE;
+		frame[1] = EVENT_RECORD_RESPONSE;
+		frame[2] = lengthByte[0];
+		System.arraycopy(rest, 0, frame, EventFrame.HEAD_LENGTH, rest.length);
+		EventRecord record = EventFrame.parse(frame, 0);
+		if(record==null) {
+			mEventFramesBadCrc++;
+			printLogDataForDebugging("Event record frame discarded, its CRC does not check out: "
+					+ UtilShimmer.bytesToHexStringWithSpacesFormatted(frame));
+			return;
+		}
+		dispatchEventRecord(record);
+	}
+
+	private void dispatchEventRecord(EventRecord record) {
+		mEventFramesReceived++;
+		printLogDataForDebugging("Event record:\t" + record);
+		for(EventChannelListener listener:getEventChannelListeners()) {
+			try {
+				listener.onEventRecord(this, record);
+			} catch (RuntimeException e) {
+				printLogDataForDebugging("Event channel listener threw: " + e);
+			}
+		}
 	}
 
 	//endregion --------- READ/WRITE FUNCTIONS --------- 

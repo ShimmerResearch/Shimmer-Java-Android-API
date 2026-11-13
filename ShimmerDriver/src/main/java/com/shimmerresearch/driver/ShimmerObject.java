@@ -506,6 +506,11 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 	public static final byte SET_TEST								= (byte) 0xA8;
 	
 	public static final byte SET_FEATURE							= (byte) 0xB7;
+	/** Event channel status (DEV-971): [0xB9] answered by [ACK][0xBA][status x 9] */
+	public static final byte GET_EVENT_CHANNEL_STATUS_COMMAND		= (byte) 0xB9;
+	public static final byte EVENT_CHANNEL_STATUS_RESPONSE			= (byte) 0xBA;
+	/** An event channel record, [0x8A][0xBB][len][record][CRC-16], sent only to a host that opted in (DEV-971) */
+	public static final byte EVENT_RECORD_RESPONSE					= (byte) 0xBB;
 	
 	public static final int MAX_NUMBER_OF_SIGNALS = 77;//50; //used to be 11 but now 13 because of the SR30 + 8 for 3d orientation
 	public static final int MAX_INQUIRY_PACKET_SIZE = 47;
