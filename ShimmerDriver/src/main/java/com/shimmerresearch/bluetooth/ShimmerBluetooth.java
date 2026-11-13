@@ -2858,9 +2858,16 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 		
 		if(statusByte.length > 1) {
 			setIsUsbPluggedIn(((statusByte[1] & (0x01 << 0)) > 0)? true:false);
-			
-			consolePrintLn("\nStatus Response = \n" + UtilShimmer.byteToHexStringFormatted(statusByte[1]) 
-			+ "\t" + "IsUsbPluggedIn = " + isUsbPluggedIn());
+			// earlier firmware sends 0 in the audio bits
+			if(isSupportedAudioStatus()) {
+				setIsAudioRecording((statusByte[1] & (0x01 << 1)) > 0);
+				setIsAudioFault((statusByte[1] & (0x01 << 2)) > 0);
+			}
+
+			consolePrintLn("\nStatus Response = \n" + UtilShimmer.byteToHexStringFormatted(statusByte[1])
+			+ "\t" + "IsUsbPluggedIn = " + isUsbPluggedIn()
+			+ "\t" + "IsAudioRecording = " + isAudioRecording()
+			+ "\t" + "IsAudioFault = " + isAudioFault());
 			
 		}
 		
@@ -2883,6 +2890,11 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 	
 	public boolean isSupportedUSBPluggedInStatus() {
 		return isThisVerCompatibleWith(HW_ID.SHIMMER_3R, FW_ID.LOGANDSTREAM, 1,0, 24);
+	}
+
+	/** Status byte 1 bits 1-2, audio recording and audio fault: LogAndStream_Shimmer3R v1.01.026 or later */
+	public boolean isSupportedAudioStatus() {
+		return isVerCompatibleWithAnyOf(Configuration.Shimmer3.CompatibilityInfoForMaps.listOfCompatibleVersionInfoSoundLevel);
 	}
 	
 	protected boolean isSupportedInStreamCmds() {

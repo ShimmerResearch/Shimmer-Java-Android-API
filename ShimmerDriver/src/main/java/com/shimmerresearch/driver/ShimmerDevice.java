@@ -150,6 +150,9 @@ public abstract class ShimmerDevice extends BasicProcessWithCallBack implements 
 	protected boolean mIsInitialised = false;
 	private boolean mIsDocked = false;
 	private boolean mIsUsbPluggedIn = false;
+	/** Shimmer3R microphone, from the status: audio captured for the current log, and this session's audio failed or degraded */
+	private boolean mIsAudioRecording = false;
+	private boolean mIsAudioFault = false;
 	private boolean mIsDockCommsSuccessful = false;
 	public boolean mIsUsbDfuMode= false;
 	protected boolean mHaveAttemptedToReadConfig = false;
@@ -1081,6 +1084,22 @@ public abstract class ShimmerDevice extends BasicProcessWithCallBack implements 
 	
 	public boolean isUsbPluggedIn() {
 		return mIsUsbPluggedIn;
+	}
+
+	public void setIsAudioRecording(boolean isAudioRecording) {
+		mIsAudioRecording = isAudioRecording;
+	}
+
+	public boolean isAudioRecording() {
+		return mIsAudioRecording;
+	}
+
+	public void setIsAudioFault(boolean isAudioFault) {
+		mIsAudioFault = isAudioFault;
+	}
+
+	public boolean isAudioFault() {
+		return mIsAudioFault;
 	}
 	
 	public boolean isUsbDfuMode(){
