@@ -331,73 +331,45 @@ public class API_00043_EventStreamTest {
 	// Not streaming, with the IOThread running
 	// ------------------------------------------------------------------
 
-	/** Answers as LogAndStream_Shimmer3R v1.01.026 does */
-	private static class AnsweringRadio implements ByteCommunication {
-		final ConcurrentLinkedDeque<Byte> rx = new ConcurrentLinkedDeque<Byte>();
-		final List<byte[]> written = Collections.synchronizedList(new ArrayList<byte[]>());
+	/** Answers as LogAndStream_Shimmer3R v1.01.026 does, each reply one burst */
+	private static class AnsweringRadio extends WaitingTestRadio {
 		/** Sent ahead of the next command's ACK, as a record already queued would be */
 		volatile byte[] beforeNextAck = null;
 		/** Sent between the next status command's ACK and its reply */
 		volatile byte[] betweenAckAndReply = null;
 
-		void queue(byte... bytes) {
-			for(byte b:bytes){
-				rx.add(b);
-			}
-		}
-
 		@Override
-		public boolean writeBytes(byte[] buffer) {
-			written.add(buffer.clone());
+		byte[] answer(byte[] buffer) {
+			java.io.ByteArrayOutputStream reply = new java.io.ByteArrayOutputStream();
 			byte[] early = beforeNextAck;
 			if(early!=null) {
 				beforeNextAck = null;
-				queue(early);
+				reply.write(early, 0, early.length);
 			}
 			if(buffer[0]==ShimmerObject.SET_FEATURE && buffer[1]==(byte) SHIMMER_FEATURE.EVENT_STREAM.ordinal()){
-				queue(ShimmerObject.ACK_COMMAND_PROCESSED);
+				reply.write(ShimmerObject.ACK_COMMAND_PROCESSED);
 				if(buffer[2]!=0) {
 					// The first record at the opt-in, then one already made
-					queue(INITIAL_STATE);
-					queue(MARKER_PRESS);
+					reply.write(INITIAL_STATE, 0, INITIAL_STATE.length);
+					reply.write(MARKER_PRESS, 0, MARKER_PRESS.length);
 				}
 			}
 			else if(buffer[0]==ShimmerObject.GET_EVENT_CHANNEL_STATUS_COMMAND){
-				queue(ShimmerObject.ACK_COMMAND_PROCESSED);
+				reply.write(ShimmerObject.ACK_COMMAND_PROCESSED);
 				byte[] between = betweenAckAndReply;
 				if(between!=null) {
 					betweenAckAndReply = null;
-					queue(between);
+					reply.write(between, 0, between.length);
 				}
-				queue(ShimmerObject.EVENT_CHANNEL_STATUS_RESPONSE);
-				queue(hex("03 0B 02 05 00 02 00 01 00"));
+				reply.write(ShimmerObject.EVENT_CHANNEL_STATUS_RESPONSE);
+				byte[] status = hex("03 0B 02 05 00 02 00 01 00");
+				reply.write(status, 0, status.length);
 			}
 			else {
-				queue(ShimmerObject.ACK_COMMAND_PROCESSED);
+				reply.write(ShimmerObject.ACK_COMMAND_PROCESSED);
 			}
-			return true;
+			return reply.toByteArray();
 		}
-
-		@Override
-		public byte[] readBytes(int byteCount, int timeout) throws SerialPortTimeoutException {
-			if(rx.size()<byteCount){
-				throw new SerialPortTimeoutException("TEST", "readBytes", timeout);
-			}
-			byte[] out = new byte[byteCount];
-			for(int i=0;i<byteCount;i++){
-				out[i] = rx.poll();
-			}
-			return out;
-		}
-
-		@Override public int getInputBufferBytesCount() { return rx.size(); }
-		@Override public boolean isOpened() { return true; }
-		@Override public boolean closePort() { return true; }
-		@Override public boolean openPort() { return true; }
-		@Override public boolean setParams(int i, int j, int k, int l) { return true; }
-		@Override public boolean purgePort(int i) { return true; }
-		@Override public void setByteCommunicationListener(ByteCommunicationListener byteCommListener) { }
-		@Override public void removeRadioListenerList() { }
 	}
 
 	private ShimmerPC mIdleDevice;

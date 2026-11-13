@@ -1107,8 +1107,17 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 						}
 					}
 				}
-				
-				clearSerialBuffer();
+
+				/* With the event channel on, records can be queued behind
+				 * anything read here: behind a status push (when a press starts
+				 * logging, say), or behind the link CRC a bare ACK leaves (the
+				 * opt-in's ACK, whose first record follows at once). So only the
+				 * bytes just read are dropped, and the rest are left for the next
+				 * pass; clearing the buffer would wipe the records with them
+				 * (DEV-971). */
+				if(!mEventFramesPossible) {
+					clearSerialBuffer();
+				}
 			}
 		}
 
@@ -1170,7 +1179,32 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 					//Then handle the ACK from the last SET command
 					processAckWhileStreaming();
 				}
-				
+
+				//The event channel status, [ACK][0xBA][9], which is not wrapped in 0x8A:
+				//readEventChannelStatus() is not sent while streaming, but one sent just
+				//before a stream started is answered once packets flow (DEV-971)
+				else if(bufferTemp[getPacketSizeWithCrc()+2]==EVENT_CHANNEL_STATUS_RESPONSE
+						&& mWaitForAck && mCurrentCommand==GET_EVENT_CHANNEL_STATUS_COMMAND){
+					byte[] responseData = readBytes(EventChannelStatus.LENGTH, EVENT_CHANNEL_STATUS_RESPONSE);
+					stopTimerCheckForAckOrResp(); //cancel the ack timer
+					mWaitForAck=false;
+					mWaitForResponse=false;
+					if(responseData!=null){
+						if(mBtCommsCrcModeCurrent != BT_CRC_MODE.OFF){
+							clearCrcBytesFromBuffer(EVENT_CHANNEL_STATUS_RESPONSE);
+						}
+						takeEventChannelStatus(responseData);
+					}
+					processDataPacket(bufferTemp);
+					if(getListofInstructions().size()>0){
+						removeInstruction(0);
+					}
+					mTransactionCompleted=true;
+					setInstructionStackLock(false);
+					clearBuffers();
+					return;
+				}
+
 				//this is for LogAndStream support, command is transmitted and ack received
 				else if(isSupportedInStreamCmds() && bufferTemp[getPacketSizeWithCrc()+2]==INSTREAM_CMD_RESPONSE){ 
 					printLogDataForDebugging("COMMAND TXed and ACK RECEIVED IN STREAM");
@@ -1187,7 +1221,13 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 					if(mEventFramesPossible && inStreamResponseCommand!=null
 							&& inStreamResponseCommand[0]==EVENT_RECORD_RESPONSE){
 						processDataPacket(bufferTemp);
-						processAckWhileStreaming();
+						if(mWaitForAck){
+							processAckWhileStreaming();
+						}
+						else {
+							// Nothing waits for an ACK, so the SET that went last must not be acknowledged again
+							printLogDataForDebugging("ACK with no command awaiting it, before an event record - ignored");
+						}
 						readEventFrameRestFromPort();
 						clearBuffers();
 						return;
@@ -1238,12 +1278,30 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 		else if(mEventFramesPossible
 				&& bufferTemp[0]==DATA_PACKET
 				&& bufferTemp[getPacketSizeWithCrc()+1]==INSTREAM_CMD_RESPONSE){
-			if (mBtCommsCrcModeCurrent != BT_CRC_MODE.OFF && !checkCrc(bufferTemp, getPacketSize() + 1)) {
-				discardBufferBytesToNextPacket();
-				return;
+			int packetEnd = getPacketSizeWithCrc()+1;
+			if (mBtCommsCrcModeCurrent != BT_CRC_MODE.OFF) {
+				//The packet's own CRC confirms it
+				if (!checkCrc(bufferTemp, getPacketSize() + 1)) {
+					discardBufferBytesToNextPacket();
+					return;
+				}
+			}
+			else {
+				//With no link CRC, a 0x8A where the next packet should start is
+				//only a frame, and the packet before it only a packet, once the
+				//frame's own CRC checks out. Otherwise the boundary is wrong (a
+				//byte lost, say), and the bytes are discarded as before.
+				int frameLength = EventFrame.getFrameLength(bufferTemp, packetEnd, bufferTemp.length-packetEnd);
+				if (frameLength==EventFrame.NEED_MORE) {
+					return; //wait for the rest of the frame
+				}
+				if (frameLength==EventFrame.NOT_A_FRAME) {
+					discardBufferBytesToNextPacket();
+					return;
+				}
 			}
 			processDataPacket(bufferTemp);
-			clearBytesFromStartOfBuffers(bufferTemp, getPacketSizeWithCrc()+1);
+			clearBytesFromStartOfBuffers(bufferTemp, packetEnd);
 		}
 		//Data packet followed by a NACK (a command refused while streaming, e.g.
 		//any SET blocked by the firmware because it is sensing, or a log start the
@@ -2164,7 +2222,14 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 			}
 		}
 		else if(responseCommand==INSTREAM_CMD_RESPONSE) {
-			processInstreamResponse(false);
+			byte[] inStreamResponseCommand = readBytes(1, INSTREAM_CMD_RESPONSE);
+			if(inStreamResponseCommand!=null){
+				processInstreamResponse(inStreamResponseCommand[0], false);
+				if(inStreamResponseCommand[0]==EVENT_RECORD_RESPONSE && mEventFramesPossible){
+					// An event record frame carries its own CRC and never the link CRC (DEV-971)
+					responseWasParsed = false;
+				}
+			}
 		}
 		else if(responseCommand==LSM303DLHC_ACCEL_LPMODE_RESPONSE) {
 			byte[] responseData = readBytes(1, responseCommand);
@@ -2327,16 +2392,7 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 		else if(responseCommand==EVENT_CHANNEL_STATUS_RESPONSE) {
 			byte[] responseData = readBytes(EventChannelStatus.LENGTH, responseCommand);
 			if(responseData!=null){
-				EventChannelStatus status = EventChannelStatus.parse(responseData, 0);
-				mEventChannelStatus = status;
-				printLogDataForDebugging("Event channel status:\t" + status);
-				for(EventChannelListener listener:getEventChannelListeners()){
-					try {
-						listener.onEventChannelStatus(this, status);
-					} catch (RuntimeException e) {
-						printLogDataForDebugging("Event channel listener threw: " + e);
-					}
-				}
+				takeEventChannelStatus(responseData);
 			}
 		}
 
@@ -5510,11 +5566,29 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 	 * @return whether it was sent
 	 */
 	public boolean readEventChannelStatus() {
-		if(!Boolean.TRUE.equals(isEventChannelSupported()) || isStreaming()) {
+		if(!Boolean.TRUE.equals(isEventChannelSupported()) || isStreaming() || isStreamStartQueued()) {
 			return false;
 		}
 		writeInstruction(new byte[]{GET_EVENT_CHANNEL_STATUS_COMMAND});
 		return true;
+	}
+
+	/**
+	 * Whether a start of streaming is queued or in flight: the instruction list
+	 * keeps a command until it is answered, and isStreaming() turns true only
+	 * then. A status read queued behind it would be answered between data packets.
+	 */
+	private boolean isStreamStartQueued() {
+		List<byte[]> instructions = getListofInstructions();
+		synchronized(instructions){
+			for(byte[] instruction:instructions){
+				if(instruction!=null && instruction.length>0
+						&& (instruction[0]==START_STREAMING_COMMAND || instruction[0]==START_SDBT_COMMAND)){
+					return true;
+				}
+			}
+		}
+		return false;
 	}
 
 	/** The last answer to {@link #readEventChannelStatus()}, or null */
@@ -5624,6 +5698,20 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 			return;
 		}
 		dispatchEventRecord(record);
+	}
+
+	/** Keeps the event channel status's 9 bytes and hands them to each listener */
+	private void takeEventChannelStatus(byte[] responseData) {
+		EventChannelStatus status = EventChannelStatus.parse(responseData, 0);
+		mEventChannelStatus = status;
+		printLogDataForDebugging("Event channel status:\t" + status);
+		for(EventChannelListener listener:getEventChannelListeners()){
+			try {
+				listener.onEventChannelStatus(this, status);
+			} catch (RuntimeException e) {
+				printLogDataForDebugging("Event channel listener threw: " + e);
+			}
+		}
 	}
 
 	private void dispatchEventRecord(EventRecord record) {
