@@ -1140,8 +1140,9 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 //					}	
 				}
 			}
-			if (((fwType == COMMUNICATION_TYPE.BLUETOOTH) && (mEnabledSensors & BTStream.ACCEL_ALT) > 0) 
-				|| ((fwType == COMMUNICATION_TYPE.SD) && (mEnabledSensors & SDLogHeader.ACCEL_MPU) > 0)) {
+			// The Shimmer3R's ADXL371. A Shimmer3's sensor on these bits is decoded below (DEV-1451).
+			if (isShimmerGen3R() && (((fwType == COMMUNICATION_TYPE.BLUETOOTH) && (mEnabledSensors & BTStream.ACCEL_ALT) > 0)
+				|| ((fwType == COMMUNICATION_TYPE.SD) && (mEnabledSensors & SDLogHeader.ACCEL_MPU) > 0))) {
 				int iAccelX=getSignalIndex(Shimmer3.ObjectClusterSensorName.ACCEL_HIGHG_X); //find index
 				int iAccelY=getSignalIndex(Shimmer3.ObjectClusterSensorName.ACCEL_HIGHG_Y); //find index
 				int iAccelZ=getSignalIndex(Shimmer3.ObjectClusterSensorName.ACCEL_HIGHG_Z); //find index
@@ -1182,8 +1183,9 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 					accelerometer.z=altAccelCalibratedData[2];
 				}
 			}
-			if (((fwType == COMMUNICATION_TYPE.BLUETOOTH) && (mEnabledSensors & BTStream.MAG_ALT) > 0) 
-				|| ((fwType == COMMUNICATION_TYPE.SD) && (mEnabledSensors & SDLogHeader.MAG_MPU) > 0)) {
+			// The Shimmer3R's LIS3MDL. A Shimmer3's sensor on these bits is decoded below (DEV-1451).
+			if (isShimmerGen3R() && (((fwType == COMMUNICATION_TYPE.BLUETOOTH) && (mEnabledSensors & BTStream.MAG_ALT) > 0)
+				|| ((fwType == COMMUNICATION_TYPE.SD) && (mEnabledSensors & SDLogHeader.MAG_MPU) > 0))) {
 				int iMagX=getSignalIndex(Shimmer3.ObjectClusterSensorName.ALT_MAG_X);
 				int iMagY=getSignalIndex(Shimmer3.ObjectClusterSensorName.ALT_MAG_Y);
 				int iMagZ=getSignalIndex(Shimmer3.ObjectClusterSensorName.ALT_MAG_Z);
@@ -1220,7 +1222,26 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 					calibratedDataUnits[iMagZ]=CHANNEL_UNITS.MAG_CAL_UNIT;
 				}
 			}
-			if (((fwType == COMMUNICATION_TYPE.BLUETOOTH) && (mEnabledSensors & BTStream.GYRO) > 0) 
+			if (getHardwareVersion()==HW_ID.SHIMMER_3) {
+				// DEV-1451: a Shimmer3's alternative accel (the MPU9x50/ICM-20948 accel) and alternative
+				// mag (its AK8975/AK8963/AK09916), wherever the channel list puts them, from Bluetooth
+				// or an SD file. Uncalibrated only: the driver holds no Shimmer3 calibration for them.
+				for (String signalName : new String[] {
+						Shimmer3.ObjectClusterSensorName.ACCEL_MPU_X,
+						Shimmer3.ObjectClusterSensorName.ACCEL_MPU_Y,
+						Shimmer3.ObjectClusterSensorName.ACCEL_MPU_Z,
+						Shimmer3.ObjectClusterSensorName.MAG_MPU_X,
+						Shimmer3.ObjectClusterSensorName.MAG_MPU_Y,
+						Shimmer3.ObjectClusterSensorName.MAG_MPU_Z}) {
+					int iSignal = getSignalIndex(signalName);
+					if (iSignal >= 0) {
+						objectCluster.addDataToMap(signalName, CHANNEL_TYPE.UNCAL.toString(), CHANNEL_UNITS.NO_UNITS, (double)newPacketInt[iSignal]);
+						uncalibratedData[iSignal] = (double)newPacketInt[iSignal];
+						uncalibratedDataUnits[iSignal] = CHANNEL_UNITS.NO_UNITS;
+					}
+				}
+			}
+			if (((fwType == COMMUNICATION_TYPE.BLUETOOTH) && (mEnabledSensors & BTStream.GYRO) > 0)
 					|| ((fwType == COMMUNICATION_TYPE.SD) && (mEnabledSensors & SDLogHeader.GYRO) > 0)
 					) {
 				int iGyroX=getSignalIndex(Shimmer3.ObjectClusterSensorName.GYRO_X);
@@ -3449,11 +3470,26 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 					packetSize=packetSize+2;
 					enabledSensors |= Configuration.Shimmer3.SensorBitmap.SENSOR_ALT_ACCEL;
 				}
+				// DEV-1451: on a Shimmer3 these are the MPU9x50/ICM-20948 accel (big-endian, from
+				// ACCEL_XOUT_H) and, at 0x17-0x19, its magnetometer (little-endian, from HXL), 6 bytes
+				// each. The names and types are the ones ShimmerSDLog gives them in a Shimmer3 SD file.
+				else if (getHardwareVersion()==HW_ID.SHIMMER_3){
+					signalNameArray[i+1]=Shimmer3.ObjectClusterSensorName.ACCEL_MPU_X;
+					signalDataTypeArray[i+1] = "i16r";
+					packetSize=packetSize+2;
+					enabledSensors |= Configuration.Shimmer3.SensorBitmap.SENSOR_ALT_ACCEL;
+				}
 			}
 			else if ((byte)signalId[i-iTS]==(byte)0x15){
 				if (getHardwareVersion()==HW_ID.SHIMMER_3R){
 					signalNameArray[i+1]=Shimmer3.ObjectClusterSensorName.ACCEL_HIGHG_Y;
 					signalDataTypeArray[i+1] = "i12*>";
+					packetSize=packetSize+2;
+					enabledSensors |= Configuration.Shimmer3.SensorBitmap.SENSOR_ALT_ACCEL;
+				}
+				else if (getHardwareVersion()==HW_ID.SHIMMER_3){
+					signalNameArray[i+1]=Shimmer3.ObjectClusterSensorName.ACCEL_MPU_Y;
+					signalDataTypeArray[i+1] = "i16r";
 					packetSize=packetSize+2;
 					enabledSensors |= Configuration.Shimmer3.SensorBitmap.SENSOR_ALT_ACCEL;
 				}
@@ -3465,10 +3501,22 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 					packetSize=packetSize+2;
 					enabledSensors |= Configuration.Shimmer3.SensorBitmap.SENSOR_ALT_ACCEL;
 				}
+				else if (getHardwareVersion()==HW_ID.SHIMMER_3){
+					signalNameArray[i+1]=Shimmer3.ObjectClusterSensorName.ACCEL_MPU_Z;
+					signalDataTypeArray[i+1] = "i16r";
+					packetSize=packetSize+2;
+					enabledSensors |= Configuration.Shimmer3.SensorBitmap.SENSOR_ALT_ACCEL;
+				}
 			}
 			else if ((byte)signalId[i-iTS]==(byte)0x17){
 				if (getHardwareVersion()==HW_ID.SHIMMER_3R){
 					signalNameArray[i+1]=Shimmer3.ObjectClusterSensorName.ALT_MAG_X;
+					signalDataTypeArray[i+1] = "i16";
+					packetSize=packetSize+2;
+					enabledSensors |= Configuration.Shimmer3.SensorBitmap.SENSOR_ALT_MAG;
+				}
+				else if (getHardwareVersion()==HW_ID.SHIMMER_3){
+					signalNameArray[i+1]=Shimmer3.ObjectClusterSensorName.MAG_MPU_X;
 					signalDataTypeArray[i+1] = "i16";
 					packetSize=packetSize+2;
 					enabledSensors |= Configuration.Shimmer3.SensorBitmap.SENSOR_ALT_MAG;
@@ -3481,10 +3529,22 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 					packetSize=packetSize+2;
 					enabledSensors |= Configuration.Shimmer3.SensorBitmap.SENSOR_ALT_MAG;
 				}
+				else if (getHardwareVersion()==HW_ID.SHIMMER_3){
+					signalNameArray[i+1]=Shimmer3.ObjectClusterSensorName.MAG_MPU_Y;
+					signalDataTypeArray[i+1] = "i16";
+					packetSize=packetSize+2;
+					enabledSensors |= Configuration.Shimmer3.SensorBitmap.SENSOR_ALT_MAG;
+				}
 			}
 			else if ((byte)signalId[i-iTS]==(byte)0x19){
 				if (getHardwareVersion()==HW_ID.SHIMMER_3R){
 					signalNameArray[i+1]=Shimmer3.ObjectClusterSensorName.ALT_MAG_Z;
+					signalDataTypeArray[i+1] = "i16";
+					packetSize=packetSize+2;
+					enabledSensors |= Configuration.Shimmer3.SensorBitmap.SENSOR_ALT_MAG;
+				}
+				else if (getHardwareVersion()==HW_ID.SHIMMER_3){
+					signalNameArray[i+1]=Shimmer3.ObjectClusterSensorName.MAG_MPU_Z;
 					signalDataTypeArray[i+1] = "i16";
 					packetSize=packetSize+2;
 					enabledSensors |= Configuration.Shimmer3.SensorBitmap.SENSOR_ALT_MAG;
