@@ -105,10 +105,17 @@ public class API_00038_EventChannelProbeTest {
 	private static class WatchedShimmer extends ShimmerPC {
 		private static final long serialVersionUID = 1L;
 		final List<Byte> progressReports = Collections.synchronizedList(new ArrayList<Byte>());
+		final List<Byte> commandsRefused = Collections.synchronizedList(new ArrayList<Byte>());
 		volatile boolean connectionLost = false;
 
 		WatchedShimmer() {
 			super("COM99");
+		}
+
+		@Override
+		protected void eventCommandRefused(byte command) {
+			commandsRefused.add(command);
+			super.eventCommandRefused(command);
 		}
 
 		@Override
@@ -178,6 +185,15 @@ public class API_00038_EventChannelProbeTest {
 		assertEquals(Boolean.FALSE, mDevice.isEventChannelSupported());
 		assertEquals("the command behind it was sent", 2, radio.countWritten(ShimmerObject.SET_FEATURE));
 		assertFalse(mDevice.connectionLost);
+	}
+
+	@Test
+	public void theProbesNackIsAnAnswerNotARefusal() throws Exception {
+		connectedShimmer(S3R_V1_1_25, ShimmerObject.NACK_COMMAND_PROCESSED);
+		mDevice.readEventChannelSupport();
+		waitForInstructionsDone(2000);
+		assertEquals(Boolean.FALSE, mDevice.isEventChannelSupported());
+		assertTrue("the application is not told a command was refused", mDevice.commandsRefused.isEmpty());
 	}
 
 	@Test
