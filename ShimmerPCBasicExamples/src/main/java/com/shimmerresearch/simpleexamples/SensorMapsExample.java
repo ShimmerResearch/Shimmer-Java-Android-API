@@ -34,7 +34,14 @@ import com.shimmerresearch.verisense.VerisenseDevice;
 import com.shimmerresearch.verisense.communication.SyncProgressDetails;
 import com.shimmerresearch.verisense.communication.VerisenseProtocolByteCommunication;
 import com.shimmerresearch.bluetooth.ShimmerBluetooth;
+import com.shimmerresearch.driver.FormatCluster;
+import com.shimmerresearch.driver.shimmer2r3.EventRecord;
+import com.shimmerresearch.driverUtilities.ChannelDetails.CHANNEL_TYPE;
 import info.monitorenter.gui.chart.Chart2D;
+import info.monitorenter.gui.chart.ITrace2D;
+import info.monitorenter.gui.chart.traces.Trace2DLtd;
+import info.monitorenter.gui.chart.traces.painters.TracePainterVerticalBar;
+import java.awt.Color;
 
 import javax.swing.JLabel;
 import javax.swing.JPanel;
@@ -89,6 +96,13 @@ public class SensorMapsExample extends BasicProcessWithCallBack {
 	LoggingPC lpc;
 	JCheckBox chckbxWriteDataToFile;
 	String[] options = {"Shimmer3", "Verisense"};
+
+	//Event markers (DEV-971)
+	EventMarkersFrame eventMarkersFrame;
+	/** The latest data packet's Shimmer clock (unwrapped, ms) and its plot x value (PC time, ms), to place event records on the plot */
+	volatile double lastPacketShimmerMs = Double.NaN;
+	volatile double lastPacketPlotMs = Double.NaN;
+	ITrace2D eventMarkerTrace;
 	/**
 	 * Initialize the contents of the frame
 	 * @wbp.parser.entryPoint
@@ -296,7 +310,15 @@ public class SensorMapsExample extends BasicProcessWithCallBack {
 			}
 		});
 		mnTools.add(mntmLowPowerMode);
-		
+
+		JMenuItem mntmEventMarkers = new JMenuItem("Event markers (Shimmer3R)");
+		mntmEventMarkers.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				openEventMarkers();
+			}
+		});
+		mnTools.add(mntmEventMarkers);
+
 		JButton btnStartStreaming = new JButton("START STREAMING");
 		btnStartStreaming.addActionListener(new ActionListener() {
 			public void actionPerformed(ActionEvent arg0) {
@@ -506,8 +528,91 @@ public class SensorMapsExample extends BasicProcessWithCallBack {
 		});
 		btnStopSd.setBounds(1075, 181, 107, 31);
 		frame.getContentPane().add(btnStopSd);
-				
-		plotManager.setTitle("Plot");		
+
+		JButton btnEventMarkers = new JButton("EVENT MARKERS");
+		btnEventMarkers.setToolTipText("Button and TTL event markers (Shimmer3R, LogAndStream v1.01.026 and later)");
+		btnEventMarkers.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				openEventMarkers();
+			}
+		});
+		btnEventMarkers.setBounds(625, 225, 187, 31);
+		frame.getContentPane().add(btnEventMarkers);
+
+		plotManager.setTitle("Plot");
+	}
+
+	/** The connected device, looked up the way the other buttons do */
+	ShimmerDevice getConnectedDevice() {
+		if (btComport==null || btComport.isEmpty()) {
+			return null;
+		}
+		if (btComport.contains(PREFIX_COM) || btComport.contains(PREFIX_DEV)) {
+			return btManager.getShimmerDeviceBtConnected(btComport);
+		}
+		return btManager.getShimmerDeviceBtConnectedFromMac(btComport);
+	}
+
+	void openEventMarkers() {
+		if (eventMarkersFrame==null || !eventMarkersFrame.isDisplayable()) {
+			eventMarkersFrame = new EventMarkersFrame(new EventMarkersFrame.Host() {
+				@Override
+				public ShimmerDevice getConnectedDevice() {
+					return SensorMapsExample.this.getConnectedDevice();
+				}
+
+				@Override
+				public void plotEventRecord(ShimmerBluetooth shimmer, EventRecord record) {
+					SensorMapsExample.this.plotEventRecord(record);
+				}
+			});
+			eventMarkersFrame.setLocationRelativeTo(frame);
+		}
+		eventMarkersFrame.refresh();
+		eventMarkersFrame.setVisible(true);
+		eventMarkersFrame.toFront();
+	}
+
+	/**
+	 * Marks an edge on the plot as a vertical bar. The plot's x axis is PC time,
+	 * so the record's Shimmer clock is placed against the latest data packet's:
+	 * a packet carries the low 24 bits of the same clock, which the driver
+	 * unwraps from wherever the stream began. Called on the Swing thread.
+	 */
+	void plotEventRecord(EventRecord record) {
+		if (!record.isEdge() || Double.isNaN(lastPacketShimmerMs) || Double.isNaN(lastPacketPlotMs)) {
+			return; // nothing streaming to place it against
+		}
+		double packetTicks = lastPacketShimmerMs*EventRecord.TICKS_PER_SECOND/1000.0;
+		double eventTicks = record.getTicksOnStreamTimeline(packetTicks);
+		double x = lastPacketPlotMs+(eventTicks-packetTicks)*1000.0/EventRecord.TICKS_PER_SECOND;
+
+		if (eventMarkerTrace==null || !mChart.getTraces().contains(eventMarkerTrace)) {
+			eventMarkerTrace = new Trace2DLtd(200);
+			eventMarkerTrace.setName("Event markers");
+			eventMarkerTrace.setColor(Color.RED);
+			eventMarkerTrace.setTracePainter(new TracePainterVerticalBar(mChart));
+			mChart.addTrace(eventMarkerTrace);
+		}
+		double top = 1;
+		try {
+			top = mChart.getAxisY().getMax();
+		} catch (Exception e) {
+			// no range yet
+		}
+		eventMarkerTrace.addPoint(x, top);
+	}
+
+	/** Keeps the latest packet's Shimmer clock and plot x value, for plotEventRecord() */
+	void notePacketTimes(ObjectCluster objc) {
+		FormatCluster shimmerTs = ObjectCluster.returnFormatCluster(
+				objc.getCollectionOfFormatClusters(Configuration.Shimmer3.ObjectClusterSensorName.TIMESTAMP), CHANNEL_TYPE.CAL.toString());
+		FormatCluster plotTs = ObjectCluster.returnFormatCluster(
+				objc.getCollectionOfFormatClusters(Configuration.Shimmer3.ObjectClusterSensorName.SYSTEM_TIMESTAMP_PLOT), CHANNEL_TYPE.CAL.toString());
+		if (shimmerTs!=null && plotTs!=null) {
+			lastPacketShimmerMs = shimmerTs.mData;
+			lastPacketPlotMs = plotTs.mData;
+		}
 	}
 
 	public static void main(String args[]) {
@@ -604,6 +709,9 @@ public class SensorMapsExample extends BasicProcessWithCallBack {
                 }
 				textPaneStatus.setText("connected");
 				updateDeviceSpec();
+				if (eventMarkersFrame!=null && eventMarkersFrame.isDisplayable()) {
+					eventMarkersFrame.refresh();
+				}
 
 				//shimmer = (ShimmerPC) btManager.getShimmerDeviceBtConnected(btComport);
 //				shimmerDevice = btManager.getShimmerDeviceBtConnected(btComport);
@@ -667,6 +775,7 @@ public class SensorMapsExample extends BasicProcessWithCallBack {
 		} else if (ind == ShimmerPC.MSG_IDENTIFIER_DATA_PACKET) {
 			System.out.println("Shimmer MSG_IDENTIFIER_DATA_PACKET");
 			ObjectCluster objc = (ObjectCluster) shimmerMSG.mB;
+			notePacketTimes(objc);
 			if (lpc!=null) {
 				lpc.logData(objc);
 			}
