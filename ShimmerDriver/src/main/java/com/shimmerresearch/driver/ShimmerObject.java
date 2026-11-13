@@ -5191,12 +5191,6 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 				if(isVerCompatibleWithAnyOf(Configuration.Shimmer3.configOptionLowPowerAutoStop.mListOfCompatibleVersionInfo)) {
 					setLowBattAutoStop((configBytes[configByteLayoutCast.idxSDExperimentConfig1] >> configByteLayoutCast.bitShiftLowBattStop) & configByteLayoutCast.maskLowBattStop);
 				}
-
-				if(configByteLayoutCast.idxAudioMode>0 && configBytes.length>configByteLayoutCast.idxAudioMode) {
-					// anything the firmware cannot act on reads as off: bit 7 set (erased) or a gain preset
-					int audioMode = configBytes[configByteLayoutCast.idxAudioMode] & 0xFF;
-					setAudioMode((audioMode & 0x8C) != 0 ? Configuration.Shimmer3.AUDIO_MODE_OFF : audioMode & configByteLayoutCast.maskAudioMode);
-				}
 					
 				byte[] macIdBytes = new byte[configByteLayoutCast.lengthMacIdBytes];
 				System.arraycopy(configBytes, configByteLayoutCast.idxMacAddress, macIdBytes, 0 , configByteLayoutCast.lengthMacIdBytes);
@@ -5454,10 +5448,6 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 				
 				if(isVerCompatibleWithAnyOf(Configuration.Shimmer3.configOptionLowPowerAutoStop.mListOfCompatibleVersionInfo)) {
 					mConfigBytes[configByteLayoutCast.idxSDExperimentConfig1] |= (byte) ((isLowBattAutoStop()?1:0 & configByteLayoutCast.maskLowBattStop) << configByteLayoutCast.bitShiftLowBattStop);
-				}
-
-				if(configByteLayoutCast.idxAudioMode>0 && mConfigBytes.length>configByteLayoutCast.idxAudioMode) {
-					mConfigBytes[configByteLayoutCast.idxAudioMode] = (byte) (getAudioModeToWrite() & configByteLayoutCast.maskAudioMode);
 				}
 
 				if(getFirmwareIdentifier()==FW_ID.LOGANDSTREAM || getFirmwareIdentifier()==FW_ID.SDLOG || getFirmwareIdentifier()==FW_ID.STROKARE) {
@@ -6269,7 +6259,6 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 		return audioMode == Configuration.Shimmer3.AUDIO_MODE_FINGERPRINT_AND_RAW || audioMode == Configuration.Shimmer3.AUDIO_MODE_RAW;
 	}
 
-	/** An app that may not record raw audio keeps only the fingerprint. */
 	/** What a config write saves: a raw audio mode drops to Fingerprint only or Off unless raw audio is allowed. */
 	public int getAudioModeToWrite() {
 		if (sIsRawAudioAllowed || !isRawAudioMode(mAudioMode)) {

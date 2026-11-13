@@ -54,10 +54,10 @@ public class API_00029_Shimmer3rAudioModeConfigByteTest {
 	}
 
 	@Test
-	public void unsupportedValuesReadAsOff() {
+	public void erasedReadsAsOffAndGainKeepsTheMode() {
 		assertEquals(Configuration.Shimmer3.AUDIO_MODE_OFF, parse(0xFF)); // erased
 		assertEquals(Configuration.Shimmer3.AUDIO_MODE_OFF, parse(0x81));
-		assertEquals(Configuration.Shimmer3.AUDIO_MODE_OFF, parse(0x05)); // a gain preset not yet defined
+		assertEquals(Configuration.Shimmer3.AUDIO_MODE_FINGERPRINT, parse(0x05)); // a gain preset leaves the mode as read
 	}
 
 	@Test

@@ -13,6 +13,7 @@ import com.shimmerresearch.driver.Configuration.Shimmer3.CompatibilityInfoForMap
 import com.shimmerresearch.driver.FormatCluster;
 import com.shimmerresearch.driver.ObjectCluster;
 import com.shimmerresearch.driver.ShimmerDevice;
+import com.shimmerresearch.driver.ShimmerObject;
 import com.shimmerresearch.driver.shimmer2r3.ConfigByteLayoutShimmer3;
 import com.shimmerresearch.driverUtilities.ChannelDetails;
 import com.shimmerresearch.driverUtilities.ChannelDetails.CHANNEL_DATA_ENDIAN;
@@ -204,6 +205,12 @@ public class SensorSoundLevel extends AbstractSensor {
 		return null;
 	}
 
+	/** Whether this firmware records audio (DEV-99): LogAndStream_Shimmer3R v1.01.025 or later */
+	private static boolean isAudioModeSupported(ShimmerDevice shimmerDevice) {
+		return shimmerDevice instanceof ShimmerObject
+				&& shimmerDevice.isVerCompatibleWithAnyOf(Configuration.Shimmer3.configOptionAudioMode.mListOfCompatibleVersionInfo);
+	}
+
 	/** Whether this firmware has the channel: LogAndStream_Shimmer3R v1.01.026 or later */
 	private static boolean isChannelSupported(ShimmerDevice shimmerDevice) {
 		return shimmerDevice.isVerCompatibleWithAnyOf(CompatibilityInfoForMaps.listOfCompatibleVersionInfoSoundLevel);
@@ -219,6 +226,10 @@ public class SensorSoundLevel extends AbstractSensor {
 		ConfigByteLayoutShimmer3 configByteLayoutCast = getAudioConfigLayout(shimmerDevice, configBytes);
 		if(configByteLayoutCast!=null){
 			int value = mAudioModeAndGain & configByteLayoutCast.maskAudioModeAndGain;
+			// a mode changed here goes through the raw audio rule; one set elsewhere goes back as read
+			if(isAudioModeSupported(shimmerDevice) && ((ShimmerObject) shimmerDevice).getAudioMode()!=(value & configByteLayoutCast.maskAudioMode)){
+				value = (value & ~configByteLayoutCast.maskAudioMode) | (((ShimmerObject) shimmerDevice).getAudioModeToWrite() & configByteLayoutCast.maskAudioMode);
+			}
 			if(isChannelSupported(shimmerDevice) && isSensorEnabled(Configuration.Shimmer3.SENSOR_ID.SHIMMER_SOUND_LEVEL)){
 				value |= configByteLayoutCast.maskSoundLevel << configByteLayoutCast.bitShiftSoundLevel;
 			}
@@ -241,6 +252,9 @@ public class SensorSoundLevel extends AbstractSensor {
 				value = 0;
 			}
 			mAudioModeAndGain = value & configByteLayoutCast.maskAudioModeAndGain;
+			if(isAudioModeSupported(shimmerDevice)){
+				((ShimmerObject) shimmerDevice).setAudioMode(mAudioModeAndGain & configByteLayoutCast.maskAudioMode);
+			}
 
 			SensorDetails sensorDetails = mSensorMap.get(Configuration.Shimmer3.SENSOR_ID.SHIMMER_SOUND_LEVEL);
 			if(sensorDetails!=null){
