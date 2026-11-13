@@ -292,6 +292,10 @@ public class ConfigByteLayoutShimmer3 extends ConfigByteLayout implements Serial
 	public int bitShiftLowBattStop = 			0;
 	public int maskLowBattStop =				0x01;
 
+	/** Audio mode (DEV-99), bits 0-1; bits 2-3 a gain preset, bit 7 must be 0. 0 where the firmware cannot have it. */
+	public int idxAudioMode =                     	0;
+	public int maskAudioMode =					0x03;
+
 	public int bitShiftTCX0 = 					4;
 	public int maskTimeTCX0 = 					0x01;
 
@@ -415,6 +419,11 @@ public class ConfigByteLayoutShimmer3 extends ConfigByteLayout implements Serial
 		if(mShimmerVerObject.mHardwareVersion == HW_ID.SHIMMER_3R 
 				|| compareVersions(FW_ID.LOGANDSTREAM,0,8,1)) {
 			idxBtFactoryReset =            		128+103;
+		}
+
+		// firmware without audio reads the byte back as 0
+		if(mShimmerVerObject.mHardwareVersion == HW_ID.SHIMMER_3R && compareVersions(FW_ID.LOGANDSTREAM,1,1,25)) {
+			idxAudioMode =            			128+105;
 		}
 		
 //		if(mShimmerVerObject.isVerCompatibleWithAnyOf(Configuration.Shimmer3.configOptionLowPowerAutoStop.mListOfCompatibleVersionInfo)) {
@@ -558,6 +567,9 @@ public class ConfigByteLayoutShimmer3 extends ConfigByteLayout implements Serial
 			mapOfByteDescriptions.put(idxAudioConfig, "idxAudioConfig");
 		}
 		
+		if(idxAudioMode>0){
+			mapOfByteDescriptions.put(idxAudioMode, "idxAudioMode");
+		}
 		if(idxBtFactoryReset>0){
 			mapOfByteDescriptions.put(idxBtFactoryReset, "idxBtFactoryReset");
 		}
