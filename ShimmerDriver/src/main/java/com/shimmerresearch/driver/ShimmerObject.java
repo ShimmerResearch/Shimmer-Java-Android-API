@@ -95,6 +95,7 @@ import com.shimmerresearch.sensors.mpu9x50.SensorMPU9X50;
 import com.shimmerresearch.sensors.shimmer2.SensorMMA736x;
 import com.shimmerresearch.sensors.shimmer2.SensorShimmer2Gyro;
 import com.shimmerresearch.sensors.shimmer2.SensorShimmer2Mag;
+import com.shimmerresearch.sensors.soundlevel.SensorSoundLevel;
 import com.shimmerresearch.algorithms.orientation.GradDes3DOrientation;
 import com.shimmerresearch.algorithms.orientation.GradDes3DOrientation9DoF;
 import com.shimmerresearch.algorithms.orientation.Orientation3DObject;
@@ -2379,6 +2380,23 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 				calibratedDataUnits[sigIndex]=CHANNEL_UNITS.BEATS_PER_MINUTE;
 			}
 
+			// Sound level (DEV-1413, Shimmer3R). Enabled through configuration
+			// byte 233 bit 4 rather than a sensor bitmap bit, so it is decoded
+			// whenever the channel list carries it. 0x8000 (no level) is NaN.
+			int iSoundLevel = getSignalIndex(SensorSoundLevel.ObjectClusterSensorName.SOUND_LEVEL);
+			if (iSoundLevel!=-1){
+				double soundLevelRaw = (double)newPacketInt[iSoundLevel];
+				objectCluster.addDataToMap(SensorSoundLevel.ObjectClusterSensorName.SOUND_LEVEL,CHANNEL_TYPE.UNCAL.toString(),CHANNEL_UNITS.NO_UNITS,soundLevelRaw);
+				uncalibratedData[iSoundLevel]=soundLevelRaw;
+				uncalibratedDataUnits[iSoundLevel]=CHANNEL_UNITS.NO_UNITS;
+				if (mEnableCalibration){
+					double soundLevelDbA = SensorSoundLevel.calibrateSoundLevel(soundLevelRaw);
+					objectCluster.addDataToMap(SensorSoundLevel.ObjectClusterSensorName.SOUND_LEVEL,CHANNEL_TYPE.CAL.toString(),CHANNEL_UNITS.DECIBELS_A,soundLevelDbA);
+					calibratedData[iSoundLevel]=soundLevelDbA;
+					calibratedDataUnits[iSoundLevel]=CHANNEL_UNITS.DECIBELS_A;
+				}
+			}
+
 			//Additional Channels Offset
 			int additionalChannelsOffset = calibratedData.length-numAdditionalChannels; 
 			if(fwType == COMMUNICATION_TYPE.BLUETOOTH) {
@@ -3631,6 +3649,14 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 					packetSize=packetSize+2;
 					enabledSensors |= SENSOR_BRIDGE_AMP;
 				} 
+			}
+			else if ((byte)signalId[i-iTS]==SensorSoundLevel.CHANNEL_ID && getHardwareVersion()==HW_ID.SHIMMER_3R){
+				// Sound level (DEV-1413): a signed 16-bit little-endian count of
+				// 0.01 dB(A). A Shimmer3 never sends 0x38 and keeps the unknown
+				// channel handling below.
+				signalNameArray[i+1]=SensorSoundLevel.ObjectClusterSensorName.SOUND_LEVEL;
+				signalDataTypeArray[i+1] = "i16";
+				packetSize=packetSize+2;
 			}
 			else{
 				signalNameArray[i+1]=Byte.toString(signalId[i-iTS]);
@@ -5606,6 +5632,10 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 			
 			mSensorLIS2MDL = new SensorLIS2MDL(this);
 			addSensorClass(mSensorLIS2MDL);
+
+			// Every Shimmer3R has the microphone; whether its firmware has the
+			// channel is learnt from configuration byte 233 (DEV-1413)
+			addSensorClass(new SensorSoundLevel(this));
 		}
 	}
 
@@ -5857,6 +5887,11 @@ public abstract class ShimmerObject extends ShimmerDevice implements Serializabl
 //		}
 		else if(sensorId == Configuration.Shimmer3.SENSOR_ID.HOST_SHIMMER_STREAMING_PROPERTIES){
 			mSensorMap.get(sensorId).setIsEnabled(true);
+			return true;
+		}
+		// The sound level (DEV-1413) has no sensor bitmap bit, so the bitmap
+		// would always turn it off: its state comes from configuration byte 233
+		else if(sensorId == Configuration.Shimmer3.SENSOR_ID.SHIMMER_SOUND_LEVEL){
 			return true;
 		}
 		return false;

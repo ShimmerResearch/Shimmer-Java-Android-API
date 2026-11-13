@@ -71,7 +71,8 @@ public abstract class AbstractSensor implements Serializable{
 		VD6283("VD6283"),
 		MLX90632("MLX90632"),
 		BMP390("BMP390"),
-		BMP581("BMP581");
+		BMP581("BMP581"),
+		SOUND_LEVEL("Sound Level");
 		
 	    private final String text;
 

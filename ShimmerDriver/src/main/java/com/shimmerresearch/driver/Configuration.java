@@ -94,6 +94,7 @@ import com.shimmerresearch.sensors.mpu9x50.SensorMPU9X50;
 import com.shimmerresearch.sensors.adxl371.SensorADXL371;
 import com.shimmerresearch.sensors.lsm6dsv.SensorLSM6DSV;
 import com.shimmerresearch.sensors.lis2dw12.SensorLIS2DW12;
+import com.shimmerresearch.sensors.soundlevel.SensorSoundLevel;
 import com.shimmerresearch.verisense.sensors.SensorLSM6DS3;
 //import com.shimmerresearch.verisense.sensors.SensorLIS2DW12;
 import com.shimmerresearch.verisense.sensors.SensorBattVoltageVerisense;
@@ -158,6 +159,8 @@ public class Configuration {
 		public static final String GRAVITY = "g";
 		public static final String RPM = "rpm";
 		public static final String POWER = "dB";
+		/** A-weighted sound pressure level, the Shimmer3R sound level channel's unit (DEV-1413) */
+		public static final String DECIBELS_A = "dB(A)";
 		public static final String SCORE = "Score";
 
 		public static final String ACCEL_CAL_UNIT = METER_PER_SECOND_SQUARE;
@@ -735,6 +738,8 @@ public class Configuration {
 			public static final int SHIMMER_LIS3MDL_MAG_ALT = 41;
 			public static final int SHIMMER_BMP390_PRESSURE = 43;
 			public static final int SHIMMER_BMP581_PRESSURE = 44;
+			/** Shimmer3R microphone sound level, channel 0x38 (DEV-1413): enabled through configuration byte 233 bit 4, not a sensor bitmap bit */
+			public static final int SHIMMER_SOUND_LEVEL = 45;
 			
 //			public static final int SHIMMER_EXG1_24BIT = 3;
 //			public static final int SHIMMER_EXG2_24BIT = 4;
@@ -943,7 +948,8 @@ public class Configuration {
 			MPU_OTHER(SensorMPU9X50.LABEL_SENSOR_TILE.MPU_OTHER),
 			GPS("GPS"),
 			STC3100_MONITORING (SensorSTC3100.LABEL_SENSOR_TILE.STC3100_MONITORING),
-			SWEATCH_ADC ("Sweatch ADC");
+			SWEATCH_ADC ("Sweatch ADC"),
+			SOUND_LEVEL(SensorSoundLevel.LABEL_SENSOR_TILE.SOUND_LEVEL);
 			
 			private String tileText = "";
 			LABEL_SENSOR_TILE(String text){
@@ -1331,6 +1337,8 @@ public class Configuration {
 			private static final ShimmerVerObject svoShimmer3RImuAnyExpBrdLogAndStream = new ShimmerVerObject(HW_ID.SHIMMER_3R,FW_ID.LOGANDSTREAM,0,1,0,ShimmerVerDetails.ANY_VERSION, ShimmerVerDetails.ANY_VERSION, NEW_IMU_EXP_REV.IMU);
 		
 			public static final ShimmerVerObject svoShimmer3RLogAndStream = 		new ShimmerVerObject(HW_ID.SHIMMER_3R,FW_ID.LOGANDSTREAM,ShimmerVerDetails.ANY_VERSION,ShimmerVerDetails.ANY_VERSION,ShimmerVerDetails.ANY_VERSION,ShimmerVerDetails.ANY_VERSION);
+			/** LogAndStream_Shimmer3R v1.01.026 and later: the first release with the sound level channel (DEV-1413) */
+			public static final ShimmerVerObject svoShimmer3RLogAndStreamSoundLevel = 		new ShimmerVerObject(HW_ID.SHIMMER_3R,FW_ID.LOGANDSTREAM,1,1,26,ShimmerVerDetails.ANY_VERSION);
 			public static final ShimmerVerObject svoShimmer3LogAndStreamWithSDLogSyncSupport = 		new ShimmerVerObject(HW_ID.SHIMMER_3,FW_ID.LOGANDSTREAM,0,16,11,ShimmerVerDetails.ANY_VERSION);
 			public static final ShimmerVerObject svoShimmer3RLogAndStreamWithSDLogSyncSupport = 		new ShimmerVerObject(HW_ID.SHIMMER_3R,FW_ID.LOGANDSTREAM,ShimmerVerDetails.ANY_VERSION,ShimmerVerDetails.ANY_VERSION,ShimmerVerDetails.ANY_VERSION,ShimmerVerDetails.ANY_VERSION);
 			
@@ -1538,6 +1546,13 @@ public class Configuration {
 					svoShimmer3RBrAmpUnifiedLogAndStream,
 					svoShimmer3RProto3DeluxeLogAndStream);
 			
+			//Shimmer3r sound level (DEV-1413), from LogAndStream_Shimmer3R v1.01.026,
+			//the first release with the channel. Earlier releases store
+			//configuration byte 233 untouched, so bit 4 would read back set there
+			//with no channel behind it: the tile is not offered on them.
+			public static final List<ShimmerVerObject> listOfCompatibleVersionInfoSoundLevel = Arrays.asList(
+					svoShimmer3RLogAndStreamSoundLevel);
+
 			//TODO need to update this list and remove "any"
 			public static final List<ShimmerVerObject> listOfCompatibleVersionInfoKionixKXRB52042 = Arrays.asList(
 					svoAnyIntExpBoardAndSdlog, svoAnyIntExpBoardAndBtStream, svoAnyIntExpBoardAndLogAndStream,
