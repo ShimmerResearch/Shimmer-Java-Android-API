@@ -1104,18 +1104,20 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 						}
 						if(byteBuffer!=null && byteBuffer[0]==INSTREAM_CMD_RESPONSE){
 							processResponseCommand(INSTREAM_CMD_RESPONSE);
-							/* The reply was read whole. With the event channel on, records
-							 * may already be queued behind it (a status push when a press
-							 * starts logging, say), so they are left for the next pass
-							 * rather than cleared (DEV-971). */
-							if(mEventFramesPossible) {
-								return;
-							}
 						}
 					}
 				}
 
-				clearSerialBuffer();
+				/* With the event channel on, records can be queued behind
+				 * anything read here: behind a status push (when a press starts
+				 * logging, say), or behind the link CRC a bare ACK leaves (the
+				 * opt-in's ACK, whose first record follows at once). So only the
+				 * bytes just read are dropped, and the rest are left for the next
+				 * pass; clearing the buffer would wipe the records with them
+				 * (DEV-971). */
+				if(!mEventFramesPossible) {
+					clearSerialBuffer();
+				}
 			}
 		}
 
