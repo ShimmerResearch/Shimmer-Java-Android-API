@@ -304,6 +304,9 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 	 * first.
 	 */
 	private static final byte[] BARE_ACK_CRC = ShimmerCrc.shimmerUartCrcCalc(new byte[] {ACK_COMMAND_PROCESSED}, 1);
+
+	/** The same for a NACK, the refusal of a command: the CRC of 0xFE is C5 56. */
+	private static final byte[] BARE_NACK_CRC = ShimmerCrc.shimmerUartCrcCalc(new byte[] {NACK_COMMAND_PROCESSED}, 1);
 	
 	public enum SHIMMER_FEATURE {
 		NONE,
@@ -1132,23 +1135,42 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 			
 		} 
 		//Data packet followed by a NACK (a command refused while streaming, e.g.
-		//any SET blocked by the firmware because it is sensing)
+		//any SET blocked by the firmware because it is sensing, or a log start the
+		//device cannot carry out, DEV-1431)
 		else if(bufferTemp[0]==DATA_PACKET
 				&& bufferTemp[getPacketSizeWithCrc()+1]==NACK_COMMAND_PROCESSED){
-			
-			if (mBtCommsCrcModeCurrent != BT_CRC_MODE.OFF && !checkCrc(bufferTemp, getPacketSize() + 1)) {
+
+			//With a link CRC on, the NACK is followed by its own CRC, as a bare ACK
+			//is, rather than by the next packet
+			if(!isBareNackCrcSoFar(bufferTemp)){
+				printLogDataForDebugging("0xFE after a data packet is not a NACK: its CRC does not match");
 				discardBufferBytesToNextPacket();
 				return;
 			}
-			
-			//Handle the data packet first, then fail the command in flight
-			processDataPacket(bufferTemp);
-			processNackFromCommand();
-			
-			/* clearBuffers() rather than clearSingleDataPacketFromBuffers(),
-			 * because the NACK is a single byte with no payload behind it and that
-			 * helper would push it back as the next packet header. */
-			clearBuffers();
+			int bareNackEnd = getPacketSizeWithCrc()+2+mBtCommsCrcModeCurrent.getNumCrcBytes();
+			if(bufferTemp.length<bareNackEnd){
+				return; //wait for the rest of the NACK's CRC
+			}
+
+			//Firstly handle the data packet. If its CRC fails, only the packet is
+			//dropped: the NACK's own CRC has already checked out.
+			if(mBtCommsCrcModeCurrent==BT_CRC_MODE.OFF || checkCrc(bufferTemp, getPacketSize()+1)){
+				processDataPacket(bufferTemp);
+			}
+			else {
+				printLogDataForDebugging("CRC error in the data packet before a NACK, packet discarded");
+			}
+			//Exactly the packet, the NACK and its CRC: anything after them is the next frame
+			clearBytesFromStartOfBuffers(bufferTemp, bareNackEnd);
+
+			//Then fail the command in flight. With none, a NACK has nothing to refuse
+			//and is ignored, as it is when not streaming.
+			if(mWaitForAck){
+				processNackFromCommand();
+			}
+			else {
+				printLogDataForDebugging("NACK received while streaming with no command awaiting a reply - ignored");
+			}
 		}
 		//TODO: ACK in bufferTemp[0] not handled
 		//else if
@@ -1305,6 +1327,23 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 		return true;
 	}
 	
+	/**
+	 * Whether the bytes received so far after the NACK that follows a data packet
+	 * agree with the CRC on a bare NACK, none of it having arrived counting as
+	 * agreeing. With no link CRC there is nothing to check: a data packet can
+	 * only be followed by another packet's 0x00, an ACK or a NACK.
+	 */
+	private boolean isBareNackCrcSoFar(byte[] bufferTemp) {
+		int crcStart = getPacketSizeWithCrc()+2;
+		int numCrcBytesReceived = Math.min(bufferTemp.length-crcStart, mBtCommsCrcModeCurrent.getNumCrcBytes());
+		for(int i=0;i<numCrcBytesReceived;i++){
+			if(bufferTemp[crcStart+i]!=BARE_NACK_CRC[i]){
+				return false;
+			}
+		}
+		return true;
+	}
+
 	/** Handles a bare ACK received while streaming: the reply to the last SET command */
 	private void processAckWhileStreaming() {
 		if(isKnownSetCommand(mCurrentCommand)){
@@ -2180,8 +2219,14 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 	 * instruction is already gone by the time its response is awaited. The
 	 * connection is left up: a refusal means the device declined this command,
 	 * not that the link is gone.
+	 *
+	 * <p>A refused log start is also taken for a log that did not start
+	 * ({@link #processLogStartRefused(byte)}).
+	 *
+	 * <p>Protected because ShimmerAndroidAPI's Shimmer has its own streaming
+	 * parser, which needs to fail the command in flight the same way.
 	 */
-	private void processNackFromCommand() {
+	protected void processNackFromCommand() {
 		stopTimerCheckForAckOrResp(); //cancel the ack timer
 		printLogDataForDebugging("NACK Received for Command: \t\t" + btCommandToString(mCurrentCommand));
 		
@@ -2222,7 +2267,10 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 		
 		mTransactionCompleted=true;
 		setInstructionStackLock(false);
-		
+
+		if(refusedCommand==START_LOGGING_ONLY_COMMAND || refusedCommand==START_SDBT_COMMAND){
+			processLogStartRefused(refusedCommand);
+		}
 		eventCommandRefused(refusedCommand);
 	}
 	
@@ -3419,6 +3467,53 @@ public abstract class ShimmerBluetooth extends ShimmerObject implements Serializ
 //		//NOT USED
 //	}
 	
+	/**
+	 * A log start the device refused with a NACK (DEV-1431), its transaction already unwound by
+	 * {@link #processNackFromCommand()}.
+	 * <p>
+	 * The firmware starts a log only when the device is undocked, off USB power, has an SD card in
+	 * with no file error and has logging turned on in its configuration, and firmware that refuses
+	 * a start it cannot carry out starts nothing: after START_SDBT the device is not streaming
+	 * either. It refuses START_LOGGING_ONLY in the middle of a stream the same way, the NACK then
+	 * coming between two data packets. Earlier firmware ACKs such a start instead and does
+	 * nothing, so there the status bits are what tell.
+	 * <p>
+	 * Without this, a refusal ended as an unanswered start does: the ACK timer's special case
+	 * (checkForAckOrRespTask) took START_LOGGING_ONLY for started. Here the device is left not
+	 * logging, the status reads that startDataLogAndStreaming() stopped start again, and
+	 * {@link #eventLogStartRefused(byte)} says so.
+	 *
+	 * @param refused the start that was refused
+	 */
+	private void processLogStartRefused(byte refused) {
+		printLogDataForDebugging(btCommandToString(refused) + " refused: the device cannot log now");
+		setIsSDLogging(false);
+		if(refused==START_SDBT_COMMAND){
+			// After the refused start is retired: the first read is immediate, and skipped while
+			// any instruction is still queued
+			startTimerReadStatus();
+		}
+		eventLogStartRefused(refused);
+	}
+
+	/** What {@link #eventLogStartRefused(byte)} passes to {@link #sendStatusMSGtoUI(String)} by default. */
+	public static final String LOG_START_REFUSED_MESSAGE = "The Shimmer refused to start logging to its SD card. "
+			+ "It logs only when undocked, off USB power, with an SD card in and no SD file error, "
+			+ "and with logging turned on in its configuration.";
+
+	/**
+	 * The device refused a log start (START_LOGGING_ONLY_COMMAND or START_SDBT_COMMAND) with a NACK:
+	 * it is not logging. After START_SDBT it is not streaming either; a stream that was running when
+	 * START_LOGGING_ONLY was sent goes on. {@link #eventCommandRefused(byte)} is called for it too,
+	 * after this. By default the reason goes to
+	 * {@link #sendStatusMSGtoUI(String)}; override to tell the user another way.
+	 *
+	 * @param command the start that was refused
+	 */
+	protected void eventLogStartRefused(byte command) {
+		sendStatusMSGtoUI(LOG_START_REFUSED_MESSAGE);
+	}
+
 	private void killConnection(){
 		printLogDataForDebugging("Killing Connection");
 		stop(); //If command fail exit device 
