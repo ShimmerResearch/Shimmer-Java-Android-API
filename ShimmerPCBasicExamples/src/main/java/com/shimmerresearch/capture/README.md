@@ -115,7 +115,7 @@ CI does not build this module, so run the tests locally.
 ## Event markers
 
 The Stream tab's **Event markers...** opens the event channel window (`EventMarkersFrame`, DEV-971,
-from ShimmerResearch/Shimmer-Java-Android-API#348 and #349, which this branch is stacked on). It
+from ShimmerResearch/Shimmer-Java-Android-API#343). It
 covers a Shimmer3R on LogAndStream v1.01.026 or later:
 - byte 232: the button mode, what starts logging, and the TTL input;
 - opt in and out of live records, with sequence gaps flagged;
