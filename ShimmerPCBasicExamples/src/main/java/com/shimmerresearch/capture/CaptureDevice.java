@@ -11,6 +11,7 @@ import com.shimmerresearch.driver.Configuration;
 import com.shimmerresearch.driver.ObjectCluster;
 import com.shimmerresearch.driver.ShimmerDevice;
 import com.shimmerresearch.driver.ShimmerMsg;
+import com.shimmerresearch.driver.ShimmerObject;
 import com.shimmerresearch.driver.shimmer2r3.BluetoothModuleVersionDetails;
 import com.shimmerresearch.driverUtilities.ChannelDetails.CHANNEL_TYPE;
 import com.shimmerresearch.driverUtilities.ShimmerBattStatusDetails;
@@ -376,7 +377,7 @@ public final class CaptureDevice {
 			try {
 				if (mRecording == null) {
 					ShimmerBluetooth sb = shimmer();
-					mRecording = new CsvRecording(mRecordFolder, getPlatform(), sb == null ? null : sb.getMacId(), sample,
+					mRecording = new CsvRecording(mRecordFolder, getPlatform(), sb == null ? null : macIdOf(sb), sample,
 							System.currentTimeMillis());
 					mListener.log("Recording to " + mRecording.getFile());
 				}
@@ -474,7 +475,25 @@ public final class CaptureDevice {
 
 	public String getMac() {
 		ShimmerBluetooth sb = shimmer();
-		return sb == null ? "-" : sb.getMacId();
+		return sb == null ? "-" : macIdOf(sb);
+	}
+
+	/**
+	 * The unit's MAC, for the recording's name and the device panel. Connected by its COM port,
+	 * the driver's getMacId() is empty: the manager sets the Bluetooth MAC to null, having no
+	 * address, and getMacId() then never looks at the one in the configuration read on connect
+	 * (bytes 224-229). So that one is used next, unless it is erased (FF) or zero.
+	 */
+	static String macIdOf(ShimmerDevice device) {
+		String mac = device.getMacId();
+		if ((mac == null || mac.isEmpty()) && device instanceof ShimmerObject) {
+			String fromConfig = ((ShimmerObject) device).getMacIdFromInfoMem();
+			if (fromConfig != null && fromConfig.matches("[0-9A-Fa-f]{12}")
+					&& !fromConfig.matches("[Ff]{12}") && !fromConfig.matches("0{12}")) {
+				mac = fromConfig;
+			}
+		}
+		return mac == null ? "" : mac;
 	}
 
 	public String getBluetoothModule() {

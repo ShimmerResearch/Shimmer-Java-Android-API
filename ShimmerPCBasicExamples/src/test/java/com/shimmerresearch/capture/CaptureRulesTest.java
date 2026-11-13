@@ -14,8 +14,13 @@ import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
 import com.shimmerresearch.bluetooth.ShimmerBluetooth.BT_STATE;
+import com.shimmerresearch.driver.Configuration.COMMUNICATION_TYPE;
 import com.shimmerresearch.driver.ObjectCluster;
 import com.shimmerresearch.driverUtilities.ChannelDetails.CHANNEL_TYPE;
+import com.shimmerresearch.driverUtilities.ShimmerVerDetails.FW_ID;
+import com.shimmerresearch.driverUtilities.ShimmerVerDetails.HW_ID;
+import com.shimmerresearch.driverUtilities.ShimmerVerObject;
+import com.shimmerresearch.pcDriver.ShimmerPC;
 
 /**
  * The rules shimmer-host-core's bindings/CAPTURE.md sets every Capture app, with the inputs and
@@ -71,6 +76,46 @@ public class CaptureRulesTest {
 		assertEquals("Shimmer3_0000_20261026_073320.csv", CsvRecording.fileName("Shimmer3", null, started, utc));
 		assertEquals("Shimmer3_BE69_20261026_083320.csv",
 				CsvRecording.fileName("Shimmer3", "00:06:66:66:be:69", started, TimeZone.getTimeZone("GMT+01:00")));
+	}
+
+	/**
+	 * Connected by its COM port, a Shimmer's Bluetooth MAC is null: the manager has no address to
+	 * give it. The MAC is still in the configuration read on connect (bytes 224-229), and the
+	 * recording's name and the device panel use that.
+	 */
+	@Test
+	public void overAComPortTheMacComesFromTheConfiguration() {
+		ShimmerVerObject s3r = new ShimmerVerObject(HW_ID.SHIMMER_3R, FW_ID.LOGANDSTREAM, 1, 1, 25);
+		ShimmerPC source = new ShimmerPC("COM98");
+		source.setShimmerVersionObjectAndCreateSensorMap(s3r);
+		byte[] config = source.generateConfigBytesForWritingToShimmer().clone();
+		byte[] mac = { (byte) 0xE7, 0x47, (byte) 0xAA, 0x7D, 0x2F, 0x31 };
+		System.arraycopy(mac, 0, config, 224, mac.length);
+
+		ShimmerPC shimmer = new ShimmerPC("COM32");
+		shimmer.setMacIdFromUart(null); // as ShimmerBluetoothManager sets it for a COM port
+		shimmer.setShimmerVersionObjectAndCreateSensorMap(s3r);
+		shimmer.configBytesParse(config, COMMUNICATION_TYPE.BLUETOOTH);
+
+		assertEquals("E747AA7D2F31", CaptureDevice.macIdOf(shimmer));
+		assertEquals("Shimmer3R_2F31_20261026_073320.csv",
+				CsvRecording.fileName("Shimmer3R", CaptureDevice.macIdOf(shimmer), 1793000000000L, TimeZone.getTimeZone("UTC")));
+	}
+
+	@Test
+	public void erasedMacBytesAreNoMac() {
+		ShimmerVerObject s3r = new ShimmerVerObject(HW_ID.SHIMMER_3R, FW_ID.LOGANDSTREAM, 1, 1, 25);
+		ShimmerPC source = new ShimmerPC("COM98");
+		source.setShimmerVersionObjectAndCreateSensorMap(s3r);
+		byte[] config = source.generateConfigBytesForWritingToShimmer().clone();
+		for (int i = 224; i < 230; i++) {
+			config[i] = (byte) 0xFF;
+		}
+		ShimmerPC shimmer = new ShimmerPC("COM32");
+		shimmer.setMacIdFromUart(null);
+		shimmer.setShimmerVersionObjectAndCreateSensorMap(s3r);
+		shimmer.configBytesParse(config, COMMUNICATION_TYPE.BLUETOOTH);
+		assertEquals("", CaptureDevice.macIdOf(shimmer));
 	}
 
 	/** A sample as the driver builds one: each channel calibrated and raw, the host's channels calibrated only */
