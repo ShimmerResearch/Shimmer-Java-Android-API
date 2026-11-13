@@ -27,7 +27,8 @@ import com.shimmerresearch.sensors.soundlevel.SensorSoundLevel;
 public class API_00041_SoundLevelShimmerPCTest {
 
 	private static final int IDX_AUDIO_CONFIG = 233;
-	private static final ShimmerVerObject S3R = new ShimmerVerObject(HW_ID.SHIMMER_3R, FW_ID.LOGANDSTREAM, 1, 1, 25);
+	/** v1.01.026, the first release with the channel */
+	private static final ShimmerVerObject S3R = new ShimmerVerObject(HW_ID.SHIMMER_3R, FW_ID.LOGANDSTREAM, 1, 1, 26);
 
 	private static ShimmerPC shimmer() {
 		ShimmerPC shimmer = new ShimmerPC("COM99");

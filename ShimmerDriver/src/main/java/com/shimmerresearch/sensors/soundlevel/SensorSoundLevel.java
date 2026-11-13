@@ -47,11 +47,17 @@ import com.shimmerresearch.sensors.ActionSetting;
  * <b>Enabling it.</b> Not a sensor bitmap bit: configuration byte 233 bit 4.
  * Byte 233 also holds the DEV-99 audio mode (bits 0-1) and gain preset (bits
  * 2-3), which this class keeps as read so that a full configuration write,
- * which builds its image from zeros, gives the Shimmer back its own. Firmware
- * that has the byte but not the channel clears bit 4, so a write and a read
- * back says whether a unit has it. Firmware from before the byte (releases
- * before v1.01.026, DEV-99) stores it untouched, so there the bit reads back
- * set while no channel is sent; the channel list is what the decoder goes by.
+ * which builds its image from zeros, gives the Shimmer back its own, on any
+ * Shimmer3R firmware.
+ * <p>
+ * <b>Offered from v1.01.026.</b> The sensor and its tile are only offered on
+ * LogAndStream_Shimmer3R v1.01.026 and later
+ * ({@link CompatibilityInfoForMaps#listOfCompatibleVersionInfoSoundLevel}).
+ * Releases before it (DEV-99) store byte 233 untouched, so there bit 4 would
+ * read back set while no channel is sent. On them, a bit 4 that is already
+ * set reads as off, and the next configuration write clears it, so a later
+ * firmware update does not turn the channel on unasked. The channel list,
+ * not the bit, is still what the decoder goes by.
  * <p>
  * This class is only created for a Shimmer3R. A Shimmer3's byte 233 stays 0.
  */
@@ -198,16 +204,22 @@ public class SensorSoundLevel extends AbstractSensor {
 		return null;
 	}
 
+	/** Whether this firmware has the channel: LogAndStream_Shimmer3R v1.01.026 or later */
+	private static boolean isChannelSupported(ShimmerDevice shimmerDevice) {
+		return shimmerDevice.isVerCompatibleWithAnyOf(CompatibilityInfoForMaps.listOfCompatibleVersionInfoSoundLevel);
+	}
+
 	/**
 	 * Byte 233: bits 0-3 as read (0 if the byte read was not valid) and bit 4
-	 * from this sensor's state; bits 5-7 are 0, as the firmware wants them.
+	 * from this sensor's state, on firmware that has the channel; bits 5-7 are
+	 * 0, as the firmware wants them.
 	 */
 	@Override
 	public void configBytesGenerate(ShimmerDevice shimmerDevice, byte[] configBytes, COMMUNICATION_TYPE commType) {
 		ConfigByteLayoutShimmer3 configByteLayoutCast = getAudioConfigLayout(shimmerDevice, configBytes);
 		if(configByteLayoutCast!=null){
 			int value = mAudioModeAndGain & configByteLayoutCast.maskAudioModeAndGain;
-			if(isSensorEnabled(Configuration.Shimmer3.SENSOR_ID.SHIMMER_SOUND_LEVEL)){
+			if(isChannelSupported(shimmerDevice) && isSensorEnabled(Configuration.Shimmer3.SENSOR_ID.SHIMMER_SOUND_LEVEL)){
 				value |= configByteLayoutCast.maskSoundLevel << configByteLayoutCast.bitShiftSoundLevel;
 			}
 			configBytes[configByteLayoutCast.idxAudioConfig] = (byte) value;
@@ -216,8 +228,9 @@ public class SensorSoundLevel extends AbstractSensor {
 
 	/**
 	 * Keeps byte 233's bits 0-3 for the next write and takes this sensor's
-	 * state from bit 4. Bit 7 set (erased flash reads 0xFF) makes the firmware
-	 * read the whole byte as 0, and so does this.
+	 * state from bit 4, on firmware that has the channel; before v1.01.026 the
+	 * sensor reads as off whatever bit 4 holds. Bit 7 set (erased flash reads
+	 * 0xFF) makes the firmware read the whole byte as 0, and so does this.
 	 */
 	@Override
 	public void configBytesParse(ShimmerDevice shimmerDevice, byte[] configBytes, COMMUNICATION_TYPE commType) {
@@ -231,7 +244,8 @@ public class SensorSoundLevel extends AbstractSensor {
 
 			SensorDetails sensorDetails = mSensorMap.get(Configuration.Shimmer3.SENSOR_ID.SHIMMER_SOUND_LEVEL);
 			if(sensorDetails!=null){
-				sensorDetails.setIsEnabled(((value >> configByteLayoutCast.bitShiftSoundLevel) & configByteLayoutCast.maskSoundLevel)!=0);
+				sensorDetails.setIsEnabled(isChannelSupported(shimmerDevice)
+						&& ((value >> configByteLayoutCast.bitShiftSoundLevel) & configByteLayoutCast.maskSoundLevel)!=0);
 			}
 		}
 	}

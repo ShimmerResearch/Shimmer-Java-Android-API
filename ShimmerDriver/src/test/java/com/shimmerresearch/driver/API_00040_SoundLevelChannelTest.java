@@ -34,8 +34,10 @@ public class API_00040_SoundLevelChannelTest {
 
 	private static final int IDX_AUDIO_CONFIG = 233;
 
-	/** Shimmer3R LogAndStream: every one has the microphone */
-	private static final ShimmerVerObject S3R = new ShimmerVerObject(HW_ID.SHIMMER_3R, FW_ID.LOGANDSTREAM, 1, 1, 25);
+	/** Shimmer3R LogAndStream v1.01.026, the first release with the channel: every Shimmer3R has the microphone */
+	private static final ShimmerVerObject S3R = new ShimmerVerObject(HW_ID.SHIMMER_3R, FW_ID.LOGANDSTREAM, 1, 1, 26);
+	/** The release before it, which stores byte 233 untouched */
+	private static final ShimmerVerObject S3R_BEFORE_CHANNEL = new ShimmerVerObject(HW_ID.SHIMMER_3R, FW_ID.LOGANDSTREAM, 1, 1, 25);
 	private static final ShimmerVerObject S3 = new ShimmerVerObject(HW_ID.SHIMMER_3, FW_ID.LOGANDSTREAM, 1, 0, 17);
 
 	private static final byte LN_ACCEL_X = 0x00;
@@ -247,6 +249,35 @@ public class API_00040_SoundLevelChannelTest {
 		TestShimmer s3 = new TestShimmer(S3);
 		assertNull(s3.getSensorClass(SENSORS.SOUND_LEVEL));
 		assertNull(s3.getSensorDetails(Configuration.Shimmer3.SENSOR_ID.SHIMMER_SOUND_LEVEL));
+	}
+
+	/** The tile is offered from v1.01.026, the first release with the channel, and not before */
+	@Test
+	public void theTileIsOfferedFromV1_01_026() {
+		int tile = Configuration.Shimmer3.LABEL_SENSOR_TILE.SOUND_LEVEL.ordinal();
+		assertTrue(new TestShimmer(S3R).getSensorGroupingMap().containsKey(tile));
+		assertTrue(new TestShimmer(new ShimmerVerObject(HW_ID.SHIMMER_3R, FW_ID.LOGANDSTREAM, 1, 2, 0)).getSensorGroupingMap().containsKey(tile));
+		assertFalse(new TestShimmer(S3R_BEFORE_CHANNEL).getSensorGroupingMap().containsKey(tile));
+	}
+
+	/**
+	 * Before v1.01.026 the firmware stores byte 233 untouched, so a bit 4 read back
+	 * there has no channel behind it: it reads as off, and the next write clears it,
+	 * keeping the audio mode, so a later firmware update does not turn the channel on
+	 */
+	@Test
+	public void beforeTheChannelBit4ReadsOffAndIsClearedOnWrite() {
+		TestShimmer shimmer = readFrom(S3R_BEFORE_CHANNEL, 0x12);
+		assertFalse(shimmer.isSoundLevelEnabled());
+		assertEquals("the audio mode kept, bit 4 cleared", 0x02, writtenAudioConfig(shimmer));
+	}
+
+	/** Before v1.01.026 enabling it writes nothing: the firmware would only store the bit */
+	@Test
+	public void beforeTheChannelEnablingDoesNotSetBit4() {
+		TestShimmer shimmer = readFrom(S3R_BEFORE_CHANNEL, 0x01);
+		shimmer.setSensorEnabledState(Configuration.Shimmer3.SENSOR_ID.SHIMMER_SOUND_LEVEL, true);
+		assertEquals("the audio mode kept, bit 4 not set", 0x01, writtenAudioConfig(shimmer));
 	}
 
 	/** The DEV-99 audio mode went to 0 on every full write before DEV-1413 */

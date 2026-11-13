@@ -1337,6 +1337,8 @@ public class Configuration {
 			private static final ShimmerVerObject svoShimmer3RImuAnyExpBrdLogAndStream = new ShimmerVerObject(HW_ID.SHIMMER_3R,FW_ID.LOGANDSTREAM,0,1,0,ShimmerVerDetails.ANY_VERSION, ShimmerVerDetails.ANY_VERSION, NEW_IMU_EXP_REV.IMU);
 		
 			public static final ShimmerVerObject svoShimmer3RLogAndStream = 		new ShimmerVerObject(HW_ID.SHIMMER_3R,FW_ID.LOGANDSTREAM,ShimmerVerDetails.ANY_VERSION,ShimmerVerDetails.ANY_VERSION,ShimmerVerDetails.ANY_VERSION,ShimmerVerDetails.ANY_VERSION);
+			/** LogAndStream_Shimmer3R v1.01.026 and later: the first release with the sound level channel (DEV-1413) */
+			public static final ShimmerVerObject svoShimmer3RLogAndStreamSoundLevel = 		new ShimmerVerObject(HW_ID.SHIMMER_3R,FW_ID.LOGANDSTREAM,1,1,26,ShimmerVerDetails.ANY_VERSION);
 			public static final ShimmerVerObject svoShimmer3LogAndStreamWithSDLogSyncSupport = 		new ShimmerVerObject(HW_ID.SHIMMER_3,FW_ID.LOGANDSTREAM,0,16,11,ShimmerVerDetails.ANY_VERSION);
 			public static final ShimmerVerObject svoShimmer3RLogAndStreamWithSDLogSyncSupport = 		new ShimmerVerObject(HW_ID.SHIMMER_3R,FW_ID.LOGANDSTREAM,ShimmerVerDetails.ANY_VERSION,ShimmerVerDetails.ANY_VERSION,ShimmerVerDetails.ANY_VERSION,ShimmerVerDetails.ANY_VERSION);
 			
@@ -1544,11 +1546,12 @@ public class Configuration {
 					svoShimmer3RBrAmpUnifiedLogAndStream,
 					svoShimmer3RProto3DeluxeLogAndStream);
 			
-			//Shimmer3r sound level (DEV-1413). Every Shimmer3R has the microphone.
-			//Whether the firmware has the channel is learnt by writing
-			//configuration byte 233 bit 4 and reading it back, not from here.
+			//Shimmer3r sound level (DEV-1413), from LogAndStream_Shimmer3R v1.01.026,
+			//the first release with the channel. Earlier releases store
+			//configuration byte 233 untouched, so bit 4 would read back set there
+			//with no channel behind it: the tile is not offered on them.
 			public static final List<ShimmerVerObject> listOfCompatibleVersionInfoSoundLevel = Arrays.asList(
-					svoShimmer3RLogAndStream);
+					svoShimmer3RLogAndStreamSoundLevel);
 
 			//TODO need to update this list and remove "any"
 			public static final List<ShimmerVerObject> listOfCompatibleVersionInfoKionixKXRB52042 = Arrays.asList(
