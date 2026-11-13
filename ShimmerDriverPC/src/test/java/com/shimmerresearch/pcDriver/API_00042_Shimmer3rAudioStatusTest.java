@@ -26,6 +26,26 @@ public class API_00042_Shimmer3rAudioStatusTest {
 			return this;
 		}
 
+		boolean mIsConnectionLost = false;
+
+		@Override
+		protected void connectionLost() {
+			mIsConnectionLost = true;
+		}
+
+		boolean isTransactionCompleted() {
+			return mTransactionCompleted;
+		}
+
+		/** A command sent and left unanswered */
+		void timeOut(byte command) throws InterruptedException {
+			mCurrentCommand = command;
+			mWaitForAck = true;
+			mTransactionCompleted = false;
+			startTimerCheckForAckOrResp(1);
+			Thread.sleep(2500);
+		}
+
 		StatusShimmer answer(int state, int fault) {
 			byte[] audioStatus = new byte[32];
 			audioStatus[0] = 1;
@@ -84,5 +104,19 @@ public class API_00042_Shimmer3rAudioStatusTest {
 		StatusShimmer shimmer = new StatusShimmer(1, 1, 25).answer(4, 3);
 		assertFalse(shimmer.isAudioRecording());
 		assertTrue(shimmer.isAudioFault());
+	}
+
+	/** A public v1.01.025 leaves GET_AUDIO_STATUS unanswered: no audio, and the link stays up */
+	@Test
+	public void unansweredAudioStatusKeepsTheConnection() throws InterruptedException {
+		StatusShimmer release = new StatusShimmer(1, 1, 25);
+		release.timeOut(ShimmerPC.GET_AUDIO_STATUS_COMMAND);
+		assertFalse("connection kept", release.mIsConnectionLost);
+		assertTrue("next command may go", release.isTransactionCompleted());
+		assertFalse(release.isAudioSupported());
+
+		StatusShimmer control = new StatusShimmer(1, 1, 25);
+		control.timeOut(ShimmerPC.GET_STATUS_COMMAND);
+		assertTrue("any other unanswered command still drops the link", control.mIsConnectionLost);
 	}
 }
