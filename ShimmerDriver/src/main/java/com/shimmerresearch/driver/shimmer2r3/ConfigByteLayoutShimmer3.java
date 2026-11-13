@@ -170,6 +170,17 @@ public class ConfigByteLayoutShimmer3 extends ConfigByteLayout implements Serial
 	public int maskLIS2MDLMagRateMSB = 					0x07;
 	public int bitShiftLIS2MDLMagRateMSB =				3;
 
+	//Config Byte 233, Shimmer3R only (0 where there is none): the microphone.
+	//Bits 0-1 are the audio mode and bits 2-3 the gain preset (DEV-99), kept as
+	//read on a configuration write. Bit 4 turns on the sound level channel,
+	//0x38 (DEV-1413). The firmware clears bits 5-6, and reads the whole byte
+	//as 0 when bit 7 is set, as it is in erased flash (0xFF).
+	public int idxAudioConfig =							0;
+	public int maskAudioModeAndGain =					0x0F;
+	public int bitShiftSoundLevel =						4;
+	public int maskSoundLevel =							0x01;
+	public int maskAudioConfigInvalid =					0x80;
+
 	// Derived Channels - used by SW not FW
 	public int maskDerivedChannelsByte =				0xFF;
 	public int byteShiftDerivedSensors0 =				8*0;
@@ -397,6 +408,12 @@ public class ConfigByteLayoutShimmer3 extends ConfigByteLayout implements Serial
 			maskShowErrorLedsSd = 0x01;
 		}
 		
+		// Any Shimmer3R firmware: older builds store the byte untouched, so
+		// writing back what was read is safe on them too
+		if(mShimmerVerObject.mHardwareVersion == HW_ID.SHIMMER_3R) {
+			idxAudioConfig =						128+105;
+		}
+
 		if(mShimmerVerObject.mHardwareVersion == HW_ID.SHIMMER_3R 
 				|| compareVersions(FW_ID.LOGANDSTREAM,0,8,1)) {
 			idxBtFactoryReset =            		128+103;
@@ -547,6 +564,9 @@ public class ConfigByteLayoutShimmer3 extends ConfigByteLayout implements Serial
 		mapOfByteDescriptions.put(idxMaxExpLengthLsb, "idxMaxExpLengthLsb");
 		mapOfByteDescriptions.put(idxMacAddress, "idxMacAddress");
 		mapOfByteDescriptions.put(idxSDConfigDelayFlag, "idxSDConfigDelayFlag");
+		if(idxAudioConfig>0){
+			mapOfByteDescriptions.put(idxAudioConfig, "idxAudioConfig");
+		}
 		
 		if(idxBtFactoryReset>0){
 			mapOfByteDescriptions.put(idxBtFactoryReset, "idxBtFactoryReset");
