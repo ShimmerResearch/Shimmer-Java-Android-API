@@ -21,15 +21,21 @@ Test results land in `**/build/test-results/test/*.xml`.
 ## Releasing
 Releases are cut by the **Release Java API** workflow (`release.yml`), not from a developer machine,
 and need no uprev PR:
-1. Run the workflow on `master`. Leave `version` blank for the next patch after the last `API_v`
+1. On the bench, at the commit being released, run the hardware tests:
+   `tools/hil/run-java-hil.ps1 -Report` (see "Before every Java API release" in
+   `tools/hil/README.md`). It posts the commit status `java-hil`, and the release stops before
+   building unless that passed, or `hil_waiver` names a Jira key (recorded in the release notes;
+   the user's decision). Run it after the last merge: any later merge, docs or test code included,
+   moves `master` to a commit with no result.
+2. Run the workflow on `master`. Leave `version` blank for the next patch after the last `API_v`
    release, or type one. It tests and builds as CI does, publishes all three artifacts to GitHub
    Packages in one `gradlew publish`, tags `API_v<version>`, and creates the GitHub Release with the
    jars attached (not marked Latest — that stays with Consensys).
-2. It also builds `ShimmerJavaClass.jar` for MATLAB and opens a PR replacing
+3. It also builds `ShimmerJavaClass.jar` for MATLAB and opens a PR replacing
    `Shimmer-MATLAB-ID/libs/ShimmerJavaClass.jar` (needs the `MATLAB_REPO_TOKEN` secret). Before
    merging it, run a MATLAB example on a Shimmer3 and a Shimmer3R; MATLAB cannot run in CI. Merging
    publishes a MATLAB API release (Shimmer-MATLAB-ID's `release.yml`).
-3. It also opens a PR in `ShimmerAndroidAPI` moving the default driver version in
+4. It also opens a PR in `ShimmerAndroidAPI` moving the default driver version in
    `ShimmerAndroidInstrumentDriver/build.gradle` to this one (needs the `ANDROID_REPO_TOKEN` secret),
    so that repo's CI runs its unit tests and builds every example against it. The PR lists the steps
    that stay manual. Android's `Shimmer.java` has its own Bluetooth stream parser, so a parser, CRC or
