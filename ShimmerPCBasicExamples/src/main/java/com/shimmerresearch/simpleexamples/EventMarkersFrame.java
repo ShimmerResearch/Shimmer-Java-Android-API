@@ -211,7 +211,7 @@ public class EventMarkersFrame extends JFrame implements EventChannelListener {
 		mComboAudioMode.setToolTipText("What the unit saves from its microphone while it logs to its SD card (audio/ on the card)");
 		audio.add(mComboAudioMode, c);
 		c.gridx = 0; c.gridy = 1; c.gridwidth = 2;
-		mChkSoundLevel.setToolTipText("A channel in the data: in the plot's Other panel and the CSV. LogAndStream v1.01.026 on.");
+		mChkSoundLevel.setToolTipText("A channel in the data: in the plot's Sound level panel and the CSV. LogAndStream v1.01.026 on.");
 		audio.add(mChkSoundLevel, c);
 		c.gridwidth = 1;
 		JPanel audioButtons = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
