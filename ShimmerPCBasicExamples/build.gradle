@@ -59,3 +59,11 @@ dependencies {
     implementation name: 'ShimmerBiophysicalProcessingLibrary_Rev_0_11'
     implementation 'com.parse.bolts:bolts-tasks:1.4.0'
 }
+
+// Shimmer Capture on the Java driver (DEV-1473): ./gradlew runCapture
+tasks.register('runCapture', JavaExec) {
+    group = 'application'
+    description = 'Runs Shimmer Capture on the Java driver (com.shimmerresearch.capture.ShimmerCaptureJava)'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.shimmerresearch.capture.ShimmerCaptureJava'
+}
