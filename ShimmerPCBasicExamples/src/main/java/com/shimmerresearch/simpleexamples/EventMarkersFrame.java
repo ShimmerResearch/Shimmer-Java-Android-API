@@ -52,7 +52,10 @@ import com.shimmerresearch.driver.shimmer2r3.EventRecord;
  * <li>the live records after an opt-in, with sequence gaps flagged, and each
  * one marked on the main window's plot;</li>
  * <li>the event channel status;</li>
- * <li>an event file from a card, its header and records.</li>
+ * <li>an event file from a card, its header and records;</li>
+ * <li>the microphone (DEV-1478): configuration byte 233, the audio recording
+ * mode and the sound level, written and read back; the audio status, with
+ * its two flags.</li>
  * </ul>
  */
 public class EventMarkersFrame extends JFrame implements EventChannelListener {
@@ -88,6 +91,10 @@ public class EventMarkersFrame extends JFrame implements EventChannelListener {
 	private final JCheckBox mChkTtl = new JCheckBox("Record TTL input");
 	private final JLabel mLblConfig = new JLabel(" ");
 	private final JLabel mLblCounters = new JLabel(" ");
+	private final JComboBox<String> mComboAudioMode = new JComboBox<String>(MicrophoneSettings.modeNames().toArray(new String[0]));
+	private final JCheckBox mChkSoundLevel = new JCheckBox("Sound level (the Sound_Level channel, nominal dB(A))");
+	private final JLabel mLblAudio = new JLabel(" ");
+	private final JLabel mLblAudioStatus = new JLabel(" ");
 	private final JTextArea mTxtStatus = new JTextArea(5, 40);
 	private final JTextArea mTxtFile = new JTextArea(6, 40);
 
@@ -109,11 +116,11 @@ public class EventMarkersFrame extends JFrame implements EventChannelListener {
 	private final SimpleDateFormat mLocal = new SimpleDateFormat("HH:mm:ss.SSS");
 
 	public EventMarkersFrame(Host host) {
-		super("Event markers (DEV-971)");
+		super("Event markers and audio");
 		mHost = host;
 		mUtc.setTimeZone(TimeZone.getTimeZone("UTC"));
 		setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
-		setSize(new Dimension(1000, 720));
+		setSize(new Dimension(1000, 840));
 		addWindowListener(new WindowAdapter() {
 			@Override
 			public void windowClosed(WindowEvent e) {
@@ -147,6 +154,10 @@ public class EventMarkersFrame extends JFrame implements EventChannelListener {
 					return;
 				}
 				sb.readEventChannelSupport();
+				// v1.01.025 says whether it records audio only by answering GET_AUDIO_STATUS
+				if(sb.isAudioStatusToAsk()) {
+					sb.readAudioStatus();
+				}
 				refreshLater();
 			}
 		});
@@ -179,16 +190,7 @@ public class EventMarkersFrame extends JFrame implements EventChannelListener {
 		}));
 		configButtons.add(button("Read back", new ActionListener() {
 			public void actionPerformed(ActionEvent e) {
-				ShimmerBluetooth sb = shimmer();
-				if(sb==null) {
-					return;
-				}
-				if(sb.isStreaming() || sb.isSDLogging()) {
-					warn("Stop streaming and logging first: the firmware refuses configuration reads and writes while sensing.");
-					return;
-				}
-				sb.readConfigBytes();
-				refreshLater();
+				readBack();
 			}
 		}));
 		c.gridx = 1;
@@ -196,6 +198,45 @@ public class EventMarkersFrame extends JFrame implements EventChannelListener {
 		c.gridx = 0; c.gridy = 3; c.gridwidth = 2;
 		config.add(mLblConfig, c);
 		top.add(config);
+
+		// --- Configuration byte 233: the microphone
+		JPanel audio = new JPanel(new GridBagLayout());
+		audio.setBorder(BorderFactory.createTitledBorder("Audio, configuration byte 233 (written with the whole configuration)"));
+		c = new GridBagConstraints();
+		c.insets = new Insets(2, 4, 2, 4);
+		c.anchor = GridBagConstraints.WEST;
+		c.gridx = 0; c.gridy = 0;
+		audio.add(new JLabel("Audio recording"), c);
+		c.gridx = 1;
+		mComboAudioMode.setToolTipText("What the unit saves from its microphone while it logs to its SD card (audio/ on the card)");
+		audio.add(mComboAudioMode, c);
+		c.gridx = 0; c.gridy = 1; c.gridwidth = 2;
+		mChkSoundLevel.setToolTipText("A channel in the data: in the plot's Other panel and the CSV. LogAndStream v1.01.026 on.");
+		audio.add(mChkSoundLevel, c);
+		c.gridwidth = 1;
+		JPanel audioButtons = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+		audioButtons.add(button("Write", new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				writeAudio();
+			}
+		}));
+		audioButtons.add(button("Read back", new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				readBack();
+			}
+		}));
+		audioButtons.add(button("Read audio status", new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				readAudioStatus();
+			}
+		}));
+		c.gridx = 1; c.gridy = 2;
+		audio.add(audioButtons, c);
+		c.gridx = 0; c.gridy = 3; c.gridwidth = 2;
+		audio.add(mLblAudio, c);
+		c.gridy = 4;
+		audio.add(mLblAudioStatus, c);
+		top.add(audio);
 
 		// --- Live records
 		JPanel live = new JPanel(new FlowLayout(FlowLayout.LEFT));
@@ -315,13 +356,17 @@ public class EventMarkersFrame extends JFrame implements EventChannelListener {
 		if(!(device instanceof ShimmerBluetooth)) {
 			mLblSupport.setText("No Shimmer3 / Shimmer3R connected");
 			mLblConfig.setText(" ");
+			mLblAudio.setText(" ");
+			mLblAudioStatus.setText(" ");
 			return;
 		}
 		ShimmerBluetooth sb = (ShimmerBluetooth) device;
 		attach(sb);
 		Boolean supported = sb.isEventChannelSupported();
 		mLblSupport.setText(sb.getFirmwareVersionParsed() + " - event channel: "
-				+ (supported==null? "not asked yet" : (supported? "yes" : "no")));
+				+ (supported==null? "not asked yet" : (supported? "yes" : "no"))
+				+ ", audio recording: " + (MicrophoneSettings.recordsAudio(sb)? "yes" : "no"));
+		refreshAudio(sb);
 		if(sb.isButtonLogModeKnown()) {
 			int buttonMode = sb.getButtonMode();
 			int logTriggers = sb.getLogTriggers();
@@ -340,6 +385,95 @@ public class EventMarkersFrame extends JFrame implements EventChannelListener {
 			mLblConfig.setText("Byte 232 not read from this unit yet");
 		}
 		updateCounters();
+	}
+
+	/** Byte 233 and the audio flags as the driver holds them */
+	private void refreshAudio(ShimmerBluetooth sb) {
+		boolean recordsAudio = MicrophoneSettings.recordsAudio(sb);
+		boolean hasSoundLevel = MicrophoneSettings.hasSoundLevel(sb);
+		mComboAudioMode.setEnabled(recordsAudio);
+		mChkSoundLevel.setEnabled(hasSoundLevel);
+		if(!recordsAudio) {
+			mLblAudio.setText("This unit does not record audio: LogAndStream_Shimmer3R v1.01.026 or later does.");
+			mLblAudioStatus.setText(" ");
+			return;
+		}
+		int mode = sb.getAudioMode();
+		if(mode>=0 && mode<mComboAudioMode.getItemCount()) {
+			mComboAudioMode.setSelectedIndex(mode);
+		}
+		mChkSoundLevel.setSelected(MicrophoneSettings.isSoundLevelOn(sb));
+		if(sb.isAudioConfigKnown()) {
+			int asRead = MicrophoneSettings.modeAsRead(sb);
+			mLblAudio.setText("On the device: audio recording " + MicrophoneSettings.modeNames().get(asRead)
+					+ (hasSoundLevel? ", sound level " + (MicrophoneSettings.isSoundLevelOn(sb)? "on" : "off") : ", no sound level channel (before v1.01.026)"));
+		}
+		else {
+			mLblAudio.setText("Byte 233 not read from this unit yet");
+		}
+		mLblAudioStatus.setText("Status: " + MicrophoneSettings.audioFlags(sb.isAudioRecording(), sb.isAudioFault()));
+	}
+
+	private void readBack() {
+		ShimmerBluetooth sb = shimmer();
+		if(sb==null) {
+			return;
+		}
+		if(sb.isStreaming() || sb.isSDLogging()) {
+			warn("Stop streaming and logging first: the firmware refuses configuration reads and writes while sensing.");
+			return;
+		}
+		sb.readConfigBytes();
+		refreshLater();
+	}
+
+	/** Byte 233: asks first where the new mode keeps raw audio and the unit's own does not, since raw audio records speech */
+	private void writeAudio() {
+		ShimmerBluetooth sb = shimmer();
+		if(sb==null) {
+			return;
+		}
+		if(!MicrophoneSettings.recordsAudio(sb)) {
+			warn("This unit is not known to record audio, so byte 233 is not written.");
+			return;
+		}
+		if(sb.isStreaming() || sb.isSDLogging()) {
+			warn("Stop streaming and logging first: the firmware refuses configuration writes while sensing.");
+			return;
+		}
+		int mode = mComboAudioMode.getSelectedIndex();
+		boolean agreed = false;
+		if(MicrophoneSettings.asksFirst(mode, MicrophoneSettings.modeAsRead(sb))) {
+			int answer = JOptionPane.showConfirmDialog(this, MicrophoneSettings.speechQuestion(MicrophoneSettings.modeNames().get(mode)),
+					"Raw audio records speech", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+			if(answer!=JOptionPane.YES_OPTION) {
+				mLblAudio.setText("Not written: raw audio was not agreed to");
+				return;
+			}
+			agreed = true;
+		}
+		MicrophoneSettings.write(sb, mode, mChkSoundLevel.isSelected(), agreed);
+		mLblAudio.setText("Written; reading back...");
+		refreshLater();
+	}
+
+	/** GET_AUDIO_STATUS, from READY: the driver reads its reply only between other commands, not between data packets */
+	private void readAudioStatus() {
+		ShimmerBluetooth sb = shimmer();
+		if(sb==null) {
+			return;
+		}
+		if(!MicrophoneSettings.recordsAudio(sb)) {
+			warn("Not sent: this unit is not known to record audio.");
+			return;
+		}
+		if(sb.isStreaming()) {
+			warn("Stop streaming first: the driver reads the audio status reply only while not streaming.");
+			return;
+		}
+		sb.readAudioStatus();
+		mLblAudioStatus.setText("Status: reading...");
+		refreshLater();
 	}
 
 	private void refreshLater() {

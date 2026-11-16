@@ -16,6 +16,7 @@ import com.shimmerresearch.driver.shimmer2r3.BluetoothModuleVersionDetails;
 import com.shimmerresearch.driverUtilities.ChannelDetails.CHANNEL_TYPE;
 import com.shimmerresearch.driverUtilities.ShimmerBattStatusDetails;
 import com.shimmerresearch.exceptions.ShimmerException;
+import com.shimmerresearch.simpleexamples.MicrophoneSettings;
 import com.shimmerresearch.tools.bluetooth.BasicShimmerBluetoothManagerPc;
 
 /**
@@ -461,7 +462,10 @@ public final class CaptureDevice {
 		return b.getBattVoltageParsed() + ", " + b.getEstimatedChargePercentageParsed() + ", " + b.getChargingStatusParsed();
 	}
 
-	/** The status flags as the last status read left them */
+	/**
+	 * The status flags as the last status read left them. A unit that records audio adds the two
+	 * audio flags, which it sends in its status whenever either changes.
+	 */
 	public String getStatusDetails() {
 		ShimmerBluetooth sb = shimmer();
 		if (sb == null) {
@@ -470,7 +474,26 @@ public final class CaptureDevice {
 		return "docked " + yes(sb.isDocked()) + ", sensing " + yes(sb.isSensing()) + ", RTC set " + yes(sb.mIsRtcSet)
 				+ ", SD logging " + yes(sb.isSDLogging()) + ", streaming " + yes(sb.isStreaming())
 				+ ", SD in " + yes(sb.isSDPresent()) + ", SD error " + yes(sb.isSDError())
-				+ ", red LED " + yes(sb.mIsRedLedOn) + ", USB " + yes(sb.isUsbPluggedIn());
+				+ ", red LED " + yes(sb.mIsRedLedOn) + ", USB " + yes(sb.isUsbPluggedIn())
+				+ (MicrophoneSettings.recordsAudio(sb) ? ", " + MicrophoneSettings.audioFlags(sb.isAudioRecording(), sb.isAudioFault()) : "");
+	}
+
+	/** Whether the firmware has the event markers and audio recording, from what the driver asked at connect */
+	public String getFeatures() {
+		ShimmerBluetooth sb = shimmer();
+		if (sb == null) {
+			return "-";
+		}
+		return features(sb.isEventChannelSupported(), MicrophoneSettings.recordsAudio(sb));
+	}
+
+	/**
+	 * The event markers as yes, no or not asked yet. Audio recording is yes or no: the driver keeps
+	 * no "not asked yet" for it, so a v1.01.025 unit reads no until it has answered GET_AUDIO_STATUS.
+	 */
+	static String features(Boolean eventChannel, boolean recordsAudio) {
+		return "event markers " + (eventChannel == null ? "not asked yet" : yes(eventChannel))
+				+ ", audio recording " + yes(recordsAudio);
 	}
 
 	public String getMac() {

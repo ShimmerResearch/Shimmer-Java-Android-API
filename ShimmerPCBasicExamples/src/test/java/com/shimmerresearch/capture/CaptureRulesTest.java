@@ -14,13 +14,17 @@ import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
 import com.shimmerresearch.bluetooth.ShimmerBluetooth.BT_STATE;
+import com.shimmerresearch.driver.Configuration;
 import com.shimmerresearch.driver.Configuration.COMMUNICATION_TYPE;
 import com.shimmerresearch.driver.ObjectCluster;
+import com.shimmerresearch.driver.ShimmerObject;
 import com.shimmerresearch.driverUtilities.ChannelDetails.CHANNEL_TYPE;
 import com.shimmerresearch.driverUtilities.ShimmerVerDetails.FW_ID;
 import com.shimmerresearch.driverUtilities.ShimmerVerDetails.HW_ID;
 import com.shimmerresearch.driverUtilities.ShimmerVerObject;
 import com.shimmerresearch.pcDriver.ShimmerPC;
+import com.shimmerresearch.sensors.soundlevel.SensorSoundLevel;
+import com.shimmerresearch.simpleexamples.MicrophoneSettings;
 
 /**
  * The rules shimmer-host-core's bindings/CAPTURE.md sets every Capture app, with the inputs and
@@ -289,6 +293,147 @@ public class CaptureRulesTest {
 		assertEquals("FAILED", CaptureDevice.captureState(BT_STATE.CONNECTION_FAILED));
 		assertEquals("DISCONNECTED", CaptureDevice.captureState(BT_STATE.CONNECTION_LOST));
 		assertEquals("DISCONNECTED", CaptureDevice.captureState(BT_STATE.DISCONNECTED));
+	}
+
+	// ------------------------------------------------------------------
+	// The microphone (DEV-1478): CAPTURE.md's "Event markers and audio recording"
+	// ------------------------------------------------------------------
+
+	/** LogAndStream_Shimmer3R v1.01.026, the first release with the sound level and the audio flags */
+	private static final ShimmerVerObject S3R_026 = new ShimmerVerObject(HW_ID.SHIMMER_3R, FW_ID.LOGANDSTREAM, 1, 1, 26);
+	private static final ShimmerVerObject S3R_025 = new ShimmerVerObject(HW_ID.SHIMMER_3R, FW_ID.LOGANDSTREAM, 1, 1, 25);
+	private static final int OFF = Configuration.Shimmer3.AUDIO_MODE_OFF;
+	private static final int FINGERPRINT = Configuration.Shimmer3.AUDIO_MODE_FINGERPRINT;
+	private static final int FINGERPRINT_AND_RAW = Configuration.Shimmer3.AUDIO_MODE_FINGERPRINT_AND_RAW;
+	private static final int RAW = Configuration.Shimmer3.AUDIO_MODE_RAW;
+	private static final int SOUND_LEVEL_BIT = 0x10;
+
+	/** A Shimmer3R whose configuration was read with {@code audioConfig} in byte 233 */
+	private static ShimmerPC readFrom(ShimmerVerObject version, int audioConfig) {
+		ShimmerPC source = new ShimmerPC("COM98");
+		source.setShimmerVersionObjectAndCreateSensorMap(version);
+		byte[] config = source.generateConfigBytesForWritingToShimmer().clone();
+		config[233] = (byte) audioConfig;
+		ShimmerPC shimmer = new ShimmerPC("COM32");
+		shimmer.setShimmerVersionObjectAndCreateSensorMap(version);
+		shimmer.configBytesParse(config, COMMUNICATION_TYPE.BLUETOOTH);
+		return shimmer;
+	}
+
+	@Test
+	public void theAudioRecordingSettingIsTheDriversFourModesOffFirst() {
+		assertEquals(Arrays.asList("Off", "Fingerprint only", "Fingerprint and raw audio", "Raw audio only"), MicrophoneSettings.modeNames());
+		assertEquals("Fingerprint only", MicrophoneSettings.modeNames().get(FINGERPRINT));
+		assertEquals("Raw audio only", MicrophoneSettings.modeNames().get(RAW));
+	}
+
+	@Test
+	public void writeAsksFirstWhereTheNewModeKeepsRawAudioAndTheUnitsOwnDoesNot() {
+		assertTrue(MicrophoneSettings.asksFirst(RAW, OFF));
+		assertTrue(MicrophoneSettings.asksFirst(RAW, FINGERPRINT));
+		assertTrue(MicrophoneSettings.asksFirst(FINGERPRINT_AND_RAW, FINGERPRINT));
+		assertFalse("the unit records speech already", MicrophoneSettings.asksFirst(RAW, FINGERPRINT_AND_RAW));
+		assertFalse("the unit records speech already", MicrophoneSettings.asksFirst(FINGERPRINT_AND_RAW, RAW));
+		assertFalse(MicrophoneSettings.asksFirst(FINGERPRINT, RAW));
+		assertFalse(MicrophoneSettings.asksFirst(OFF, OFF));
+		assertFalse(MicrophoneSettings.asksFirst(FINGERPRINT, OFF));
+	}
+
+	@Test
+	public void aRawModeAgreedToIsWritten() {
+		assertEquals(RAW, MicrophoneSettings.byteToWrite(readFrom(S3R_026, FINGERPRINT), RAW, false, true));
+		assertEquals(FINGERPRINT_AND_RAW, MicrophoneSettings.byteToWrite(readFrom(S3R_026, OFF), FINGERPRINT_AND_RAW, false, true));
+	}
+
+	@Test
+	public void aRawModeNotAgreedToIsWrittenWithoutTheRawAudio() {
+		assertEquals(OFF, MicrophoneSettings.byteToWrite(readFrom(S3R_026, FINGERPRINT), RAW, false, false));
+		assertEquals(FINGERPRINT, MicrophoneSettings.byteToWrite(readFrom(S3R_026, OFF), FINGERPRINT_AND_RAW, false, false));
+	}
+
+	@Test
+	public void aUnitThatKeepsRawAudioAlreadyIsNotAskedAndKeepsIt() {
+		assertEquals(RAW, MicrophoneSettings.byteToWrite(readFrom(S3R_026, FINGERPRINT_AND_RAW), RAW, false, false));
+		assertEquals(FINGERPRINT_AND_RAW, MicrophoneSettings.byteToWrite(readFrom(S3R_026, FINGERPRINT_AND_RAW), FINGERPRINT_AND_RAW, false, false));
+	}
+
+	@Test
+	public void theDriversRawAudioSwitchIsPutBackAfterAWrite() {
+		boolean was = ShimmerObject.isRawAudioAllowed();
+		ShimmerObject.setRawAudioAllowed(false);
+		try {
+			MicrophoneSettings.byteToWrite(readFrom(S3R_026, OFF), RAW, false, true);
+			assertFalse(ShimmerObject.isRawAudioAllowed());
+		} finally {
+			ShimmerObject.setRawAudioAllowed(was);
+		}
+	}
+
+	@Test
+	public void theSoundLevelIsBit4FromV1_01_026() {
+		assertEquals(FINGERPRINT | SOUND_LEVEL_BIT, MicrophoneSettings.byteToWrite(readFrom(S3R_026, FINGERPRINT), FINGERPRINT, true, false));
+		assertEquals(FINGERPRINT, MicrophoneSettings.byteToWrite(readFrom(S3R_026, FINGERPRINT | SOUND_LEVEL_BIT), FINGERPRINT, false, false));
+		assertEquals("v1.01.025 has no sound level channel", FINGERPRINT,
+				MicrophoneSettings.byteToWrite(readFrom(S3R_025, FINGERPRINT), FINGERPRINT, true, false));
+	}
+
+	@Test
+	public void theUnitsOwnModeIsTheOneReadWhateverIsSetSince() {
+		ShimmerPC shimmer = readFrom(S3R_026, FINGERPRINT_AND_RAW | SOUND_LEVEL_BIT);
+		assertEquals(FINGERPRINT_AND_RAW, MicrophoneSettings.modeAsRead(shimmer));
+		assertTrue(MicrophoneSettings.isSoundLevelOn(shimmer));
+		shimmer.setAudioMode(OFF);
+		assertEquals(FINGERPRINT_AND_RAW, MicrophoneSettings.modeAsRead(shimmer));
+	}
+
+	@Test
+	public void whichUnitsRecordAudioAndHaveTheSoundLevel() {
+		ShimmerPC s3r026 = readFrom(S3R_026, OFF);
+		assertTrue(MicrophoneSettings.recordsAudio(s3r026));
+		assertTrue(MicrophoneSettings.hasSoundLevel(s3r026));
+		ShimmerPC s3r025 = readFrom(S3R_025, OFF);
+		assertFalse("v1.01.025 records audio only once it answers GET_AUDIO_STATUS", MicrophoneSettings.recordsAudio(s3r025));
+		assertFalse(MicrophoneSettings.hasSoundLevel(s3r025));
+		ShimmerPC s3 = new ShimmerPC("COM97");
+		s3.setShimmerVersionObjectAndCreateSensorMap(new ShimmerVerObject(HW_ID.SHIMMER_3, FW_ID.LOGANDSTREAM, 1, 1, 26));
+		assertFalse(MicrophoneSettings.recordsAudio(s3));
+		assertFalse(MicrophoneSettings.hasSoundLevel(s3));
+		assertFalse(MicrophoneSettings.recordsAudio(null));
+	}
+
+	@Test
+	public void theDevicePanelShowsTheAudioFlagsAndWhatTheFirmwareHas() {
+		assertEquals("recording audio yes, audio fault no", MicrophoneSettings.audioFlags(true, false));
+		assertEquals("recording audio no, audio fault yes", MicrophoneSettings.audioFlags(false, true));
+		assertEquals("event markers not asked yet, audio recording no", CaptureDevice.features(null, false));
+		assertEquals("event markers yes, audio recording yes", CaptureDevice.features(Boolean.TRUE, true));
+		assertEquals("event markers no, audio recording no", CaptureDevice.features(Boolean.FALSE, false));
+	}
+
+	@Test
+	public void theSoundLevelIsAColumnOfTheRecordingWithNaNWhereThereIsNoLevel() throws Exception {
+		File folder = tmp.newFolder("sound");
+		ObjectCluster first = sample(1420786, 1790960000331.4);
+		first.addData("Sound_Level", CHANNEL_TYPE.UNCAL, "no_units", -32768);
+		first.addData("Sound_Level", CHANNEL_TYPE.CAL, Configuration.CHANNEL_UNITS.DECIBELS_A, SensorSoundLevel.calibrateSoundLevel(-32768));
+		ObjectCluster second = sample(1421426, 1790960000351.0);
+		second.addData("Sound_Level", CHANNEL_TYPE.UNCAL, "no_units", 5432);
+		second.addData("Sound_Level", CHANNEL_TYPE.CAL, Configuration.CHANNEL_UNITS.DECIBELS_A, SensorSoundLevel.calibrateSoundLevel(5432));
+		CsvRecording r = new CsvRecording(folder, "Shimmer3R", "E747AA7D2F31", first, 1792999200000L);
+		r.append(first, 1790960000331.4);
+		r.append(second, 1790960000351.0);
+		r.close();
+		String[] rows = new String(Files.readAllBytes(r.getFile().toPath()), StandardCharsets.UTF_8).split("\r\n", -1);
+		List<String> names = Arrays.asList(rows[0].split(","));
+		int cal = names.indexOf("Sound_Level_CAL");
+		int raw = names.indexOf("Sound_Level_RAW");
+		assertTrue(names.toString(), cal > 0 && raw == cal + 1);
+		assertEquals(Configuration.CHANNEL_UNITS.DECIBELS_A, rows[1].split(",")[cal]);
+		assertEquals("NaN", rows[2].split(",")[cal]);
+		assertEquals("-32768", rows[2].split(",")[raw]);
+		assertEquals("54.32", rows[3].split(",")[cal]);
+		assertEquals("5432", rows[3].split(",")[raw]);
+		assertEquals("Other", Panels.of("Sound_Level"));
 	}
 
 }
