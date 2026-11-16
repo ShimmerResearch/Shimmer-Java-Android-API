@@ -150,6 +150,11 @@ public abstract class ShimmerDevice extends BasicProcessWithCallBack implements 
 	protected boolean mIsInitialised = false;
 	private boolean mIsDocked = false;
 	private boolean mIsUsbPluggedIn = false;
+	/** Shimmer3R microphone, from the status: audio captured for the current log, and this session's audio failed or degraded */
+	private boolean mIsAudioRecording = false;
+	private boolean mIsAudioFault = false;
+	/** A v1.01.025 unit's answer to GET_AUDIO_STATUS: null until asked */
+	private Boolean mIsAudioStatusAnswered = null;
 	private boolean mIsDockCommsSuccessful = false;
 	public boolean mIsUsbDfuMode= false;
 	protected boolean mHaveAttemptedToReadConfig = false;
@@ -324,6 +329,7 @@ public abstract class ShimmerDevice extends BasicProcessWithCallBack implements 
 		public static final String TRIAL_ID = "Trial_Id";
 		public static final String N_SHIMMER = "NShimmer";
 		public static final String LOW_POWER_AUTOSTOP = "Low_Power_Autostop";
+		public static final String AUDIO_MODE = "Audio_Mode";
 		
 		public static final String SHIMMER_VERSION = "Shimmer_Version";
 		public static final String FW_VERSION = "FW_ID";
@@ -1080,6 +1086,38 @@ public abstract class ShimmerDevice extends BasicProcessWithCallBack implements 
 	
 	public boolean isUsbPluggedIn() {
 		return mIsUsbPluggedIn;
+	}
+
+	public void setIsAudioRecording(boolean isAudioRecording) {
+		mIsAudioRecording = isAudioRecording;
+	}
+
+	public boolean isAudioRecording() {
+		return mIsAudioRecording;
+	}
+
+	public void setIsAudioFault(boolean isAudioFault) {
+		mIsAudioFault = isAudioFault;
+	}
+
+	public boolean isAudioFault() {
+		return mIsAudioFault;
+	}
+
+	public void setIsAudioStatusAnswered(boolean isAnswered) {
+		mIsAudioStatusAnswered = isAnswered;
+	}
+
+	/**
+	 * Whether this unit records audio: LogAndStream_Shimmer3R v1.01.026 or later by its version; a v1.01.025
+	 * development build only once it has answered GET_AUDIO_STATUS (SHIMMER3R_AUDIO.md §5).
+	 */
+	public boolean isAudioSupported() {
+		if (isVerCompatibleWithAnyOf(Configuration.Shimmer3.CompatibilityInfoForMaps.listOfCompatibleVersionInfoSoundLevel)) {
+			return true;
+		}
+		return isVerCompatibleWithAnyOf(Configuration.Shimmer3.configOptionAudioMode.mListOfCompatibleVersionInfo)
+				&& Boolean.TRUE.equals(mIsAudioStatusAnswered);
 	}
 	
 	public boolean isUsbDfuMode(){

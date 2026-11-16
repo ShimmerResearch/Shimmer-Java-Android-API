@@ -907,6 +907,7 @@ public class Configuration {
 			public static final String ENABLE_ERROR_LEDS_RTC = "RTC Error LEDs";
 			public static final String ENABLE_ERROR_LEDS_SD = "SD Error LEDs";
 			public static final String LOW_POWER_AUTOSTOP = "Low-power Autostop";
+			public static final String AUDIO_MODE = "Audio Mode";
 			/** Configuration byte 232 bits 0-2 (DEV-971), an Integer, see ButtonLogMode.BUTTON_MODE_* */
 			public static final String BUTTON_MODE = "Button Mode";
 			/** Configuration byte 232 bits 3-4 (DEV-971), an Integer, see ButtonLogMode.LOG_TRIGGERS_* */
@@ -2023,6 +2024,21 @@ public class Configuration {
 				ConfigOptionDetailsSensor.GUI_COMPONENT_TYPE.CHECKBOX,
 				Arrays.asList(new ShimmerVerObject(FW_ID.LOGANDSTREAM, 0, 9, 6),
 						new ShimmerVerObject(FW_ID.SDLOG, 0, 17, 3)));
+
+	    /** What a Shimmer3R records from its microphone while logging to SD (DEV-99, config byte 233). */
+	    public static final int AUDIO_MODE_OFF = 0;
+	    public static final int AUDIO_MODE_FINGERPRINT = 1;
+	    public static final int AUDIO_MODE_FINGERPRINT_AND_RAW = 2;
+	    public static final int AUDIO_MODE_RAW = 3;
+	    public static final String[] ListofAudioMode = {"Off", "Fingerprint only", "Fingerprint and raw audio", "Raw audio only"};
+	    public static final Integer[] ListofAudioModeConfigValues = {AUDIO_MODE_OFF, AUDIO_MODE_FINGERPRINT, AUDIO_MODE_FINGERPRINT_AND_RAW, AUDIO_MODE_RAW};
+	    public static final ConfigOptionDetailsSensor configOptionAudioMode = new ConfigOptionDetailsSensor(
+				Configuration.Shimmer3.GuiLabelConfig.AUDIO_MODE,
+				ShimmerDevice.DatabaseConfigHandle.AUDIO_MODE,
+				ListofAudioMode,
+				ListofAudioModeConfigValues,
+				ConfigOptionDetailsSensor.GUI_COMPONENT_TYPE.COMBOBOX,
+				Arrays.asList(new ShimmerVerObject(HW_ID.SHIMMER_3R, FW_ID.LOGANDSTREAM, 1, 1, 25)));
 	    
 	    public static final Map<String, ConfigOptionDetailsSensor> mConfigOptionsMapRef;
 	    static {
@@ -2296,6 +2312,7 @@ public class Configuration {
 					CompatibilityInfoForMaps.listOfCompatibleVersionInfoAnyExpBoardAndFw));
 
 			aMap.put(Configuration.Shimmer3.GuiLabelConfig.LOW_POWER_AUTOSTOP, configOptionLowPowerAutoStop);
+			aMap.put(Configuration.Shimmer3.GuiLabelConfig.AUDIO_MODE, configOptionAudioMode);
 
 	        mConfigOptionsMapRef3r = Collections.unmodifiableMap(aMap);
 	    }

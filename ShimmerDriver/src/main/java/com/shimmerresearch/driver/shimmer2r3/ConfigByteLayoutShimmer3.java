@@ -177,6 +177,7 @@ public class ConfigByteLayoutShimmer3 extends ConfigByteLayout implements Serial
 	//as 0 when bit 7 is set, as it is in erased flash (0xFF).
 	public int idxAudioConfig =							0;
 	public int maskAudioModeAndGain =					0x0F;
+	public int maskAudioMode =							0x03;
 	public int bitShiftSoundLevel =						4;
 	public int maskSoundLevel =							0x01;
 	public int maskAudioConfigInvalid =					0x80;
