@@ -264,12 +264,13 @@ public final class ShimmerCaptureJava implements CaptureDevice.Listener {
 				clearPlots();
 			}
 		}));
-		JButton events = button("Event markers...", mConnectedOnly, new ActionListener() {
+		JButton events = button("Event markers and audio...", mConnectedOnly, new ActionListener() {
 			public void actionPerformed(ActionEvent e) {
 				openEventMarkers();
 			}
 		});
-		events.setToolTipText("The button and TTL event channel (Shimmer3R, LogAndStream v1.01.026 on): byte 232, opt in, live records; each edge is marked on the plot");
+		events.setToolTipText("Shimmer3R, LogAndStream v1.01.026 on: the button and TTL event channel (byte 232, opt in, live records, each edge"
+				+ " marked on the plot) and the microphone (byte 233: audio recording and the sound level; the audio status)");
 		bar.add(events);
 
 		mPlotPanel.setLayout(new BoxLayout(mPlotPanel, BoxLayout.Y_AXIS));
@@ -444,6 +445,7 @@ public final class ShimmerCaptureJava implements CaptureDevice.Listener {
 
 		mDetails.setText("Battery:   " + mDevice.getBatteryDetails() + "\n"
 				+ "Status:    " + mDevice.getStatusDetails() + "\n"
+				+ "Firmware has: " + mDevice.getFeatures() + "\n"
 				+ "MAC:       " + mDevice.getMac() + "\n"
 				+ "Bluetooth module: " + mDevice.getBluetoothModule() + "\n"
 				+ "Clock:     " + mDevice.getClockDetails() + "\n"

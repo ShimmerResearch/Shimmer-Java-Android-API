@@ -38,7 +38,10 @@ Recordings go to `Shimmer Capture` in Documents.
     The tests use host-core's Java Capture test inputs and results.
 - **Stream tab:**
   - Start, Stop and Record to CSV.
-  - The plot, in CAPTURE.md's panels by channel name: 5, 10 or 30 s, calibrated or raw, Clear.
+  - The plot, in CAPTURE.md's panels by channel name: 5, 10 or 30 s, calibrated or raw, Clear. A
+    Shimmer3R's `Sound_Level` (nominal dB(A)) is in the Other panel, without the samples where the
+    unit has no level yet.
+  - **Event markers and audio...**: the event channel and the microphone (below).
 - **Device tab:**
   - Read battery, Read status, Toggle red LED (then the status, whose flag says whether it is on).
   - Read clock, Set clock (from this host's, then read back), Read Bluetooth module.
@@ -48,6 +51,10 @@ Recordings go to `Shimmer Capture` in Documents.
   - **Sensors...** and **Settings...**: the driver's own configuration dialogs.
   - The chosen device's battery (volts, percent, charger), the status's nine flags, its MAC, its
     Bluetooth module and its clock.
+  - Where the unit records audio, the status's two audio flags too: Recording audio and Audio
+    fault. The unit sends its status whenever either changes.
+  - Whether the firmware has the event markers (yes, no, or not asked yet) and audio recording
+    (yes or no), from what the driver asks at connect.
 - **The log** at the bottom.
 
 **The recording** is CAPTURE.md's, so one script reads any app's files:
@@ -56,7 +63,8 @@ Recordings go to `Shimmer Capture` in Documents.
   `<channel>_CAL`, then `<channel>_RAW`, in the driver's own order. The raw `Timestamp` is `TIMESTAMP`
   alone. Then a row of units.
 - **Rows:** one per sample, each value written as JavaScript writes a number. RFC 4180 cells, CRLF
-  line ends.
+  line ends. `Sound_Level_CAL` is `NaN` where the unit has no level yet, and `Sound_Level_RAW` is
+  then `-32768`.
 - **When it closes:** when the recording stops, the stream stops, the link drops, or the window is
   closed.
 
@@ -92,14 +100,22 @@ What CAPTURE.md asks for that this app does not do:
 - **The state names:** they are the driver's, mapped to CAPTURE.md's. CONNECTED and SDLOGGING are
   READY, a stream with or without logging is STREAMING, and a lost link is DISCONNECTED, counted in
   Link lost. The driver has no STARTING, STOPPING or TESTING.
+- **Event markers and audio,** which CAPTURE.md also lists as not yet in any app: the records saved
+  as CSV; an event file opened from disk is here, but not a WAV header or a fingerprint file; and
+  the `events/` and `audio/` files downloaded with their session (no SD card over Bluetooth in the
+  driver).
+- **Audio recording's "not asked yet":** the driver keeps none, so a v1.01.025 unit shows no until
+  it has answered GET_AUDIO_STATUS, which the driver asks at connect.
 
 ## Tests
 
 `./gradlew :test --tests 'com.shimmerresearch.capture.*'` runs `CaptureRulesTest`. It covers:
-- the recording's numbers, cells, file name, columns and units;
+- the recording's numbers, cells, file name, columns and units, the sound level's among them;
 - the figures' arithmetic;
 - the plot panels;
-- the state mapping.
+- the state mapping;
+- the microphone: the four audio modes, when Write asks before raw audio, what byte 233 is written
+  as (with and without the answer yes, and the sound level bit), and the audio flags as shown.
 
 CI does not build this module, so run the tests locally.
 
@@ -112,25 +128,50 @@ CI does not build this module, so run the tests locally.
 | `ReceptionStats` | The figures' arithmetic |
 | `CsvRecording` | The CSV |
 | `Panels`, `PlotView` | The plot |
+| `simpleexamples.EventMarkersFrame` | The event markers and audio window, shared with `SensorMapsExample` |
+| `simpleexamples.MicrophoneSettings` | Byte 233's rules: the audio modes, raw audio, the sound level; no Swing |
 
-## Event markers
+## Event markers and audio
 
-The Stream tab's **Event markers...** opens the event channel window (`EventMarkersFrame`, DEV-971,
-from ShimmerResearch/Shimmer-Java-Android-API#343). It
-covers a Shimmer3R on LogAndStream v1.01.026 or later:
+The Stream tab's **Event markers and audio...** opens the window for CAPTURE.md's "Event markers
+and audio recording" (`EventMarkersFrame`: DEV-971, from ShimmerResearch/Shimmer-Java-Android-API#343,
+and DEV-1478). It covers a Shimmer3R on LogAndStream v1.01.026 or later, and the top line says
+whether the unit has each part.
+
+**Event markers:**
 - byte 232: the button mode, what starts logging, and the TTL input;
 - opt in and out of live records, with sequence gaps flagged;
 - the status, and an event file read from a card.
+
+**Audio,** configuration byte 233:
+- **Audio recording:** Off, Fingerprint only, Fingerprint and raw audio, or Raw audio only. That is
+  what the unit saves in `audio/` on its card while it logs.
+- **Sound level:** the `Sound_Level` channel, from v1.01.026. Writing it asks the unit for its
+  channel list again, since it adds or removes a channel.
+- **Write** writes the whole configuration and reads it back, so the line below it shows what the
+  unit kept. Raw audio records speech: where the new mode keeps raw audio and the unit's own does
+  not, Write asks first and writes nothing if the answer is no. The driver's own rule otherwise
+  writes the mode without the raw audio.
+- **Read audio status** (GET_AUDIO_STATUS), from READY only: the driver reads its reply between
+  commands, not between data packets. It shows the Recording audio and Audio fault flags.
 
 While streaming, each button press and release, and each TTL edge, is also drawn on every plot panel
 shown, as a dashed line labelled `press`, `release`, `TTL high` or `TTL low`. The plot's x axis is the
 samples' device time, and a record carries the same clock in full: its low 24 bits line up with a
 packet's timestamp.
 
-To try it:
-1. Connect, then open Event markers.
+To try the markers:
+1. Connect, then open Event markers and audio.
 2. Set the button to mode 5 (every press recorded) and click Write.
 3. Click Opt in.
 4. Start streaming and press the button.
 
 Markers are not written to the CSV.
+
+To try the microphone:
+1. Connect, then open Event markers and audio.
+2. Set Audio recording to Fingerprint only, tick Sound level, and click Write.
+3. Check the line under the buttons for what the unit kept.
+4. Start streaming: `Sound_Level` appears in the Other panel.
+5. Stop streaming, start logging on the Device tab, then click Read audio status to see whether it
+   is recording audio.
