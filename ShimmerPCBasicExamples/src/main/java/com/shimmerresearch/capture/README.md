@@ -39,8 +39,8 @@ Recordings go to `Shimmer Capture` in Documents.
 - **Stream tab:**
   - Start, Stop and Record to CSV.
   - The plot, in CAPTURE.md's panels by channel name: 5, 10 or 30 s, calibrated or raw, Clear. A
-    Shimmer3R's `Sound_Level` (nominal dB(A)) is in the Other panel, without the samples where the
-    unit has no level yet.
+    Shimmer3R's `Sound_Level` (nominal dB(A)) has a Sound level panel of its own, without the samples
+    where the unit has no level yet.
   - **Event markers and audio...**: the event channel and the microphone (below).
 - **Device tab:**
   - Read battery, Read status, Toggle red LED (then the status, whose flag says whether it is on).
@@ -172,6 +172,6 @@ To try the microphone:
 1. Connect, then open Event markers and audio.
 2. Set Audio recording to Fingerprint only, tick Sound level, and click Write.
 3. Check the line under the buttons for what the unit kept.
-4. Start streaming: `Sound_Level` appears in the Other panel.
+4. Start streaming: `Sound_Level` appears in the Sound level panel.
 5. Stop streaming, start logging on the Device tab, then click Read audio status to see whether it
    is recording audio.

@@ -274,7 +274,7 @@ public class CaptureRulesTest {
 		assertEquals("GSR", Panels.of("GSR_Skin_Conductance"));
 		assertEquals("PPG", Panels.of("PPG_A13"));
 		assertEquals("PPG", Panels.of("PPG1_A12"));
-		assertEquals("Other", Panels.of("Sound_Level"));
+		assertEquals("Sound level", Panels.of("Sound_Level"));
 		assertEquals("Other", Panels.of("Batt_Percentage"));
 		assertNull(Panels.of("Timestamp"));
 		assertNull(Panels.of("System_Timestamp_Plot"));
@@ -433,7 +433,8 @@ public class CaptureRulesTest {
 		assertEquals("-32768", rows[2].split(",")[raw]);
 		assertEquals("54.32", rows[3].split(",")[cal]);
 		assertEquals("5432", rows[3].split(",")[raw]);
-		assertEquals("Other", Panels.of("Sound_Level"));
+		assertEquals("Sound level", Panels.of("Sound_Level"));
+		assertEquals("Sound level", Panels.ALL.get(Panels.ALL.size() - 2));
 	}
 
 }

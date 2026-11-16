@@ -14,7 +14,7 @@ public final class Panels {
 
 	public static final List<String> ALL = Collections.unmodifiableList(Arrays.asList(
 			"Low-noise accel", "Wide-range accel", "Gyro", "Mag", "Battery", "Pressure", "Temperature",
-			"ADC", "ExG", "GSR", "PPG", "Other"));
+			"ADC", "ExG", "GSR", "PPG", "Sound level", "Other"));
 
 	private static final Pattern ADC = Pattern.compile("(Int|Ext)_Exp_A\\d+");
 	private static final Pattern EXG = Pattern.compile("(ExG[12]_CH|Test_CHIP[12]_CH|ECG_|EMG_).*");
@@ -61,6 +61,10 @@ public final class Panels {
 		}
 		if (PPG.matcher(name).matches()) {
 			return "PPG";
+		}
+		// A panel of its own: a few dB of change would be lost on an axis shared with the battery's percentage
+		if (name.equals("Sound_Level")) {
+			return "Sound level";
 		}
 		return "Other";
 	}
