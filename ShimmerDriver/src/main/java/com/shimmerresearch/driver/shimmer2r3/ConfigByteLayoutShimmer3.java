@@ -105,6 +105,8 @@ public class ConfigByteLayoutShimmer3 extends ConfigByteLayout implements Serial
 	public int idxMacAddress =                     	128+96; // 6bytes
 	public int idxSDConfigDelayFlag =            	128+102;
 	public int idxBtFactoryReset =            		0;
+	/** Button mode, log triggers and TTL input (DEV-971), see {@link ButtonLogMode}. 0 where the firmware cannot have it. */
+	public int idxButtonLogMode =            		0;
 
 	public int idxNode0 =                           128+128+0;
 
@@ -417,6 +419,14 @@ public class ConfigByteLayoutShimmer3 extends ConfigByteLayout implements Serial
 				|| compareVersions(FW_ID.LOGANDSTREAM,0,8,1)) {
 			idxBtFactoryReset =            		128+103;
 		}
+		
+		// The event channel's builds report the release before them, so only
+		// the earliest firmware that can carry it is known from the version.
+		// Whether it is really there is the SET_FEATURE probe's answer
+		// (ShimmerBluetooth.readEventChannelSupport()) or a valid byte read back.
+		if(mShimmerVerObject.isSupportedSetFeature()) {
+			idxButtonLogMode =            		ButtonLogMode.CONFIG_BYTE_INDEX;
+		}
 
 //		if(mShimmerVerObject.isVerCompatibleWithAnyOf(Configuration.Shimmer3.configOptionLowPowerAutoStop.mListOfCompatibleVersionInfo)) {
 //			maskLowBattStop = 0;
@@ -561,6 +571,9 @@ public class ConfigByteLayoutShimmer3 extends ConfigByteLayout implements Serial
 		
 		if(idxBtFactoryReset>0){
 			mapOfByteDescriptions.put(idxBtFactoryReset, "idxBtFactoryReset");
+		}
+		if(idxButtonLogMode>0){
+			mapOfByteDescriptions.put(idxButtonLogMode, "idxButtonLogMode");
 		}
 		
 		mapOfByteDescriptions.put(idxNode0, "Node0");
