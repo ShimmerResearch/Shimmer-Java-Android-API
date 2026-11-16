@@ -165,4 +165,42 @@ public class API_00047_AudioConfigWriteTest {
 		shimmer.writeConfigBytes(false);
 		assertEquals("Off is the default, so it says nothing about the Shimmer's own", -1, writtenAt(shimmer, IDX_AUDIO_CONFIG));
 	}
+
+	/**
+	 * A raw audio mode is written only by an app allowed to (ShimmerObject.setRawAudioAllowed).
+	 * Otherwise it drops to Fingerprint only or Off, before a read as after one. So Raw audio
+	 * only, set before a read, writes Off over the Shimmer's own mode.
+	 */
+	@Test
+	public void aRawModeSetBeforeAReadIsWrittenWithoutTheRawAudio() {
+		boolean wasAllowed = ShimmerObject.isRawAudioAllowed();
+		ShimmerObject.setRawAudioAllowed(false);
+		try {
+			ShimmerPC shimmer = shimmer();
+			shimmer.setConfigValueUsingConfigLabel(Configuration.Shimmer3.GuiLabelConfig.AUDIO_MODE, Configuration.Shimmer3.AUDIO_MODE_FINGERPRINT_AND_RAW);
+			shimmer.writeConfigBytes(false);
+			assertEquals("Fingerprint and raw audio drops to Fingerprint only", Configuration.Shimmer3.AUDIO_MODE_FINGERPRINT, writtenAt(shimmer, IDX_AUDIO_CONFIG));
+
+			shimmer = shimmer();
+			shimmer.setConfigValueUsingConfigLabel(Configuration.Shimmer3.GuiLabelConfig.AUDIO_MODE, Configuration.Shimmer3.AUDIO_MODE_RAW);
+			shimmer.writeConfigBytes(false);
+			assertEquals("Raw audio only drops to Off, and the byte is still written", Configuration.Shimmer3.AUDIO_MODE_OFF, writtenAt(shimmer, IDX_AUDIO_CONFIG));
+		} finally {
+			ShimmerObject.setRawAudioAllowed(wasAllowed);
+		}
+	}
+
+	@Test
+	public void aRawModeSetBeforeAReadIsWrittenWhereRawAudioIsAllowed() {
+		boolean wasAllowed = ShimmerObject.isRawAudioAllowed();
+		ShimmerObject.setRawAudioAllowed(true);
+		try {
+			ShimmerPC shimmer = shimmer();
+			shimmer.setConfigValueUsingConfigLabel(Configuration.Shimmer3.GuiLabelConfig.AUDIO_MODE, Configuration.Shimmer3.AUDIO_MODE_RAW);
+			shimmer.writeConfigBytes(false);
+			assertEquals(Configuration.Shimmer3.AUDIO_MODE_RAW, writtenAt(shimmer, IDX_AUDIO_CONFIG));
+		} finally {
+			ShimmerObject.setRawAudioAllowed(wasAllowed);
+		}
+	}
 }
