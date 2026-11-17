@@ -34,7 +34,7 @@ import com.shimmerresearch.driverUtilities.UtilParseData;
  *
  * @author Mark Nolan
  */
-public class API_00042_Shimmer3AltAccelMagChannelsTest {
+public class API_00049_Shimmer3AltAccelMagChannelsTest {
 
 	private static final ShimmerVerObject S3 = new ShimmerVerObject(HW_ID.SHIMMER_3, FW_ID.LOGANDSTREAM, 1, 1, 9);
 	private static final ShimmerVerObject S3R = new ShimmerVerObject(HW_ID.SHIMMER_3R, FW_ID.LOGANDSTREAM, 1, 1, 25);
