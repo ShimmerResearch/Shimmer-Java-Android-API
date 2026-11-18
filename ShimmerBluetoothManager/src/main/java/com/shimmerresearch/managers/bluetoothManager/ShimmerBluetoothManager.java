@@ -27,6 +27,7 @@ import com.shimmerresearch.driverUtilities.ExpansionBoardDetails;
 import com.shimmerresearch.driverUtilities.ShimmerVerDetails.HW_ID;
 import com.shimmerresearch.driverUtilities.ShimmerVerObject;
 import com.shimmerresearch.driverUtilities.UtilShimmer;
+import com.shimmerresearch.driverUtilities.HwDriverShimmerDeviceDetails;
 import com.shimmerresearch.driverUtilities.HwDriverShimmerDeviceDetails.DEVICE_TYPE;
 import com.shimmerresearch.exceptions.ConnectionExceptionListener;
 import com.shimmerresearch.exceptions.ShimmerException;
@@ -58,6 +59,18 @@ public abstract class ShimmerBluetoothManager{
 	public static final String COMPORT_PREFIX = "COM";
 //	public static final String COMPORT_PREFIX_MAC = "/dev/"; 	//Commented-out as MacOS is relying on BT device name rather than COM PORT prefix
 	public static final String COMPORT_PREFIX_MAC = "Shimmer";
+
+	/**
+	 * Whether a connection handle is a serial port's: a COM port on Windows, or
+	 * on macOS the device's Bluetooth name, Shimmer... or a NeuroSmart unit's
+	 * Neurosmart-XXXX-BT/BLE (DEV-1389). Any other handle is a BLE device's
+	 * address.
+	 */
+	public static boolean isSerialPortHandle(String connectionHandle) {
+		return connectionHandle.contains(COMPORT_PREFIX) || connectionHandle.contains(COMPORT_PREFIX_MAC)
+				|| HwDriverShimmerDeviceDetails.SH_SEARCH.BT.isNeurosmartName(connectionHandle);
+	}
+
 	protected int mSyncTrainingIntervalInSeconds = 15;
 	protected int msDelayBetweenSetCommands = 0;
 	protected BluetoothProgressReportAll mProgressReportAll;
@@ -521,7 +534,7 @@ public abstract class ShimmerBluetoothManager{
 	}
 
 	protected BluetoothDeviceDetails getBluetoothDeviceDetails(String connectionHandle){
-		if (!connectionHandle.contains(COMPORT_PREFIX) && !connectionHandle.contains(COMPORT_PREFIX_MAC)) {
+		if (!isSerialPortHandle(connectionHandle)) {
 			return getBLEDeviceDetails(connectionHandle);
 		}
     	return mMapOfParsedBtComPorts.get(connectionHandle);

@@ -1,5 +1,7 @@
 package com.shimmerresearch.driverUtilities;
 
+import java.util.regex.Pattern;
+
 import com.codeminders.hidapi.HIDDeviceInfo;
 import com.shimmerresearch.driverUtilities.ShimmerVerDetails.HW_ID;
 
@@ -236,11 +238,24 @@ public class HwDriverShimmerDeviceDetails {
             
 	        public static final String MANUFACTURER_NONIN = "Nonin";
 	        public static final String MANUFACTURER_LUMAFIT = "Lumafit";
-            
+
             public static final String[] THIRD_PARTY_DEVICE = new String[] {
             	MANUFACTURER_NONIN,
             	MANUFACTURER_LUMAFIT
             };
+
+            /**
+             * NeuroSmart's Shimmer3R units, renamed in the factory (DEV-1388):
+             * Neurosmart-XXXX-BT over Classic and Neurosmart-XXXX-BLE over BLE,
+             * XXXX being the end of the unit's MAC address, as the firmware
+             * appends it.
+             */
+            public static final Pattern NEUROSMART_NAME = Pattern.compile("Neurosmart-[0-9A-Fa-f]{4}-(BT|BLE)");
+
+            /** Whether a Bluetooth name is a NeuroSmart Shimmer3R's, exactly as {@link #NEUROSMART_NAME} (DEV-1389) */
+            public static boolean isNeurosmartName(String name) {
+            	return name!=null && NEUROSMART_NAME.matcher(name).matches();
+            }
         }
     }
     
