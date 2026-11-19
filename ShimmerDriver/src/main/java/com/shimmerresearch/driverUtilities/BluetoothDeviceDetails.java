@@ -33,8 +33,9 @@ public class BluetoothDeviceDetails {
 	}
 
 	public void setMacId(String mac){
-		if(mac.startsWith("Shimmer") && mac.contains("-")) {
-			//If using device name (e.g. Shimmer3-6813), then leave as is
+		if((mac.startsWith("Shimmer") && mac.contains("-"))
+				|| HwDriverShimmerDeviceDetails.SH_SEARCH.BT.isNeurosmartName(mac)) {
+			//If using device name (e.g. Shimmer3-6813, or Neurosmart-6813-BLE (DEV-1389)), then leave as is
 			mShimmerMacId = mac;
 			mShimmerMacId = mac;
 		} else {
@@ -58,7 +59,8 @@ public class BluetoothDeviceDetails {
 	public void checkDeviceType() {
 		if(!mShimmerMacId.equals(UtilShimmer.MAC_ADDRESS_ZEROS)){
 			if(mFriendlyName.contains(HwDriverShimmerDeviceDetails.SH_SEARCH.BT.SHIMMER3)
-					|| mFriendlyName.contains(HwDriverShimmerDeviceDetails.SH_SEARCH.BT.SHIMMER3_RN4678_BLE)){
+					|| mFriendlyName.contains(HwDriverShimmerDeviceDetails.SH_SEARCH.BT.SHIMMER3_RN4678_BLE)
+					|| HwDriverShimmerDeviceDetails.SH_SEARCH.BT.isNeurosmartName(mFriendlyName)){
 				mDeviceTypeDetected = DEVICE_TYPE.SHIMMER3;
 			}
 			else if(mFriendlyName.contains(HwDriverShimmerDeviceDetails.DEVICE_TYPE.SHIMMER3_OUTPUT.getLabel())){
