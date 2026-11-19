@@ -56,7 +56,9 @@ ShimmerAndroidInstrumentDriver/gen/com/shimmerresearch/androidinstrumentdriver/R
 gradle.properties
 github.properties
 
-# Native BLE library binaries (built by ./gradlew buildNative or the native-ble workflow).
-# Not committed until DEV-1132 decides between committing and publishing them. The README in
-# native/ is committed, so that Eclipse always has src/main/resources on its build path.
+# Native BLE library binaries. The Windows x64 and macOS arm64 builds are committed, built by the
+# native-ble workflow from shimmerble/, so that every build of the driver carries them, Consensys's
+# release build included (DEV-1504). Other platforms that ./gradlew buildNative puts here are not.
 ShimmerDriverPC/src/main/resources/native/*/
+!ShimmerDriverPC/src/main/resources/native/windows-x64/
+!ShimmerDriverPC/src/main/resources/native/macos-arm64/
