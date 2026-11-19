@@ -69,8 +69,10 @@ has them, and Rust will use that one:
 cmd /c "call "C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\VC\Auxiliary\Build\vcvars64.bat" && cargo build --release"
 ```
 
-Built libraries are not committed yet (`.gitignore`); whether to commit them or publish them is
-an open question on DEV-1132.
+The Windows x64 and macOS arm64 libraries are committed, in
+`ShimmerDriverPC/src/main/resources/native/`, so every build of the driver carries them. They are
+the **Native BLE library** workflow's builds of one commit. A change here means bumping the version,
+then committing that workflow run's binaries with it; that folder's README has the steps.
 
 ## How Java finds the library
 
