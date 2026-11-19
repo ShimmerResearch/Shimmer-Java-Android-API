@@ -1,0 +1,5 @@
+# Pins the compiler so every machine and CI build with the same one. rustup installs it on first
+# use. Bump deliberately, and rebuild both platforms when you do.
+[toolchain]
+channel = "1.99.0"
+profile = "minimal"

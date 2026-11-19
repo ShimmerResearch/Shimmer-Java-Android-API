@@ -55,3 +55,8 @@ ShimmerAndroidInstrumentDriver/gen/com/shimmerresearch/androidinstrumentdriver/B
 ShimmerAndroidInstrumentDriver/gen/com/shimmerresearch/androidinstrumentdriver/R.java
 gradle.properties
 github.properties
+
+# Native BLE library binaries (built by ./gradlew buildNative or the native-ble workflow).
+# Not committed until DEV-1132 decides between committing and publishing them. The README in
+# native/ is committed, so that Eclipse always has src/main/resources on its build path.
+ShimmerDriverPC/src/main/resources/native/*/
