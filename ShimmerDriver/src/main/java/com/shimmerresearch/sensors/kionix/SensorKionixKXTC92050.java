@@ -38,12 +38,16 @@ public class SensorKionixKXTC92050 extends SensorKionixAccel {
 	//--------- Sensor specific variables start --------------
 	
 	public static final double[][] AlignmentMatrixLowNoiseAccelShimmer3 = {{0,-1,0},{-1,0,0},{0,0,-1}};
-	// Based on a manufacturer stated, typical zero-g offset of 1.65V per axis over an input of 0v to 3v
-	// [(1.65/3)*4096 = 2252.8]
-	public static final double[][] OffsetVectorLowNoiseAccelShimmer3 = {{2253},{2253},{2253}}; 
-	// Based on a manufacturer stated, typical sensitivity of 660mV/g per axis over an input of 0v to 3v
-	// [+-2g full-range so 4g (or 39.24 m/s2) over 2.64V -> (2.64/3*4096)/39.24 = 91.85]
-	public static final double[][] SensitivityMatrixLowNoiseAccel2gShimmer3 = {{92,0,0},{0,92,0},{0,0,92}};  
+	// DEV-1521. The KXTC9-2050's output is ratiometric to its supply: Kionix specifies its zero-g
+	// offset (1.65 V) and sensitivity (660 mV/g) at Vdd = 3.3 V, with an offset and a sensitivity
+	// "ratiometric error" (KXTC9-2050 Specifications Rev. 2, Table 1). Every Shimmer3 board that
+	// carries it (SR31-10, SR47-6, SR48-5, SR49-3) powers it from the same 3.0 V LDO as the MSP430's
+	// AVCC, the ADC reference, so in ADC counts it reads like the KXRB5-2042 it replaced:
+	// zero-g 1.5 V -> (1.5/3)*4095 = 2047.5
+	public static final double[][] OffsetVectorLowNoiseAccelShimmer3 = {{2047},{2047},{2047}};
+	// 600 mV/g -> (0.6/3)*4095/9.81 = 83.5 per m/s2. 83, as the firmware's own default calibration
+	// record and the KXRB5-2042's defaults use. The old 2253 and 92 assumed a 3.3 V supply.
+	public static final double[][] SensitivityMatrixLowNoiseAccel2gShimmer3 = {{83,0,0},{0,83,0},{0,0,83}};
 
 	private CalibDetailsKinematic calibDetailsAccelLn2g = new CalibDetailsKinematic(
 			LN_ACCEL_RANGE_VALUE, LN_ACCEL_RANGE_STRING, 
