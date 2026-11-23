@@ -59,3 +59,10 @@ github.properties
 # Java HIL (tools/hil): the local rig file and run output
 tools/hil/rig-java.json
 tools/hil/out/
+
+# Native BLE library binaries. The Windows x64 and macOS arm64 builds are committed, built by the
+# native-ble workflow from shimmerble/, so that every build of the driver carries them, Consensys's
+# release build included (DEV-1504). Other platforms that ./gradlew buildNative puts here are not.
+ShimmerDriverPC/src/main/resources/native/*/
+!ShimmerDriverPC/src/main/resources/native/windows-x64/
+!ShimmerDriverPC/src/main/resources/native/macos-arm64/

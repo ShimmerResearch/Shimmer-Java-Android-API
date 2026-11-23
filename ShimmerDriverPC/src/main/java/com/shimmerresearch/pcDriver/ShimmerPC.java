@@ -71,6 +71,8 @@ import com.shimmerresearch.bluetooth.ShimmerBluetooth;
 import com.shimmerresearch.comms.serialPortInterface.AbstractSerialPortHal;
 import com.shimmerresearch.driver.Configuration.COMMUNICATION_TYPE;
 import com.shimmerresearch.driver.Configuration.Shimmer3;
+import com.shimmerresearch.driver.ble.nativeble.BleScanResult;
+import com.shimmerresearch.driver.ble.nativeble.ByteCommunicationNativeBle;
 import com.shimmerresearch.driver.shimmer2r3.ConfigByteLayoutShimmer3;
 import com.shimmerresearch.driverUtilities.SensorDetails;
 import com.shimmerresearch.driverUtilities.UtilShimmer;
@@ -101,6 +103,8 @@ public class ShimmerPC extends ShimmerBluetooth implements Serializable{
 	// Used by the constructor when the user intends to write new settings to the Shimmer device after connection
 	//protected transient SerialPort mSerialPort=null;
 	protected transient ByteCommunication mByteCommunication;
+	/** Set for a connection over native BLE instead of the COM port (DEV-1504); a scan result belongs to one session */
+	protected transient BleScanResult mNativeBleDevice = null;
 	ObjectCluster objectClusterTemp = null;
 	
 //	double mLastSavedCalibratedTimeStamp = -1;
@@ -122,6 +126,31 @@ public class ShimmerPC extends ShimmerBluetooth implements Serializable{
 	public void setTestRadio(ByteCommunication radio) {
 		mTesting = true;
 		mByteCommunication = radio;
+	}
+
+	/**
+	 * Has {@link #connect} reach the Shimmer over BLE through the native library (shimmerble/)
+	 * instead of its COM port, or over the COM port again when null (DEV-1504). Only the transport
+	 * changes: the device, its protocol and its state are the same either way.
+	 *
+	 * @param device a scan result for the device, from BleCentral; null for the COM port
+	 */
+	public void setNativeBleDevice(BleScanResult device) {
+		mNativeBleDevice = device;
+	}
+
+	/** @return the device {@link #connect} reaches over native BLE, or null when it uses the COM port */
+	public BleScanResult getNativeBleDevice() {
+		return mNativeBleDevice;
+	}
+
+	/** The transport {@link #connect} opens: the COM port, or native BLE when a BLE device is set */
+	protected ByteCommunication createByteCommunication(String address) {
+		BleScanResult nativeBleDevice = mNativeBleDevice;
+		if (nativeBleDevice != null) {
+			return new ByteCommunicationNativeBle(nativeBleDevice);
+		}
+		return new ByteCommunicationJSSC(address);
 	}
 	
 	/**
@@ -355,7 +384,7 @@ public class ShimmerPC extends ShimmerBluetooth implements Serializable{
 				if (mByteCommunication==null || mTesting){
 					setComPort(address);
 					if (!mTesting) {
-						mByteCommunication = new ByteCommunicationJSSC(address);
+						mByteCommunication = createByteCommunication(address);
 					} else { // do nothingit should already be set
 						
 					}
